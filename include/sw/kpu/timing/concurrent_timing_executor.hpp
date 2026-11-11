@@ -70,6 +70,12 @@ public:
         // from the accumulator the previous call on this tile left in the fabric (zero for the
         // first), and is ordered after that call. Off = the output is the sum over a_tiles/b_tiles.
         bool accumulate = false;
+        // The accumulator's init (an accumulating chain's first call; #406,
+        // docs/plans/accumulator-init-stream.md): a tile fed into the fabric as one more edge
+        // stream, which the call waits for and starts from instead of zero. A tile of the
+        // result's shape is its value; a one-column tile as tall as the result is wide is a bias
+        // row, broadcast down the rows. It is not a k-slice: it adds no MACs.
+        std::optional<TileID> init;
     };
     struct FunctionalComputeSpec {
         std::vector<TileID> input_tiles;
@@ -1347,6 +1353,7 @@ inline std::uint64_t ConcurrentTimingExecutor::compute_macs(const PendingCompute
     std::uint64_t k = 0;
     for (const auto& [id, n] : pc.dependencies) {
         if (id.matrix != isa::MatrixID::A) continue;
+        if (pc.matmul && pc.matmul->init && id == *pc.matmul->init) continue;   // not a k-slice
         auto it = fed_shape_.find(id);
         k += it != fed_shape_.end() ? it->second.second : pc.tile.width;
     }
@@ -1441,6 +1448,15 @@ inline void ConcurrentTimingExecutor::schedule_matmul_compute(
             throw std::invalid_argument("Matmul B tile has no scheduled feed: " + id.to_string());
         }
         pc.dependencies.push_back({id, scheduled_feed_counts_[id]});
+    }
+    // An init is fed like an operand, and the call waits for that feed.
+    if (spec.init) {
+        if (!spec.accumulate || scheduled_compute_counts_[tile.tile_id] > 0)
+            throw std::invalid_argument("Matmul init on " + tile.tile_id.to_string() +
+                                        ": only an accumulation chain's first call starts from an init");
+        if (scheduled_feed_counts_[*spec.init] == 0)
+            throw std::invalid_argument("Matmul init tile has no scheduled feed: " + spec.init->to_string());
+        pc.dependencies.push_back({*spec.init, scheduled_feed_counts_[*spec.init]});
     }
     // An accumulating call waits for the previous call on its result (the accumulator it adds to).
     if (spec.accumulate && scheduled_compute_counts_[tile.tile_id] > 0) {
@@ -1913,7 +1929,19 @@ inline void ConcurrentTimingExecutor::execute_matmul(const PendingCompute& pc) {
     output.rows = m;
     output.cols = n;
     output.values.assign(static_cast<size_t>(m) * n, 0.0f);
-    if (spec.accumulate) {
+    if (spec.init) {
+        // The init stream's values (the chain's first call): a tile as the result, or a bias row.
+        const auto& x = tile_payload(*spec.init);
+        if (x.rows == m && x.cols == n) {
+            output.values = x.values;
+        } else if (x.cols == 1 && x.rows == n) {
+            for (Size i = 0; i < m; ++i)
+                for (Size j = 0; j < n; ++j) output.values[static_cast<size_t>(i) * n + j] = x.values[j];
+        } else {
+            throw std::runtime_error("Matmul init " + spec.init->to_string() + " is neither the output tile's shape "
+                                     "nor a bias row as wide as it");
+        }
+    } else if (spec.accumulate) {
         // The accumulator the previous call on this tile left in the fabric (none: zero).
         auto it = compute_payloads_.find(pc.tile.tile_id);
         if (it != compute_payloads_.end()) {

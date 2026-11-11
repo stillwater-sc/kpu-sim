@@ -541,6 +541,83 @@ TEST_CASE("Repeated tile feeds cannot satisfy a later functional compute early",
     REQUIRE(second_compute_start >= second_b_feed);
 }
 
+// An accumulator's init (#406; MatMulComputeSpec::init): the chain's first call waits for the
+// init's feed and starts from it -- a tile of the result's shape, or a bias row broadcast down
+// the rows. Any other shape is refused when the call executes.
+TEST_CASE("A matmul chain's first call starts from its init", "[timing][executor][functional][init]") {
+    auto tile2 = [](MatrixID m, Size ti, Size tj, Size tk, Size h, Size w) {
+        auto d = make_tile(m, ti, tj, tk, h * w * 4);
+        d.height = h;
+        d.width = w;
+        return d;
+    };
+    const auto a = tile2(MatrixID::A, 0, 0, 0, 2, 2);
+    const auto b = tile2(MatrixID::B, 0, 0, 0, 2, 2);
+    const auto c = tile2(MatrixID::C, 0, 0, 0, 2, 2);
+    // A.B = [[1,2],[3,4]] . I = [[1,2],[3,4]]
+    auto run = [&](const TileDescriptor& x, const TilePayload& xv, bool* threw = nullptr) {
+        ConcurrentTimingExecutor e(default_config());
+        e.set_tile_payload(a.tile_id, TilePayload{2, 2, {1, 2, 3, 4}});
+        e.set_tile_payload(b.tile_id, TilePayload{2, 2, {1, 0, 0, 1}});
+        e.set_tile_payload(x.tile_id, xv);
+        for (const auto* t : {&a, &b, &x}) {
+            e.schedule_load(*t);
+            e.schedule_move(*t);
+            e.schedule_feed(*t);
+        }
+        ConcurrentTimingExecutor::MatMulComputeSpec spec;
+        spec.a_tiles = {a.tile_id};
+        spec.b_tiles = {b.tile_id};
+        spec.accumulate = true;
+        spec.init = x.tile_id;
+        e.schedule_matmul_compute(c, spec);
+        spec.init.reset();
+        e.schedule_matmul_compute(c, spec);         // the chain's second k-slice: no init
+        e.schedule_drain(c);
+        e.schedule_writeback(c);
+        e.schedule_store(c);
+        std::vector<float> out;
+        try {
+            const bool completed = e.run();       // outside REQUIRE: a refusal propagates to the catch
+            REQUIRE(completed);
+            out = e.tile_payload(c.tile_id).values;
+        } catch (const std::runtime_error&) {
+            if (!threw) throw;
+            *threw = true;
+        }
+        return out;
+    };
+    SECTION("a tile of the result's shape is its value") {
+        const auto d = tile2(MatrixID::A, 0, 0, 1, 2, 2);
+        CHECK(run(d, TilePayload{2, 2, {10, 20, 30, 40}}) == std::vector<float>{12, 24, 36, 48});
+    }
+    SECTION("a bias row is broadcast down the rows") {
+        const auto r = tile2(MatrixID::A, 0, 0, 1, 2, 1);
+        CHECK(run(r, TilePayload{2, 1, {10, 20}}) == std::vector<float>{12, 24, 16, 28});
+    }
+    SECTION("any other shape is refused") {
+        const auto bad = tile2(MatrixID::A, 0, 0, 1, 3, 1);
+        bool threw = false;
+        (void)run(bad, TilePayload{3, 1, {1, 2, 3}}, &threw);
+        CHECK(threw);
+    }
+    SECTION("an init needs its feed, and belongs to the chain's first call") {
+        ConcurrentTimingExecutor e(default_config());
+        ConcurrentTimingExecutor::MatMulComputeSpec spec;
+        e.schedule_feed(a);
+        e.schedule_feed(b);
+        spec.a_tiles = {a.tile_id};
+        spec.b_tiles = {b.tile_id};
+        spec.accumulate = true;
+        spec.init = TileID{MatrixID::A, 0, 0, 1};
+        CHECK_THROWS_AS(e.schedule_matmul_compute(c, spec), std::invalid_argument);   // never fed
+        spec.init.reset();
+        e.schedule_matmul_compute(c, spec);
+        spec.init = a.tile_id;
+        CHECK_THROWS_AS(e.schedule_matmul_compute(c, spec), std::invalid_argument);   // not the first call
+    }
+}
+
 // ============================================================================
 // Work Distribution Tests
 // ============================================================================

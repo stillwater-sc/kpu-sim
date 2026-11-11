@@ -31,6 +31,7 @@
 #include <cmath>
 #include <cstddef>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -334,14 +335,78 @@ TEST_CASE("acc init: L-T1 times the init as an operand stream; values are L-B's"
     }
 }
 
-TEST_CASE("acc init: L-CA refuses it until its Streamer feeds the init stream", "[program][csp][init][run]") {
+TEST_CASE("acc init: L-CA feeds the init stream; values are the reference's", "[program][csp][init][lca]") {
+    namespace timing = sw::kpu::timing;
     const auto dev = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
-    const auto why = driver::csp_level_supported(driver::ExecutionLevel::CycleAccurate,
-                                                 lang::parse(gen::generate(matmul("bias-row"))), &dev);
+    for (const char* orient : {"col", "row"})
+        for (const char* init : {"none", "bias", "bias-row", "accumulate"}) {
+            CAPTURE(orient, init);
+            const std::string src = gen::generate(matmul(init, orient));
+            const lang::Program ast = lang::parse(src);
+            REQUIRE_FALSE(driver::csp_level_supported(driver::ExecutionLevel::CycleAccurate, ast, &dev));
+            const TileProgram in = driver::csp_inputs(ast);
+            const auto cfg = timing::csp_config_from(dev);
+            REQUIRE(cfg);
+            timing::ConcurrentTimingExecutor exec(cfg->config);
+            lang::ActionStream s(ast);
+            const auto r = timing::CspDriver(exec, s, in).run();
+            REQUIRE(r.completed);
+            check_close(r.values.operand("C").values, reference(in, init));
+            if (std::string(init) == "none") continue;
+            // The init's tile, as the driver names it: the one operand it tags (tk 1) is D or b,
+            // and C is C.
+            auto init_of = [&](const timing::TileID& c) {
+                timing::TileID x = c;
+                if (std::string(init) == "bias") { x.matrix = sw::kpu::isa::MatrixID::A; x.tk = 1; }
+                if (std::string(init) == "bias-row") { x = {sw::kpu::isa::MatrixID::A, c.tj, 0, 1}; }
+                return x;
+            };
+            // Each init tile's feeds, and the first k-steps of the accumulators it starts, in
+            // time: the n-th first k-step starts no earlier than the n-th feed has finished.
+            std::map<std::string, std::vector<timing::Cycle>> feeds, firsts;
+            std::set<std::string> started;
+            for (const auto& e : exec.events()) {
+                if (e.type == timing::EventType::STR_FEED_COMPLETE) feeds[e.tile_id.to_string()].push_back(e.cycle + e.duration);
+                if (e.type == timing::EventType::COMPUTE_START && e.tile_id.matrix == sw::kpu::isa::MatrixID::C &&
+                    started.insert(e.tile_id.to_string()).second)
+                    firsts[init_of(e.tile_id).to_string()].push_back(e.cycle);
+            }
+            REQUIRE(started.size() == 4);
+            for (const auto& [x, starts] : firsts) {
+                CAPTURE(x);
+                REQUIRE(feeds[x].size() >= starts.size());
+                for (std::size_t n = 0; n < starts.size(); ++n) CHECK(starts[n] >= feeds[x][n]);
+            }
+        }
+    // An executor reused for another run keeps its DRAM: the next run's C is its own inputs'
+    // (review of #409), not the C the run before stored.
+    {
+        const lang::Program acc = lang::parse(gen::generate(matmul("accumulate")));
+        TileProgram in = driver::csp_inputs(acc);
+        const auto cfg = timing::csp_config_from(dev);
+        timing::ConcurrentTimingExecutor exec(cfg->config);
+        for (int run = 0; run < 2; ++run) {
+            CAPTURE(run);
+            for (float& v : in.operand("C").values) v += 1.0f;
+            lang::ActionStream s(acc);
+            const auto r = timing::CspDriver(exec, s, in).run();
+            REQUIRE(r.completed);
+            check_close(r.values.operand("C").values, reference(in, "accumulate"));
+        }
+    }
+    // The run's own entry point admits it, and a matrix L-CA does not map is still refused
+    // when it is computed on rather than streamed in as an init.
+    const lang::Program bias = lang::parse(gen::generate(matmul("bias")));
+    const auto o = driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, bias, &dev, driver::csp_inputs(bias));
+    REQUIRE_FALSE(o.skipped);
+    check_close(o.values.operand("C").values, reference(driver::csp_inputs(bias), "bias"));
+    std::string computed = gen::generate(matmul("bias"));
+    const std::size_t at = computed.find("call gemm(A[");
+    REQUIRE(at != std::string::npos);
+    computed.replace(at, 12, "call gemm(D[");
+    const auto why = driver::csp_level_supported(driver::ExecutionLevel::CycleAccurate, lang::parse(computed), &dev);
     REQUIRE(why);
-    CHECK_THAT(*why, ContainsSubstring("one more edge stream, which L-CA's Streamer does not feed yet"));
-    CHECK_FALSE(driver::csp_level_supported(driver::ExecutionLevel::BlockSequential,
-                                            lang::parse(gen::generate(matmul("bias-row"))), &dev));
+    CHECK_THAT(*why, ContainsSubstring("'D' is not one of them"));
 }
 
 TEST_CASE("acc init: kpu-csp-gen's options", "[program][csp][gen][init]") {

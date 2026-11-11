@@ -38,6 +38,7 @@
 #include <cstring>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -111,24 +112,18 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
             break;
     }
     if (!device) return std::string("L-CA builds its machine from a deployment spec (--deploy)");
-    // The executor names three matrices (A, B, C) and a vector operand by its tag; a program
-    // with other matrix names is not yet mapped onto them.
-    for (const auto& d : ast.decls)
-        if (!d.is_vector && d.name != "A" && d.name != "B" && d.name != "C")
-            return "L-CA maps a program's matrices onto the executor's A, B and C; '" + d.name +
-                   "' is not one of them (csp line " + std::to_string(d.line) + ")";
-    // The tile functions L-CA computes: gemm (alpha 1) and the epilogue.
+    // The tile functions L-CA computes: gemm (alpha 1) and the epilogue. An accumulator's init
+    // (acc ... init X) is one more edge stream, fed as the operands are (#406 step 2).
     std::optional<std::string> refused;
+    std::set<std::string> inits;                    // operands only an accumulator's init reads
+    std::set<std::string> used;                     // operands anything else names
     auto scan = [&](const std::vector<csp::lang::Stmt>& body, auto&& self) -> void {
         for (const auto& s : body) {
             if (refused) return;
-            if (s.kind == csp::lang::Stmt::Kind::Acc && s.init) {
-                refused = "an accumulator's init (acc ... init " + s.init->name + "[..]) is one more edge stream, which "
-                          "L-CA's Streamer does not feed yet (docs/plans/accumulator-init-stream.md step 2; csp line " +
-                          std::to_string(s.line) + ")";
-                return;
-            }
+            if (s.kind == csp::lang::Stmt::Kind::Acc && s.init) inits.insert(s.init->name);
             if (s.kind == csp::lang::Stmt::Kind::Call) {
+                for (const auto& r : s.tiles) used.insert(r.name);
+                used.insert(s.out.name);
                 if (s.fn == "getrf" || s.fn == "laswp" || s.fn == "trsm_ll" || s.fn == "trsm_ur")
                     refused = "L-CA runs matmul and the linear operator; " + s.fn + " (LU) at L-CA is a later "
                               "increment (csp line " + std::to_string(s.line) + ")";
@@ -140,6 +135,12 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
     };
     scan(ast.body, scan);
     if (refused) return refused;
+    // The executor names three matrices (A, B, C), and tags a vector or an init's matrix; a
+    // program that computes on other matrix names is not yet mapped onto them.
+    for (const auto& d : ast.decls)
+        if (!d.is_vector && d.name != "A" && d.name != "B" && d.name != "C" && (!inits.count(d.name) || used.count(d.name)))
+            return "L-CA maps a program's matrices onto the executor's A, B and C (another matrix may be an "
+                   "accumulator's init); '" + d.name + "' is not one of them (csp line " + std::to_string(d.line) + ")";
     std::string why;
     const auto cfg = timing::csp_config_from(*device, &why);
     if (!cfg) return why;
