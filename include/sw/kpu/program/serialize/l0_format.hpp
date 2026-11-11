@@ -376,7 +376,7 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
                 os << "VALUES_ROW " << detail::quote(tensor.name) << " " << r;
                 for (Dim c = 0; c < tensor.cols; ++c) {
                     if (tensor.fp32()) os << " " << detail::exact_float(tensor.at(r, c));
-                    else os << " " << static_cast<long long>(tensor.value(r, c));   // an integer type, exact
+                    else os << " " << std::to_string(static_cast<long long>(tensor.value(r, c)));   // exact; no locale grouping
                 }
                 os << "\n";
             }
@@ -970,7 +970,8 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
     // conservative producer, or a fixture built to exercise the gate), and that costs
     // nothing but readers.
     {
-        const Version needed = min_consumer_for(declares_values, !declared_dataflow.empty());
+        const Version needed =
+            min_consumer_for(declares_values, !declared_dataflow.empty(), has_typed_operands(out));
         if (!(needed <= declared_min))
             throw FormatError(FormatError::Cause::MalformedPreamble,
                               "l0: the file declares MIN_CONSUMER " + declared_min.str() +

@@ -47,9 +47,12 @@ struct Codec<su::integer<N, Bt>> {
     }
     static double decode(Word w) { return static_cast<double>(static_cast<long long>(from_word(w))); }
     static Word encode(double v) {
-        // The integer part, modulo 2^64 into the type's constructor, which keeps the low N bits:
-        // two's complement, as a hardware register of N bits holds it.
-        const long long i = static_cast<long long>(std::trunc(v));
+        // The integer part modulo 2^N, two's complement, as a hardware register of N bits holds
+        // it. fmod first, exactly, so the cast to long long is in range for any finite value.
+        if (!std::isfinite(v))
+            throw std::invalid_argument("numeric: " + std::to_string(v) + " has no integer<" + std::to_string(N) +
+                                        "> encoding");
+        const long long i = static_cast<long long>(std::fmod(std::trunc(v), std::ldexp(1.0, static_cast<int>(N))));
         return to_word(T(i));
     }
 };

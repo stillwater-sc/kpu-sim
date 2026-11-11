@@ -30,7 +30,9 @@
 #include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/program/tile_kernels.hpp>
 
+#include <cmath>
 #include <cstdint>
+#include <locale>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -140,6 +142,13 @@ TEST_CASE("typed values: the registry's number systems, on Universal", "[program
     CHECK(numeric::encode("fp32", 1.5) == numeric::word_of(1.5f));
     for (std::int32_t v : {-128, -1, 0, 1, 127})
         CHECK(numeric::decode("int8", numeric::encode("int8", v)) == double(v));
+    // Modulo 2^N for any finite value, even past long long's range; a non-finite one is refused.
+    CHECK(numeric::encode("int8", 18446744073709551616.0) == 0u);           // 2^64
+    CHECK(numeric::encode("int8", 1099511627781.0) == 5u);                  // 2^40 + 5
+    CHECK(numeric::encode("int32", -18446744073709551616.0) == 0u);
+    CHECK(numeric::encode("int8", -3.7) == numeric::encode("int8", -3));    // truncated
+    CHECK_THROWS_WITH(numeric::encode("int8", std::nan("")), ContainsSubstring("has no integer<8> encoding"));
+    CHECK_THROWS_WITH(numeric::encode("int32", HUGE_VAL), ContainsSubstring("has no integer<32> encoding"));
 }
 
 TEST_CASE("typed values: the int8 -> int32 MAC wraps at 32 bits", "[program][numeric]") {
@@ -250,6 +259,30 @@ TEST_CASE("typed values: the L0 trace replays bit for bit and round-trips as .l0
     out_of_range.erase(out_of_range.rfind(' ', eol), eol - out_of_range.rfind(' ', eol));
     std::istringstream bad(out_of_range);
     CHECK_THROWS_WITH(serialize::read_l0(bad), ContainsSubstring("'300' is not a int8 value"));
+    // A typed file must demand 1.3.0 even without values: a 1.0.0 reader would read its words as fp32.
+    serialize::WriteOptions nv;
+    std::ostringstream ns;
+    serialize::write_l0(ns, *ref.trace, nv);
+    std::string under = ns.str();
+    const std::size_t mc = under.find("MIN_CONSUMER 1.3.0");
+    REQUIRE(mc != std::string::npos);
+    under.replace(mc, 18, "MIN_CONSUMER 1.0.0");
+    std::istringstream us(under);
+    CHECK_THROWS_WITH(serialize::read_l0(us), ContainsSubstring("but its records need 1.3.0"));
+    // Integer values are written without the stream locale's digit grouping.
+    struct Grouped : std::numpunct<char> {
+        char do_thousands_sep() const override { return ','; }
+        std::string do_grouping() const override { return "\3"; }
+    };
+    TileProgram big = *ref.trace;
+    big.operand("C").set_value(0, 0, 1234567);
+    std::ostringstream gs;
+    gs.imbue(std::locale(std::locale::classic(), new Grouped));
+    serialize::write_l0(gs, big, w);
+    CHECK_THAT(gs.str(), ContainsSubstring(" 1234567"));
+    CHECK_THAT(gs.str(), !ContainsSubstring("1,234,567"));
+    std::istringstream gi(gs.str());
+    CHECK(ival(serialize::read_l0(gi).operand("C"), 0, 0) == 1234567);
 }
 
 TEST_CASE("typed values: what is refused, and where", "[program][numeric][refuse]") {
@@ -261,6 +294,8 @@ TEST_CASE("typed values: what is refused, and where", "[program][numeric][refuse
          "no MAC for int8 -> fp32"},
         {"  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n  store C[0, 0] via relu @ fabric;\n",
          "a tile context computes in fp32; C is int32"},
+        {"  acc G[0, 0] in fabric { call gemm(F[0, 0], F[0, 0]) +-> G[0, 0]; }\n  store G[0, 0] via add(b[0]) @ fabric;\n",
+         "add(b[0]): a tile context computes in fp32; b is int32"},
         {"  acc C[0, 0] in fabric init F[0, 0] { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n  store C[0, 0];\n",
          "F is fp32 and C is int32; an init is in the accumulator's number system"},
     };

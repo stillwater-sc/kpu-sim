@@ -241,6 +241,11 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                               << v.cols << "; the program declares " << t.rows << "x" << t.cols << "\n";
                     return 2;
                 }
+                if (v.type != t.type) {
+                    std::cerr << "kpu-run: " << inputs_path << ": operand '" << name << "' is " << v.type
+                              << "; the program declares " << t.type << "\n";
+                    return 2;
+                }
                 t.values = v.values;
             }
             inputs_note = "from " + inputs_path;

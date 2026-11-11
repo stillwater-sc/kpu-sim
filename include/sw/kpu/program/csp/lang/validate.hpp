@@ -435,6 +435,9 @@ private:
                 throw CompileError(r.arg->line, "add(" + r.arg->name + "[..]): add takes a vector operand");
             const Family b = single(*r.arg);
             check_width(b.operand, y.operand, r.arg->line);
+            if (type_of(b.operand) != numeric::kFp32)
+                throw CompileError(r.arg->line, "add(" + text(b) + "): a tile context computes in fp32; " +
+                                                    b.operand + " is " + type_of(b.operand));
             if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, b); }))
                 throw CompileError(r.arg->line, "add(" + text(b) + ") @ " + to_string(r.place) + " reads " + text(b) +
                                                     ", which is not provably resident; make it resident first");
