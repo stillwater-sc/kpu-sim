@@ -92,7 +92,7 @@ cmake --preset full  # vs ./build.sh --cuda --opencl --docs --install
     "lhs": "${hostSystemName}",
     "rhs": "Windows"
   },
-  "generator": "Visual Studio 17 2022"
+  "generator": "Visual Studio 18 2026"
 }
 ```
 
