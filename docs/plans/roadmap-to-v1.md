@@ -137,9 +137,13 @@ rest of the family stays in the backlog.
   - `wave-N`;
   - `csp-patterns`;
   - `dnn-milestone`;
-  - the four `P0`-`P3` area labels.
-- **A release is tagged when its milestone closes.** The CHANGELOG's `[Unreleased]` section becomes
-  that version.
+  - the four `area:` labels: `area: rtl-reference`, `area: shared-views`, `area: soc-scale` and
+    `area: hygiene` (formerly `P0`-`P3`, renamed 2026-11-11 because they read as priorities).
+- **A release is tagged when its milestone closes:**
+  1. A PR turns the CHANGELOG's `[Unreleased]` section into `[X.Y.0] - <date>`.
+  2. Once it merges, run `scripts/release.sh X.Y.0 --push` on `main`. The script makes an
+     annotated tag `vX.Y.0`, and `cmake/Version.cmake` and `setuptools-scm` read the version from it.
+  3. Create the GitHub release from the tag.
 - **Session logs** are named for the release in progress. Today that is `v0.9`.
 
 ## 7. Old milestone names
