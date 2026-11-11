@@ -502,7 +502,14 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     // Every operand, tile by tile, within the proximity bound of L-B's: the levels refine the
     // behavioral model, and a data path may round differently (§3.8).
     const TileProgram* authority = &*res.reference;
-    std::cout << "\nvalues vs L-B, the oracle (every operand, per tile, float32 within 1e-6 + 1e-4|o|)\n";
+    // How each operand is compared: in its own number system (tile_check), integers exactly.
+    std::string bounds;
+    for (const auto& name : authority->operand_order()) {
+        const TensorOperand& t = authority->operand(name);
+        const std::string b = t.fp32() ? "fp32 within 1e-6 + 1e-4|o|" : t.type + " exact";
+        if (bounds.find(b) == std::string::npos) bounds += (bounds.empty() ? "" : "; ") + b;
+    }
+    std::cout << "\nvalues vs L-B, the oracle (every operand, per tile, " << bounds << ")\n";
     bool all_agree = true;
     for (const auto& o : res.levels) {
         if (o.skipped) continue;

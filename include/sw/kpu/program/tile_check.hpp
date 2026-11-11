@@ -12,8 +12,11 @@
 //
 //     |actual - oracle| <= atol + rtol * |oracle|          (ADR 0001 D5, per element)
 //
-// Operands store float32 today, so float32 is the one format decoded. Any other format is
-// refused by name until operands carry it -- never checked as though it were float32.
+// An operand in fp32 is decoded as float32 (ElementFormat). An operand that carries another number
+// system (numeric.hpp; docs/plans/typed-value-path.md) is decoded in it, from its words, and an
+// INTEGER system is checked exactly -- bound 0, whatever bound the caller passed: integer
+// arithmetic has no rounding to forgive, so any difference is a model bug. A format no operand
+// carries is still refused by name, never checked as though it were float32.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -115,10 +118,19 @@ inline TileCheck check_tiles(const TensorOperand& actual, const TensorOperand& o
         throw std::invalid_argument("tile_check: " + actual.name + " declares " + std::to_string(declared) +
                                     " elements; actual holds " + std::to_string(actual.values.size()) +
                                     ", the oracle " + std::to_string(oracle.values.size()));
+    if (actual.type != oracle.type)
+        throw std::invalid_argument("tile_check: " + actual.name + " is " + actual.type + "; the oracle's is " +
+                                    oracle.type);
     // A NaN or negative bound would pass anything (NaN compares false): refuse it.
     if (!std::isfinite(bound.atol) || !std::isfinite(bound.rtol) || bound.atol < 0.0 || bound.rtol < 0.0)
         throw std::invalid_argument("tile_check: the proximity bound must be finite and non-negative (atol " +
                                     std::to_string(bound.atol) + ", rtol " + std::to_string(bound.rtol) + ")");
+    const bool typed = !oracle.fp32();
+    const numeric::NumberSystem* ns = typed ? &numeric::get(oracle.type) : nullptr;
+    const Proximity b = (ns && ns->kind == numeric::Kind::Integer) ? Proximity{0.0, 0.0} : bound;
+    auto value = [&](const TensorOperand& t, Dim r, Dim c) {
+        return typed ? numeric::decode(t.type, t.word(r, c)) : format.decode(t.at(r, c));
+    };
     TileCheck out;
     out.operand = actual.name;
     for (Dim ti = 0; ti < oracle.n_tile_rows(); ++ti)
@@ -131,16 +143,16 @@ inline TileCheck check_tiles(const TensorOperand& actual, const TensorOperand& o
             for (Dim r = oracle.row_begin(ti); r < oracle.row_end(ti); ++r)
                 for (Dim c = oracle.col_begin(tj); c < oracle.col_end(tj); ++c) {
                     ++out.elements;
-                    const double a = format.decode(actual.at(r, c));
-                    const double e = format.decode(oracle.at(r, c));
+                    const double a = value(actual, r, c);
+                    const double e = value(oracle, r, c);
                     const double err = std::abs(a - e);
                     // Non-finite on either side is out of bound: with NaN, `err > bound` is false.
                     const bool out_of_bound =
-                        !std::isfinite(a) || !std::isfinite(e) || err > bound.atol + bound.rtol * std::abs(e);
+                        !std::isfinite(a) || !std::isfinite(e) || err > b.atol + b.rtol * std::abs(e);
                     if (std::isfinite(err)) {
                         out.max_abs = std::max(out.max_abs, err);
                         pt.max_abs = std::max(pt.max_abs, err);
-                        if (std::abs(e) >= bound.atol) {
+                        if (std::abs(e) >= b.atol && e != 0.0) {
                             out.max_rel = std::max(out.max_rel, err / std::abs(e));
                             pt.max_rel = std::max(pt.max_rel, err / std::abs(e));
                         }

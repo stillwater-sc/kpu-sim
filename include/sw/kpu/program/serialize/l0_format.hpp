@@ -93,7 +93,9 @@ inline bool is_known_dataflow(const std::string& name) {
 // 1.1.0 added the VALUES_ROW record; 1.2.0 adds STREAMS. The op set has not changed for
 // either, which is why the two axes are separate: a new container record is not a new
 // operator. (Opset 1.2.0 and container 1.2.0 share a number by coincidence.)
-inline Version format_version()  { return {1, 2, 0}; }   // container structure
+inline Version format_version()  { return {1, 3, 0}; }   // container structure: 1.3.0 adds
+                                                         // OPERAND type= (an operand's number
+                                                         // system, numeric.hpp; #394)
 inline Version opset_version()   { return {1, 4, 0}; }   // the TileOpKind surface this build
                                                          // implements: 1.1.0 adds BIAS_ADD and
                                                          // ACTIVATION (act=); 1.2.0 adds the L3
@@ -120,7 +122,19 @@ inline Version opset_for(const TileProgram& prog) {
     }
     return v;
 }
-inline Version reader_version()  { return {1, 2, 0}; }   // what THIS reader supports
+inline Version reader_version()  { return {1, 3, 0}; }   // what THIS reader supports
+
+// Does any operand carry a number system other than fp32 (OPERAND type=)?
+inline bool has_typed_operands(const TileProgram& prog) {
+    for (const std::string& k : prog.operand_order())
+        if (!prog.operand(k).fp32()) return true;
+    return false;
+}
+// The container version a FILE needs, by the same rule as opset_for: what is in it. A program
+// whose operands are all fp32 writes 1.2.0, so the checked-in corpus stays byte-identical.
+inline Version format_for(const TileProgram& prog) {
+    return has_typed_operands(prog) ? format_version() : Version{1, 2, 0};
+}
 
 // The oldest reader that can be trusted with this file, which depends on WHAT IS IN IT
 // rather than on who wrote it. This is the whole mechanism of R4, and getting it wrong is
@@ -138,7 +152,10 @@ inline Version reader_version()  { return {1, 2, 0}; }   // what THIS reader sup
 // file using it must demand a reader that understands it. A 1.1.0 reader would skip STREAMS
 // and execute with no L1 timing at all -- the same class of silent wrong answer that
 // VALUES_ROW would have produced on a 1.0.0 reader.
-inline Version min_consumer_for(bool has_values, bool has_streams = false) {
+// OPERAND type= carries SEMANTICS by the same rule: a 1.2.0 reader would ignore the attribute
+// and read an int8 operand's values as fp32 -- so a file with a typed operand demands 1.3.0.
+inline Version min_consumer_for(bool has_values, bool has_streams = false, bool has_types = false) {
+    if (has_types) return Version{1, 3, 0};
     if (has_streams) return Version{1, 2, 0};
     return has_values ? Version{1, 1, 0} : Version{1, 0, 0};
 }
@@ -302,9 +319,9 @@ struct WriteOptions {
 };
 
 inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptions& opt = {}) {
-    os << kMagic << " " << format_version().str() << "\n";
+    os << kMagic << " " << format_for(prog).str() << "\n";
     os << "MIN_CONSUMER "
-       << min_consumer_for(opt.include_values, !opt.dataflow.empty()).str() << "\n";
+       << min_consumer_for(opt.include_values, !opt.dataflow.empty(), has_typed_operands(prog)).str() << "\n";
     os << "OPSET tile " << opset_for(prog).str() << "\n";
     os << "PRODUCER kpu-sim " << producer_version().str() << "\n";
     os << "PROGRAM " << detail::quote(prog.name()) << "\n";
@@ -344,7 +361,9 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
         // from both and a file that dropped either would not round-trip.
         os << "OPERAND " << detail::quote(op.name) << " rows=" << op.rows
            << " cols=" << op.cols << " tile_rows=" << op.tile_rows
-           << " tile_cols=" << op.tile_cols << "\n";
+           << " tile_cols=" << op.tile_cols;
+        if (!op.fp32()) os << " type=" << op.type;     // fp32 is unwritten (format 1.3.0)
+        os << "\n";
     }
 
     // One record PER ROW, so a changed row is one changed line in a diff -- the property
@@ -355,8 +374,10 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
             const TensorOperand& tensor = prog.operand(key);
             for (Dim r = 0; r < tensor.rows; ++r) {
                 os << "VALUES_ROW " << detail::quote(tensor.name) << " " << r;
-                for (Dim c = 0; c < tensor.cols; ++c)
-                    os << " " << detail::exact_float(tensor.at(r, c));
+                for (Dim c = 0; c < tensor.cols; ++c) {
+                    if (tensor.fp32()) os << " " << detail::exact_float(tensor.at(r, c));
+                    else os << " " << static_cast<long long>(tensor.value(r, c));   // an integer type, exact
+                }
                 os << "\n";
             }
         }
@@ -631,7 +652,9 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
     // Rows are collected as they arrive and applied after the registry exists, because a
     // VALUES_ROW can legally precede or follow its OPERAND and neither order should be
     // privileged by the parser.
-    struct PendingRow { std::string operand; Dim row; std::vector<float> values; };
+    // The values as written: an operand's number system decides how they read, and its OPERAND
+    // record may follow its rows.
+    struct PendingRow { std::string operand; Dim row; std::vector<std::string> values; };
     std::vector<PendingRow> rows;
 
     while (std::getline(is, line)) {
@@ -725,7 +748,7 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                                   "l0: VALUES_ROW \"" + pr.operand + "\": missing row index");
             pr.row = detail::to_dim(tok, "VALUES_ROW row");
             while (nums >> tok)
-                pr.values.push_back(detail::parse_float(tok, "VALUES_ROW value"));
+                pr.values.push_back(tok);
             rows.push_back(std::move(pr));
         } else if (kw == "OPERAND") {
             // The name is the first positional token, quoted; the rest are keyed.
@@ -741,6 +764,14 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                                   detail::to_dim(detail::require(kv, "cols", "OPERAND"), "OPERAND"),
                                   detail::to_dim(detail::require(kv, "tile_rows", "OPERAND"), "OPERAND"),
                                   detail::to_dim(detail::require(kv, "tile_cols", "OPERAND"), "OPERAND"));
+            if (kv.count("type")) {
+                const numeric::NumberSystem* ns = numeric::find(kv["type"]);
+                if (!ns || (ns->kind != numeric::Kind::Integer && ns->name != numeric::kFp32))
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: OPERAND \"" + op_name + "\": type '" + kv["type"] +
+                                      "' is not a number system this build reads (" + numeric::names() + ")");
+                operands.back().type = kv["type"];
+            }
         } else if (kw == "OP") {
             TileOp op;
             op.kind = detail::parse_kind(detail::require(f, "kind", "OP"));
@@ -897,7 +928,25 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                 throw FormatError(FormatError::Cause::MalformedRecord,
                                   "l0: VALUES_ROW \"" + pr.operand + "\" row " +
                                   std::to_string(pr.row) + " appears twice");
-            for (Dim c = 0; c < tensor.cols; ++c) tensor.at(pr.row, c) = pr.values[c];
+            if (tensor.fp32()) {
+                for (Dim c = 0; c < tensor.cols; ++c)
+                    tensor.at(pr.row, c) = detail::parse_float(pr.values[c], "VALUES_ROW value");
+            } else {
+                // An integer number system: each value an integer within the type's range.
+                const numeric::NumberSystem& ns = numeric::get(tensor.type);
+                const long long hi = (1LL << (ns.bits - 1)) - 1, lo = -(1LL << (ns.bits - 1));
+                for (Dim c = 0; c < tensor.cols; ++c) {
+                    const std::string& tok = pr.values[c];
+                    std::size_t used = 0;
+                    long long v = 0;
+                    try { v = std::stoll(tok, &used); } catch (const std::exception&) { used = 0; }
+                    if (used != tok.size() || tok.empty() || v < lo || v > hi)
+                        throw FormatError(FormatError::Cause::MalformedRecord,
+                                          "l0: VALUES_ROW \"" + pr.operand + "\" row " + std::to_string(pr.row) +
+                                          ": '" + tok + "' is not a " + tensor.type + " value");
+                    tensor.set_value(pr.row, c, static_cast<double>(v));
+                }
+            }
             filled[pr.operand][pr.row] = true;
         }
 

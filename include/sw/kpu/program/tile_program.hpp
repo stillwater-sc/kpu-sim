@@ -25,10 +25,13 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <sw/kpu/program/numeric.hpp>
 
 namespace sw::kpu::program {
 
@@ -46,7 +49,11 @@ struct TensorOperand {
     std::string name;                 // "A", "B", "C", "L", "U", ...
     Dim rows = 0, cols = 0;           // logical shape
     Dim tile_rows = 0, tile_cols = 0; // tile shape
-    std::vector<float> values;        // rows*cols, row-major (0-initialized)
+    std::vector<float> values;        // rows*cols, row-major (0-initialized): 32-bit words
+    // The number system the elements are in (numeric.hpp; docs/plans/typed-value-path.md): fp32,
+    // the default, stores the floats themselves; any other stores each element's Universal bit
+    // pattern in its 4 bytes -- read it through word()/value(), never as a float.
+    std::string type = numeric::kFp32;
 
     TensorOperand() = default;
     TensorOperand(std::string n, Dim r, Dim c, Dim tr, Dim tc)
@@ -59,6 +66,23 @@ struct TensorOperand {
     // Row-major element access.
     float& at(Dim r, Dim c) { return values[static_cast<std::size_t>(r) * cols + c]; }
     float  at(Dim r, Dim c) const { return values[static_cast<std::size_t>(r) * cols + c]; }
+
+    // An element's word, and its value decoded in the operand's number system.
+    bool fp32() const { return type == numeric::kFp32; }
+    // memcpy, never through a float: a word may be any bit pattern, NaN-shaped ones included.
+    numeric::Word word(Dim r, Dim c) const {
+        numeric::Word w;
+        std::memcpy(&w, &values[static_cast<std::size_t>(r) * cols + c], sizeof w);
+        return w;
+    }
+    void set_word(Dim r, Dim c, numeric::Word w) {
+        std::memcpy(&values[static_cast<std::size_t>(r) * cols + c], &w, sizeof w);
+    }
+    double value(Dim r, Dim c) const { return fp32() ? double(at(r, c)) : numeric::decode(type, word(r, c)); }
+    void set_value(Dim r, Dim c, double v) {
+        if (fp32()) at(r, c) = static_cast<float>(v);
+        else set_word(r, c, numeric::encode(type, v));
+    }
 
     // Half-open tile extents, clamped for trailing tiles.
     Dim row_begin(Dim ti) const { return ti * tile_rows; }

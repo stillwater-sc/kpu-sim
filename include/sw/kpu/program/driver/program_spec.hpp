@@ -239,6 +239,16 @@ inline void fill_operand(TensorOperand& t) {
             k ^= r * 2654435761u; k *= 2246822519u;
             k ^= c * 3266489917u; k *= 668265263u;
             k ^= k >> 15;
+            // An integer number system: every value of an 8-bit type, and a 32-bit one's whole
+            // range (so accumulating onto it wraps), as words in the operand's type.
+            if (!t.fp32()) {
+                const numeric::NumberSystem& ns = numeric::get(t.type);
+                if (ns.kind != numeric::Kind::Integer)
+                    throw std::invalid_argument("fill_operand: no fill for " + t.type + " yet");
+                const numeric::Word w = ns.bits >= 32 ? k : (k & ((numeric::Word{1} << ns.bits) - 1));
+                t.set_word(r, c, w);
+                continue;
+            }
             // Integers in [-8, 8] plus a multiple of 1/8: no rounding anywhere.
             float v = float(k % 17) - 8.0f + 0.125f * float((k >> 8) % 8);
             // A dominant diagonal for a square operand, which is what keeps an in-place

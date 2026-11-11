@@ -128,6 +128,7 @@ inline TileProgram declared_operands(const Program& ast) {
         op.cols = static_cast<Dim>(d.cols);
         op.tile_rows = static_cast<Dim>(d.tile_rows);
         op.tile_cols = static_cast<Dim>(d.tile_cols);
+        op.type = d.type;
         t.add_operand(std::move(op));
     }
     return t;

@@ -169,11 +169,13 @@ inline std::string format(const Program& p) {
     if (p.l2 != 0) o << ", l2 = " << p.l2;
     o << ") {\n";
     for (const Decl& d : p.decls) {
+        const std::string type = d.type == "fp32" ? std::string() : " " + d.type;   // fp32 is unwritten
         if (d.is_vector)
-            o << "  vector " << d.name << "[" << d.rows << "] tile " << d.tile_rows << " " << d.io << ";\n";
+            o << "  vector " << d.name << "[" << d.rows << "]" << type << " tile " << d.tile_rows << " " << d.io
+              << ";\n";
         else
-            o << "  tensor " << d.name << "[" << d.rows << "," << d.cols << "] tile " << d.tile_rows << "x"
-              << d.tile_cols << " " << d.io << ";\n";
+            o << "  tensor " << d.name << "[" << d.rows << "," << d.cols << "]" << type << " tile " << d.tile_rows
+              << "x" << d.tile_cols << " " << d.io << ";\n";
     }
     detail::stmts(o, p.body, 1);
     o << "}\n";

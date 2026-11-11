@@ -81,8 +81,10 @@ file       := 'csp' VERSION NL program                               -- e.g. `cs
 program    := 'program' NAME machine '{' decl* stmt* '}'
 machine    := 'machine' 'flat' '(' 'l3' '=' INT [ ',' 'l2' '=' INT ] ')'  -- level 1 (l2: staging slots)
             | 'machine' 'grid' '(' INT 'x' INT ',' 'l3' '=' INT ')'      -- level 2
-decl       := 'tensor' NAME '[' INT ',' INT ']' 'tile' INT 'x' INT io ';'
-            | 'vector' NAME '[' INT ']' 'tile' INT io ';'                 -- e.g. a bias (Q6)
+decl       := 'tensor' NAME '[' INT ',' INT ']' [ TYPE ] 'tile' INT 'x' INT io ';'
+            | 'vector' NAME '[' INT ']' [ TYPE ] 'tile' INT io ';'         -- e.g. a bias (Q6)
+                                    -- TYPE: a number system, fp32 (the default), int8, int32
+                                    -- (docs/plans/typed-value-path.md)
 io         := 'in' | 'out' | 'inout'                                      -- (all in DRAM)
 
 stmt       := for | resident | release | acc | stage | call | store | inherit | retain | distribute | broadcast

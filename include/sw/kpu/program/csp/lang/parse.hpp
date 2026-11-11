@@ -43,6 +43,8 @@
 #include <string>
 #include <vector>
 
+#include <sw/kpu/program/numeric.hpp>
+
 namespace sw::kpu::program::csp::lang {
 
 inline constexpr const char* kVersion = "1.0";
@@ -119,6 +121,8 @@ struct Decl {
     std::string name;
     long long rows = 0, cols = 0, tile_rows = 0, tile_cols = 0;
     std::string io;                           // in | out | inout
+    // The elements' number system (numeric.hpp): `tensor A[M,K] int8 tile ...`. None written: fp32.
+    std::string type = "fp32";
     int line = 0;
 };
 
@@ -334,6 +338,11 @@ private:
             d.cols = 1;
         }
         expect("]");
+        if (peek().kind == Token::Kind::Ident && !word("tile")) {
+            d.type = take().text;
+            if (!numeric::find(d.type))
+                throw SyntaxError(d.line, "'" + d.type + "' is not a number system (" + numeric::names() + ")");
+        }
         expect_word("tile");
         d.tile_rows = integer("a tile size");
         if (!d.is_vector) {

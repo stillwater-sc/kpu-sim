@@ -81,6 +81,7 @@ inline TileProgram csp_inputs(const csp::lang::Program& ast) {
         const TensorOperand& shape = t.operand(d.name);
         TensorOperand& o = out.add_operand(TensorOperand(shape.name, shape.rows, shape.cols, shape.tile_rows,
                                                          shape.tile_cols));
+        o.type = shape.type;
         const bool reads = d.io == "in" || (d.io == "inout" && (!read_first.count(d.name) || read_first.at(d.name)));
         if (reads) fill_operand(o);
         // A square operand the program reads and then updates in place -- LU's A, factored where
@@ -91,7 +92,7 @@ inline TileProgram csp_inputs(const csp::lang::Program& ast) {
         // |off-diagonal| <= 8.875, adding 9 x cols + 8 to the diagonal puts it above any row's
         // off-diagonal sum, so no pivot is ever a near-tie. An integer, so still exact.
         // `in` operands keep fill_operand's values: a matmul's arithmetic stays exact on them.
-        if (reads && d.io == "inout" && o.rows == o.cols)
+        if (reads && d.io == "inout" && o.rows == o.cols && o.fp32())
             for (Dim i = 0; i < o.rows; ++i) o.at(i, i) += 9.0f * float(o.cols) + 8.0f;
     }
     return out;
@@ -112,6 +113,11 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
             break;
     }
     if (!device) return std::string("L-CA builds its machine from a deployment spec (--deploy)");
+    // The executor's matmul computes in fp32 until the typed MAC reaches it (#394 step 2).
+    for (const auto& d : ast.decls)
+        if (d.type != "fp32")
+            return "L-CA computes in fp32 until docs/plans/typed-value-path.md step 2; '" + d.name + "' is " + d.type +
+                   " (csp line " + std::to_string(d.line) + ")";
     // The tile functions L-CA computes: gemm (alpha 1) and the epilogue. An accumulator's init
     // (acc ... init X) is one more edge stream, fed as the operands are (#406 step 2).
     std::optional<std::string> refused;

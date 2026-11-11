@@ -63,12 +63,22 @@ struct Options {
     // bias: C = A . B + D, D tiled as C; bias-row: C = A . B + b, b broadcast down C's rows;
     // accumulate: C += A . B, C inout.
     std::string init = "none";
+    // matmul: the inputs' number system (numeric.hpp; docs/plans/typed-value-path.md). A and B are
+    // in it; C, and an init's D or b, are in its registered accumulator's (int8 -> int32).
+    std::string dtype = "fp32";
 };
 
 // Tiles along one dimension.
 inline Dim tiles(const Options& o) { return o.tile ? (o.size + o.tile - 1) / o.tile : 0; }
 
 // The L3 slots the operator's schedule needs at its peak.
+// The accumulator a gemm on `in` is registered with (numeric::mac_pairs); empty: none.
+inline std::string accumulator_of(const std::string& in) {
+    for (const auto& [i, a] : numeric::mac_pairs())
+        if (i == in) return a;
+    return {};
+}
+
 inline std::size_t slots_needed(const Options& o) {
     const std::size_t nt = tiles(o);
     if (o.algo == "lu") return nt * nt;
@@ -94,6 +104,9 @@ inline void check(const Options& o) {
     if (o.init != "none" && o.init != "bias" && o.init != "bias-row" && o.init != "accumulate")
         throw GenError("csp-gen: init '" + o.init + "' (none | bias | bias-row | accumulate)");
     if (o.init != "none" && o.algo != "matmul") throw GenError("csp-gen: init is matmul's; --algo is '" + o.algo + "'");
+    if (o.dtype != "fp32" && o.algo != "matmul") throw GenError("csp-gen: dtype is matmul's; --algo is '" + o.algo + "'");
+    if (o.dtype != "fp32" && accumulator_of(o.dtype).empty())
+        throw GenError("csp-gen: dtype '" + o.dtype + "' has no registered gemm (" + numeric::mac_names() + ")");
     if (o.stage_a && o.orient != "row")
         throw GenError("csp-gen: stage_a stages A's row panel for the loop over B's panels, which needs orient row");
     const std::size_t need = slots_needed(o);
@@ -118,9 +131,10 @@ inline std::string header(const Options& o, const std::string& what) {
     return h.str();
 }
 
-inline std::string tensor(const char* name, const Options& o, const char* io) {
-    return "  tensor " + std::string(name) + "[" + std::to_string(o.size) + "," + std::to_string(o.size) +
-           "] tile " + std::to_string(o.tile) + "x" + std::to_string(o.tile) + " " + io + ";\n";
+inline std::string tensor(const char* name, const Options& o, const char* io, const std::string& type = "fp32") {
+    return "  tensor " + std::string(name) + "[" + std::to_string(o.size) + "," + std::to_string(o.size) + "]" +
+           (type == "fp32" ? std::string() : " " + type) + " tile " + std::to_string(o.tile) + "x" +
+           std::to_string(o.tile) + " " + io + ";\n";
 }
 
 // The matmul nest, and for a fused linear its bias (resident with B's panel) and context.
@@ -198,10 +212,13 @@ inline std::string matmul(const Options& o) {
                                   (o.init != "none" ? ", the accumulator's init streamed in" : std::string()));
     s += "program matmul machine flat(l3 = " + std::to_string(o.l3) +
          (o.stage_a ? ", l2 = " + std::to_string(tiles(o)) : std::string()) + ") {\n";
-    s += tensor("A", o, "in") + tensor("B", o, "in");
-    if (o.init == "bias") s += tensor("D", o, "in");
-    if (o.init == "bias-row") s += "  vector b[" + std::to_string(o.size) + "] tile " + std::to_string(o.tile) + " in;\n";
-    s += tensor("C", o, o.init == "accumulate" ? "inout" : "out");
+    const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
+    s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype);
+    if (o.init == "bias") s += tensor("D", o, "in", acc);
+    if (o.init == "bias-row")
+        s += "  vector b[" + std::to_string(o.size) + "]" + (acc == "fp32" ? std::string() : " " + acc) + " tile " +
+             std::to_string(o.tile) + " in;\n";
+    s += tensor("C", o, o.init == "accumulate" ? "inout" : "out", acc);
     s += matmul_nest(o, false);
     return s + "}\n";
 }
