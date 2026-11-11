@@ -373,6 +373,12 @@ public:
         std::uint64_t finals = 0;
         for (const auto& name : shapes_.operand_order()) {
             const auto& o = shapes_.operand(name);
+            // The C++ writer carries fp32 elements; int8/int32 operands are #394's step 3
+            // (docs/plans/typed-value-path.md), so a typed program is refused, never recorded
+            // with its words labelled fp32.
+            if (!o.fp32())
+                throw RecordError("record: " + name + " is " + o.type + "; the .dflow writer carries fp32 operands "
+                                  "until docs/plans/typed-value-path.md step 3");
             operand_index_[name] = static_cast<std::uint32_t>(rec_.operands.size());
             rec_.operands.push_back({name, o.rows, o.cols, o.tile_rows, o.tile_cols});
             finals += static_cast<std::uint64_t>(o.rows) * o.cols * sizeof(float);

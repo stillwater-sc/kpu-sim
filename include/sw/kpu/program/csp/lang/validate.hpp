@@ -423,6 +423,9 @@ private:
     // A result's `via` list (context.hpp), and each add's vector provably resident and tiled as
     // the result's columns.
     void context(const Stmt& s, const Family& y) {
+        if (!s.context.empty() && type_of(y.operand) != numeric::kFp32)
+            throw CompileError(s.line, "via ...: a tile context computes in fp32; " + y.operand + " is " +
+                                           type_of(y.operand));
         const auto resolved = resolve_result_context(s.context, target_, [](int line, const std::string& m) {
             throw CompileError(line, m);
         });
@@ -432,6 +435,9 @@ private:
                 throw CompileError(r.arg->line, "add(" + r.arg->name + "[..]): add takes a vector operand");
             const Family b = single(*r.arg);
             check_width(b.operand, y.operand, r.arg->line);
+            if (type_of(b.operand) != numeric::kFp32)
+                throw CompileError(r.arg->line, "add(" + text(b) + "): a tile context computes in fp32; " +
+                                                    b.operand + " is " + type_of(b.operand));
             if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, b); }))
                 throw CompileError(r.arg->line, "add(" + text(b) + ") @ " + to_string(r.place) + " reads " + text(b) +
                                                     ", which is not provably resident; make it resident first");
@@ -443,6 +449,9 @@ private:
     void init(const Stmt& s, const Family& y) {
         const Family x = single(*s.init);
         const std::string what = "acc " + text(y) + " init " + text(x);
+        if (type_of(x.operand) != type_of(y.operand))
+            throw CompileError(s.line, what + ": " + x.operand + " is " + type_of(x.operand) + " and " + y.operand +
+                                       " is " + type_of(y.operand) + "; an init is in the accumulator's number system");
         const TensorOperand& xo = operands_.operand(x.operand);
         const TensorOperand& yo = operands_.operand(y.operand);
         if (vectors_.count(x.operand)) {
@@ -631,6 +640,36 @@ private:
         vars_.erase(s.var);
     }
 
+    // An operand's number system (numeric.hpp), as declared.
+    std::string type_of(const std::string& operand) const {
+        for (const Decl& d : ast_.decls)
+            if (d.name == operand) return d.type;
+        return numeric::kFp32;
+    }
+    // The number systems a call computes in (docs/plans/typed-value-path.md): a gemm's inputs
+    // share one, and its (input, accumulator) pair has a registered MAC; every other tile
+    // function computes in fp32.
+    void types(const Stmt& s, const std::vector<Family>& args, const Family& y) const {
+        if (s.fn == "gemm") {
+            const std::string in = type_of(args[0].operand), in2 = type_of(args[1].operand), acc = type_of(y.operand);
+            if (in != in2)
+                throw CompileError(s.line, "gemm(" + args[0].operand + ", " + args[1].operand + "): " + args[0].operand +
+                                               " is " + in + " and " + args[1].operand + " is " + in2 +
+                                               "; a gemm's inputs share a number system");
+            if (!numeric::mac(in, acc))
+                throw CompileError(s.line, "gemm: no MAC for " + in + " -> " + acc + " (" + y.operand + " is " + acc +
+                                               "; registered: " + numeric::mac_names() + ")");
+            if (in != numeric::kFp32 && s.alpha && *s.alpha != 1.0)
+                throw CompileError(s.line, "gemm: a " + in + " gemm computes alpha 1");
+            return;
+        }
+        for (const Family& f : args)
+            if (type_of(f.operand) != numeric::kFp32)
+                throw CompileError(s.line, s.fn + " computes in fp32; " + f.operand + " is " + type_of(f.operand));
+        if (type_of(y.operand) != numeric::kFp32)
+            throw CompileError(s.line, s.fn + " computes in fp32; " + y.operand + " is " + type_of(y.operand));
+    }
+
     void call(const Stmt& s, std::size_t depth, bool definite) {
         std::vector<Family> args;
         for (const TileRef& r : s.tiles) args.push_back(single(r));
@@ -660,6 +699,7 @@ private:
                                        "' (gemm, getrf, laswp, trsm_ll, trsm_ur, add, relu, gelu, silu, atan)");
         }
         if (s.fn != "gemm" && s.accumulate) throw CompileError(s.line, s.fn + " writes its result: '->', not '+->'");
+        types(s, args, y);
         if (s.fn != "getrf" && s.fn != "laswp" && s.pivot) throw CompileError(s.line, s.fn + " takes no pivot");
 
         auto resident = [&](const Family& t) {

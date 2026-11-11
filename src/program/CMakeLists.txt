@@ -50,6 +50,7 @@ add_library(kpu_program
     tile_flow_lod.cpp
     memory_flow_record.cpp
     domain_flow_record.cpp
+    numeric.cpp                     # number systems and the typed MAC, on Universal (#394)
     ${KPU_LOADABLE_GEN_HDR}
 )
 add_dependencies(kpu_program kpu_loadable_schema)
@@ -62,6 +63,8 @@ target_include_directories(kpu_program
     PRIVATE
         ${CMAKE_BINARY_DIR}/generated-private
 )
+# Universal is header-only and only numeric.cpp includes it (include/sw/kpu/program/numeric.hpp)
+target_include_directories(kpu_program SYSTEM PRIVATE ${UNIVERSAL_INCLUDE_DIR})
 
 target_link_libraries(kpu_program
     PUBLIC

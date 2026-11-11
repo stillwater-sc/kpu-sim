@@ -53,7 +53,7 @@ inline CspProgram compile(const Program& ast, const Target* target = nullptr) {
     p.source = TileProgram(ast.name);   // the trace carries values: allocate them here
     for (const auto& name : walker.operands().operand_order()) {
         const TensorOperand& d = walker.operands().operand(name);
-        p.source.add_operand(TensorOperand(d.name, d.rows, d.cols, d.tile_rows, d.tile_cols));
+        p.source.add_operand(TensorOperand(d.name, d.rows, d.cols, d.tile_rows, d.tile_cols)).type = d.type;
     }
     p.channels = {{Chan::Dram, "dram", 0}, {Chan::L3, "l3", walker.capacity()}, {Chan::L2, "l2", 0}, {Chan::Cf, "cf", 0}};
     walker.run();

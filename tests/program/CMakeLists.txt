@@ -125,6 +125,17 @@ set_tests_properties(test_csp_acc_init PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The typed value path: number systems from Universal, int8 x int8 -> int32 (#394;
+# docs/plans/typed-value-path.md)
+kpu_add_component_test(test_typed_values "program"
+    test_typed_values.cpp
+)
+
+set_tests_properties(test_typed_values PROPERTIES
+    LABELS "program;csp;numeric;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # The structured CSP program: streamed and validated without unrolling (docs/plans/csp-language.md step 1c)
 kpu_add_component_test(test_csp_structured "program"
     test_csp_structured.cpp

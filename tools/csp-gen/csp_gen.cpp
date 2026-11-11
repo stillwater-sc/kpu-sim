@@ -50,6 +50,8 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 fabric before its first call: bias C = A.B + D, bias-row
                                 C = A.B + b (b broadcast down the rows), accumulate C += A.B
                                 (default none: from zero)
+  --dtype <fp32|int8>           matmul: A's and B's number system; C (and D or b) is in its
+                                registered accumulator's: int8 -> int32 (default fp32)
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
   --place <fabric|str.drain|bm.egress|unfused>
                                 linear: where the epilogue runs      (default fabric)
@@ -88,7 +90,7 @@ int main(int argc, char** argv) {
     }
     for (const auto& [k, v] : a)
         if (k != "--algo" && k != "--size" && k != "--tile" && k != "--l3" && k != "--target" && k != "--orient" &&
-            k != "--act" && k != "--place" && k != "--stage-a" && k != "--init" && k != "-o")
+            k != "--act" && k != "--place" && k != "--stage-a" && k != "--init" && k != "--dtype" && k != "-o")
             return usage("unknown option '" + k + "'");
     for (const char* k : {"--algo", "--size", "--tile"})
         if (!a.count(k)) return usage(std::string(k) + " is required");
@@ -117,6 +119,10 @@ int main(int argc, char** argv) {
     if (a.count("--init")) {
         if (o.algo != "matmul") return usage("--init is matmul's; --algo is '" + o.algo + "'");
         o.init = a["--init"];
+    }
+    if (a.count("--dtype")) {
+        if (o.algo != "matmul") return usage("--dtype is matmul's; --algo is '" + o.algo + "'");
+        o.dtype = a["--dtype"];
     }
     if (a.count("--act") && !sw::kpu::program::parse_activation(a["--act"], o.act))
         return usage("--act '" + a["--act"] + "' (relu | gelu | silu | atan)");

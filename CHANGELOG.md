@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Typed values: number systems from Universal, int8 × int8 → int32 at L-B and L-T1** (#394 step 1,
+  `docs/plans/typed-value-path.md`).
+  - An operand declares its number system: `tensor A[M,K] int8 tile 4x4 in;`. With no type it is
+    fp32, so fp32 programs, traces and the golden corpus are unchanged byte for byte.
+  - The arithmetic is stillwater-sc/universal's (`integer<8>`, `integer<32>`), named as in
+    universal_dtypes. A compiled registry (`src/program/numeric.cpp`) maps each (input,
+    accumulator) pair to a MAC; int8 → int32 wraps at 32 bits, as the RTL's `systolic_int8` does.
+  - Elements are 32-bit words: fp32's word is the float, and another type's word is its bit
+    pattern. Only code that interprets values decodes them; tile movement is unchanged.
+  - L-B, the L0 replay and L-T1 compute the same bits. `tile_check` compares integers exactly.
+  - L0 carries `OPERAND … type=` (container 1.3.0, `MIN_CONSUMER 1.3.0` only for typed files).
+  - `kpu-csp-gen --dtype int8` writes an int8 matmul, with all the init forms.
+  - L-CA and the `.dflow` writer refuse typed programs until steps 2 and 3.
+
 - **L-T1 times L2 credits; `.tflow` version 6** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md`
   step 4).
   - L-T1 holds an L2 credit per slot. A stage Move waits for its own slot's `L2Release`, as a Load

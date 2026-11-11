@@ -63,6 +63,14 @@ struct TileKernelState {
     }
 };
 
+// The kernels below that compute in float32 refuse an operand in another number system by name,
+// never computing on its words as though they were floats (docs/plans/typed-value-path.md).
+inline void require_fp32(const TensorOperand& t, const char* kernel) {
+    if (!t.fp32())
+        throw std::invalid_argument(std::string(kernel) + ": operand " + t.name + " is " + t.type +
+                                    "; this kernel computes in fp32 only");
+}
+
 // ----------------------------------------------------------------------------
 // out += alpha * (A_tile . B_tile). Handles matmul and the LU trailing
 // update uniformly (they are the same operation — see kpu-program-model.md).
@@ -88,6 +96,32 @@ inline void kernel_matmul_accum(TileProgram& prog, const TileOp& op) {
     if ((ar1 - ar0) != m || (bc1 - bc0) != n || (bk1 - bk0) != kk)
         throw std::invalid_argument("MatMulAccum: incompatible tile shapes at " + cc.to_string());
 
+    // A typed gemm (#394): the MAC registered for (A's and B's number system, C's), on the tiles'
+    // words. An fp32 gemm keeps the arithmetic below, bit for bit.
+    if (!A.fp32() || !B.fp32() || !C.fp32()) {
+        if (A.type != B.type)
+            throw std::invalid_argument("MatMulAccum: " + ac.operand + " is " + A.type + " and " + bc.operand + " is " +
+                                        B.type + "; a gemm's inputs share a number system");
+        const numeric::Mac mac = numeric::mac(A.type, C.type);
+        if (!mac)
+            throw std::invalid_argument("MatMulAccum: no MAC for " + A.type + " -> " + C.type + " (registered: " +
+                                        numeric::mac_names() + ")");
+        if (op.alpha != 1.0f)
+            throw std::invalid_argument("MatMulAccum: a " + A.type + " gemm computes alpha 1");
+        std::vector<numeric::Word> a(static_cast<std::size_t>(m) * kk), b(static_cast<std::size_t>(kk) * n),
+            c(static_cast<std::size_t>(m) * n);
+        for (Dim li = 0; li < m; ++li)
+            for (Dim lk = 0; lk < kk; ++lk) a[static_cast<std::size_t>(li) * kk + lk] = A.word(ar0 + li, ak0 + lk);
+        for (Dim lk = 0; lk < kk; ++lk)
+            for (Dim lj = 0; lj < n; ++lj) b[static_cast<std::size_t>(lk) * n + lj] = B.word(bk0 + lk, bc0 + lj);
+        for (Dim li = 0; li < m; ++li)
+            for (Dim lj = 0; lj < n; ++lj) c[static_cast<std::size_t>(li) * n + lj] = C.word(cr0 + li, cc0 + lj);
+        mac(a.data(), b.data(), c.data(), m, n, kk);
+        for (Dim li = 0; li < m; ++li)
+            for (Dim lj = 0; lj < n; ++lj) C.set_word(cr0 + li, cc0 + lj, c[static_cast<std::size_t>(li) * n + lj]);
+        return;
+    }
+
     for (Dim li = 0; li < m; ++li)
         for (Dim lj = 0; lj < n; ++lj) {
             float acc = 0.0f;
@@ -112,6 +146,7 @@ inline void kernel_matmul_accum(TileProgram& prog, const TileOp& op) {
 // ----------------------------------------------------------------------------
 inline void kernel_lu_diag_factor(TileProgram& prog, const TileOp& op, TileKernelState& st) {
     TensorOperand& A = prog.operand(op.outputs.at(0).operand);
+    require_fp32(A, "kernel_lu_diag_factor");
     st.ensure_perm(A.rows);
     auto& swaps = st.pivots[op.pivot_slot];
     swaps.clear();
@@ -157,6 +192,7 @@ inline void kernel_lu_diag_factor(TileProgram& prog, const TileOp& op, TileKerne
 // ----------------------------------------------------------------------------
 inline void kernel_pivot_apply(TileProgram& prog, const TileOp& op, const TileKernelState& st) {
     TensorOperand& A = prog.operand(op.outputs.at(0).operand);
+    require_fp32(A, "kernel_pivot_apply");
     const Dim tj = op.outputs.at(0).tj;
     const Dim col0 = A.col_begin(tj), col1 = A.col_end(tj);
     auto it = st.pivots.find(op.pivot_slot);
@@ -176,6 +212,7 @@ inline void kernel_trsm_lower_left(TileProgram& prog, const TileOp& op) {
     const TileCoord& xc = op.outputs.at(0);  // A[k,j] (in place)
     const TensorOperand& L = prog.operand(lc.operand);
     TensorOperand& X = prog.operand(xc.operand);
+    require_fp32(L, "kernel_trsm_lower_left"); require_fp32(X, "kernel_trsm_lower_left");
 
     const Dim lr0 = L.row_begin(lc.ti);
     const Dim lc0 = L.col_begin(lc.tj);
@@ -203,6 +240,7 @@ inline void kernel_trsm_upper_right(TileProgram& prog, const TileOp& op) {
     const TileCoord& xc = op.outputs.at(0);  // A[i,k] (in place)
     const TensorOperand& U = prog.operand(uc.operand);
     TensorOperand& X = prog.operand(xc.operand);
+    require_fp32(U, "kernel_trsm_upper_right"); require_fp32(X, "kernel_trsm_upper_right");
 
     const Dim ur0 = U.row_begin(uc.ti);
     const Dim uc0 = U.col_begin(uc.tj);
@@ -258,6 +296,7 @@ inline void kernel_bias_add(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
     const TensorOperand& B = prog.operand(bc.operand);
     TensorOperand& Y = prog.operand(yc.operand);
+    require_fp32(B, "kernel_bias_add"); require_fp32(Y, "kernel_bias_add");
     const Dim b0 = B.row_begin(bc.ti), b1 = B.row_end(bc.ti);
     const Dim r0 = Y.row_begin(yc.ti), r1 = Y.row_end(yc.ti);
     const Dim c0 = Y.col_begin(yc.tj), c1 = Y.col_end(yc.tj);
@@ -282,13 +321,16 @@ inline void kernel_acc_init(TileProgram& prog, const TileOp& op) {
     const TileCoord& xc = op.inputs.at(0);
     const TensorOperand& X = prog.operand(xc.operand);
     if (&X == &Y && xc.ti == yc.ti && xc.tj == yc.tj) return;   // accumulate onto Y: it starts as it is
+    if (X.type != Y.type)
+        throw std::invalid_argument("AccInit: " + xc.to_string() + " is " + X.type + " and the accumulator " +
+                                    yc.to_string() + " is " + Y.type + "; an init is in the accumulator's number system");
     const Dim x0 = X.row_begin(xc.ti), x1 = X.row_end(xc.ti);
     // A vector (one column) on a wider tile is a bias row; a single-column Y takes a tensor init.
     if (X.cols == 1 && Y.cols > 1) {
         if (x1 - x0 != c1 - c0)
             throw std::invalid_argument("AccInit: " + xc.to_string() + " is not a vector tile as wide as " + yc.to_string());
         for (Dim r = r0; r < r1; ++r)
-            for (Dim c = c0; c < c1; ++c) Y.at(r, c) = X.at(x0 + (c - c0), 0);
+            for (Dim c = c0; c < c1; ++c) Y.set_word(r, c, X.word(x0 + (c - c0), 0));   // words: any type
         return;
     }
     const Dim xc0 = X.col_begin(xc.tj), xc1 = X.col_end(xc.tj);
@@ -296,13 +338,14 @@ inline void kernel_acc_init(TileProgram& prog, const TileOp& op) {
         throw std::invalid_argument("AccInit: " + xc.to_string() + " is neither a tile shaped as " + yc.to_string() +
                                     " nor a vector tile as wide as it");
     for (Dim r = r0; r < r1; ++r)
-        for (Dim c = c0; c < c1; ++c) Y.at(r, c) = X.at(x0 + (r - r0), xc0 + (c - c0));
+        for (Dim c = c0; c < c1; ++c) Y.set_word(r, c, X.word(x0 + (r - r0), xc0 + (c - c0)));
 }
 
 // Y := act(Y): outputs = {Y's tile}.
 inline void kernel_activation(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
     TensorOperand& Y = prog.operand(yc.operand);
+    require_fp32(Y, "kernel_activation");
     for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
         for (Dim c = Y.col_begin(yc.tj); c < Y.col_end(yc.tj); ++c) Y.at(r, c) = activate(Y.at(r, c), op.act);
 }
