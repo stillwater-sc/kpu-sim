@@ -438,6 +438,17 @@ if(KPU_BUILD_TESTS)
             set_tests_properties(dflow_check_${_p} PROPERTIES FIXTURES_REQUIRED dflow_${_p})
             list(APPEND _dflow_tests kpu_run_csp_dflow_${_p} dflow_check_${_p})
         endforeach()
+        # A typed program (#394 step 3): int8 A and B, an int32 bias row and C, every tile's
+        # values and the L-T1 overlay; the payload holds each operand at its own width.
+        add_test(NAME kpu_run_csp_dflow_matmul_int8
+            COMMAND run --program ${_csp}/matmul_int8_16_t4_bias_row.csp --deploy ${_deploy}/kpu_s1.json
+                    --level block-sequential --dflow-values all
+                    --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_int8.dflow)
+        add_test(NAME dflow_check_matmul_int8
+            COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_int8.dflow)
+        set_tests_properties(kpu_run_csp_dflow_matmul_int8 PROPERTIES FIXTURES_SETUP dflow_matmul_int8)
+        set_tests_properties(dflow_check_matmul_int8 PROPERTIES FIXTURES_REQUIRED dflow_matmul_int8)
+        list(APPEND _dflow_tests kpu_run_csp_dflow_matmul_int8 dflow_check_matmul_int8)
         foreach(_p matmul_relu_retain_32_t16 bias_inherit_32_t16)
             add_test(NAME kpu_run_csp_dflow_${_p}
                 COMMAND run --program ${_csp}/${_p}.csp --deploy ${_deploy}/kpu_s1.json --level behavioral

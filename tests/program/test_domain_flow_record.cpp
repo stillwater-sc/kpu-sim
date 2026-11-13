@@ -416,9 +416,16 @@ TEST_CASE("dflow: the C++ reader refuses what L-B does not write", "[dflow][reco
     const auto dir = scratch("v6-int8");
     record::write_dflow(a, dir.string());
     auto m = nlohmann::json::parse(slurp((dir / "manifest.json").string()));
-    m["operands"][0]["element"] = "int8";                   // an RTL record's operand
+    // An element the format defines but this build does not compute in (an RTL record's fp8).
+    m["operands"][0]["element"] = "fp8_e4m3";
     std::ofstream(dir / "manifest.json") << m.dump();
-    CHECK_THROWS_WITH(record::read_dflow(dir.string()), ContainsSubstring("fp32 dense operands only"));
+    CHECK_THROWS_WITH(record::read_dflow(dir.string()),
+                      ContainsSubstring("fp8_e4m3 is not a .dflow element this build carries"));
+    // A domain other than dense.
+    m["operands"][0]["element"] = "fp32";
+    m["operands"][0]["domain"] = {{"kind", "lower"}};
+    std::ofstream(dir / "manifest.json") << m.dump();
+    CHECK_THROWS_WITH(record::read_dflow(dir.string()), ContainsSubstring("this reader holds dense operands only"));
     std::filesystem::remove_all(dir);
 }
 

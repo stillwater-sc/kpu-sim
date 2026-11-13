@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Typed values: number systems from Universal, int8 × int8 → int32 at L-B, L-T1 and L-CA** (#394 steps 1-2,
+- **Typed values: number systems from Universal, int8 × int8 → int32 at every level and in `.dflow`** (#394,
   `docs/plans/typed-value-path.md`).
   - An operand declares its number system: `tensor A[M,K] int8 tile 4x4 in;`. With no type it is
     fp32, so fp32 programs, traces and the golden corpus are unchanged byte for byte.
@@ -23,7 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `kpu-csp-gen --dtype int8` writes an int8 matmul, with all the init forms.
   - L-CA computes typed gemms with the same registered MAC (#394 step 2). Its payloads carry the
     words by `memcpy`, and it matches L-B bit for bit on every init form.
-  - The `.dflow` writer refuses typed programs until step 3.
+  - The `.dflow` record carries typed operands (#394 step 3). Each operand's `element` is its number
+    system, and the payload holds each element at its width (int8 one byte, int32 four). The C++
+    reader decodes them back word for word, and `dflow_check.py` accepts the bundle. fp32 bundles
+    are unchanged byte for byte.
   - Limit: the timed levels still size each element at 4 bytes, so an int8 program's traffic and
     timing are an fp32 program's.
 

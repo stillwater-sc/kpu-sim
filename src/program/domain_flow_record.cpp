@@ -63,7 +63,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     json ops = json::array();
     for (const auto& o : rec.operands)
         ops.push_back(json{{"name", o.name}, {"rows", o.rows}, {"cols", o.cols}, {"tile_rows", o.tile_rows},
-                           {"tile_cols", o.tile_cols}, {"element", "fp32"}, {"domain", json{{"kind", "dense"}}}});
+                           {"tile_cols", o.tile_cols}, {"element", o.element}, {"domain", json{{"kind", "dense"}}}});
     m["operands"] = ops;
     // Version 6: the shared record's enums, verbatim (docs/plans/shared-tile-flow-record.md §3).
     m["layers"] = json::array({"dram", "l3", "l2", "acc", "l1"});
@@ -181,12 +181,34 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         t.put("depth", "u16", col<std::uint16_t>(rec.iterations, [](const It& x) { return x.depth; }));
         tables["iteration"] = write_table(t, dir);
     }
+    // The payload (version 6): each snapshot's elements at its operand's width, little-endian (the
+    // host is, as checked above), back to back; `first` is each snapshot's byte offset. In memory
+    // an element is a 32-bit word, so an int8's payload byte is its word's low byte.
+    std::vector<std::uint64_t> byte_first(rec.snapshots.size());
+    std::vector<std::uint8_t> payload;
+    {
+        std::vector<std::uint32_t> width(rec.operands.size());
+        for (std::size_t o = 0; o < rec.operands.size(); ++o) width[o] = dflow_element_bytes(rec.operands[o].element);
+        static_assert(sizeof(float) == 4, "a word is four bytes");
+        for (std::size_t k = 0; k < rec.snapshots.size(); ++k) {
+            const DFR::Snapshot& x = rec.snapshots[k];
+            const std::uint32_t w = width.at(rec.tiles.at(x.tile).operand);
+            const std::uint64_t n = static_cast<std::uint64_t>(x.rows) * x.cols;
+            if (x.first + n > rec.elements.size())
+                throw RecordError("record: snapshot " + std::to_string(k) + " runs past the elements it holds");
+            byte_first[k] = payload.size();
+            for (std::uint64_t e = 0; e < n; ++e) {
+                std::uint32_t word;
+                std::memcpy(&word, &rec.elements[x.first + e], sizeof word);
+                for (std::uint32_t b = 0; b < w; ++b) payload.push_back(static_cast<std::uint8_t>(word >> (8 * b)));
+            }
+        }
+    }
     {
         Table t{"snapshots", "snapshots.bin", rec.snapshots.size(), {}};
         using Sn = DFR::Snapshot;
         t.put("step", "u64", col<std::uint64_t>(rec.snapshots, [](const Sn& x) { return x.step; }));
-        // A byte offset into the payload (version 6): an fp32 element is four bytes.
-        t.put("first", "u64", col<std::uint64_t>(rec.snapshots, [](const Sn& x) { return x.first * sizeof(float); }));
+        t.put("first", "u64", byte_first);
         t.put("tile", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.tile; }));
         t.put("height", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.rows; }));
         t.put("width", "u32", col<std::uint32_t>(rec.snapshots, [](const Sn& x) { return x.cols; }));
@@ -195,12 +217,8 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         tables["snapshots"] = write_table(t, dir);
     }
     {
-        // The payload: the fp32 elements' bytes, little-endian (the host is, as checked above).
-        static_assert(sizeof(float) == 4, "f32 elements");
-        std::vector<std::uint8_t> bytes(rec.elements.size() * sizeof(float));
-        if (!bytes.empty()) std::memcpy(bytes.data(), rec.elements.data(), bytes.size());
-        Table t{"elements", "elements.bin", bytes.size(), {}};
-        t.put("b", "u8", bytes);
+        Table t{"elements", "elements.bin", payload.size(), {}};
+        t.put("b", "u8", payload);
         tables["elements"] = write_table(t, dir);
     }
     {
@@ -310,19 +328,28 @@ DFR read_dflow(const std::string& dir) {
         rec.place = m.at("machine").at("place").get<std::string>();
         if (version >= 5) rec.l2 = m.at("machine").at("l2").get<std::uint32_t>();
         if (version >= 6) {
-            // This record holds what L-B writes: fp32, dense operands. A timed level's or the RTL's
-            // bundle (int8, a triangular domain, ...) is read by tools/trace/dflow_check.py instead.
+            // This record holds what L-B writes: dense operands, each in a number system the
+            // registry computes in (fp32, int8, int32). Another bundle (a triangular domain, fp8,
+            // ...) is read by tools/trace/dflow_check.py instead.
             for (const json& o : m.at("operands")) {
-                if (o.at("element").get<std::string>() != "fp32" || o.at("domain").at("kind").get<std::string>() != "dense")
-                    throw RecordError("record: " + dir + ": operand " + o.at("name").get<std::string>() + " is " +
-                                      o.at("element").get<std::string>() + ", " + o.at("domain").at("kind").get<std::string>() +
-                                      "; this reader holds fp32 dense operands only (L-B's)");
+                const std::string name = o.at("name").get<std::string>();
+                const std::string element = o.at("element").get<std::string>();
+                if (o.at("domain").at("kind").get<std::string>() != "dense")
+                    throw RecordError("record: " + dir + ": operand " + name + " is " +
+                                      o.at("domain").at("kind").get<std::string>() +
+                                      "; this reader holds dense operands only (L-B's)");
+                try {
+                    (void)dflow_element_bytes(element);
+                } catch (const RecordError& e) {
+                    throw RecordError("record: " + dir + ": operand " + name + ": " + e.what());
+                }
             }
         }
         for (const json& o : m.at("operands"))
             rec.operands.push_back({o.at("name").get<std::string>(), o.at("rows").get<std::uint64_t>(),
                                     o.at("cols").get<std::uint64_t>(), o.at("tile_rows").get<std::uint64_t>(),
-                                    o.at("tile_cols").get<std::uint64_t>()});
+                                    o.at("tile_cols").get<std::uint64_t>(),
+                                    version >= 6 ? o.at("element").get<std::string>() : std::string(numeric::kFp32)});
         rec.vars = m.at("vars").get<std::vector<std::string>>();
         rec.actions = m.at("totals").at("actions").get<std::uint64_t>();
         rec.loads = m.at("totals").at("loads").get<std::uint64_t>();
@@ -477,19 +504,34 @@ DFR read_dflow(const std::string& dir) {
                     if (version >= 6) {
                         if (role[i] != 0) throw RecordError("record: " + dir + ": snapshot " + std::to_string(i) +
                                                             " is an expected value; this reader holds L-B's actual values only");
-                        if (f % sizeof(float)) throw RecordError("record: " + dir + ": snapshot " + std::to_string(i) +
-                                                                 " starts at byte " + std::to_string(f) + ", inside an fp32 element");
-                        f /= sizeof(float);
-                    }
+                    }   // version 6: a byte offset, turned into an element index with the payload below
                     rec.snapshots.push_back({step[i], f, tile[i], rows[i], cols[i], chan[i]});
                 }
             }
             if (version >= 6) {
                 auto [t, blob] = table("elements", n);
                 const auto bytes = read_col<std::uint8_t>(t, blob, "b", "u8", n);
-                if (bytes.size() % sizeof(float)) throw RecordError("record: " + dir + ": the payload is not whole fp32 elements");
-                rec.elements.resize(bytes.size() / sizeof(float));
-                if (!bytes.empty()) std::memcpy(rec.elements.data(), bytes.data(), bytes.size());
+                // Each snapshot's elements at its operand's width, read into words (zero-extended:
+                // an int8's byte is its word's low byte, as numeric::encode writes it).
+                for (std::size_t k = 0; k < rec.snapshots.size(); ++k) {
+                    DFR::Snapshot& x = rec.snapshots[k];
+                    if (x.tile >= rec.tiles.size() || rec.tiles[x.tile].operand >= rec.operands.size())
+                        throw RecordError("record: " + dir + ": snapshot " + std::to_string(k) + " names no tile");
+                    const std::uint32_t w = dflow_element_bytes(rec.operands[rec.tiles[x.tile].operand].element);
+                    const std::uint64_t count = static_cast<std::uint64_t>(x.rows) * x.cols;
+                    if (x.first > bytes.size() || count * w > bytes.size() - x.first)
+                        throw RecordError("record: " + dir + ": snapshot " + std::to_string(k) + " runs past the payload (" +
+                                          std::to_string(bytes.size()) + " bytes)");
+                    const std::uint64_t at = x.first;
+                    x.first = rec.elements.size();
+                    for (std::uint64_t e = 0; e < count; ++e) {
+                        std::uint32_t word = 0;
+                        for (std::uint32_t b = 0; b < w; ++b)
+                            word |= static_cast<std::uint32_t>(bytes[at + e * w + b]) << (8 * b);
+                        rec.elements.emplace_back();
+                        std::memcpy(&rec.elements.back(), &word, sizeof word);
+                    }
+                }
             } else {
                 auto [t, blob] = table("elements", n);
                 rec.elements = read_col<float>(t, blob, "v", "f32", n);
