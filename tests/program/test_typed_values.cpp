@@ -321,7 +321,7 @@ TEST_CASE("typed values: what is refused, and where", "[program][numeric][refuse
     CHECK_THROWS_WITH(apply(p, add, st), ContainsSubstring("operand Y is int32; this kernel computes in fp32 only"));
 }
 
-TEST_CASE("typed values: L-T1 carries L-B's; L-CA and the .dflow writer refuse until their steps",
+TEST_CASE("typed values: L-T1 carries L-B's; the .dflow writer refuses until step 3",
           "[program][numeric][lt1]") {
     const auto spec = platform::read_spec_file("tests/program/deploy/kpu_s1.json");
     const auto dev = spec.device(0);
@@ -339,10 +339,6 @@ TEST_CASE("typed values: L-T1 carries L-B's; L-CA and the .dflow writer refuse u
     CHECK_FALSE(exact.pass);
     CHECK(exact.misses.size() == 1);
     CHECK(check_tiles(lt.values, lt.values, "C").pass);
-    // L-CA: step 2.
-    const auto why = driver::csp_level_supported(driver::ExecutionLevel::CycleAccurate, ast, &dev);
-    REQUIRE(why);
-    CHECK_THAT(*why, ContainsSubstring("L-CA computes in fp32 until docs/plans/typed-value-path.md step 2"));
     // The .dflow writer: step 3.
     CHECK_THROWS_WITH(record::DomainFlowRecorder(ast, src, 0),
                       ContainsSubstring("A is int8; the .dflow writer carries fp32 operands"));
@@ -355,4 +351,48 @@ TEST_CASE("typed values: kpu-csp-gen's dtype", "[program][numeric][gen]") {
     o = matmul();
     o.algo = "lu";
     CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("dtype is matmul's"));
+}
+
+TEST_CASE("typed values: L-CA computes int8 x int8 in int32 with L-B's MAC, bit for bit", "[program][numeric][lca]") {
+    const auto spec = platform::read_spec_file("tests/program/deploy/kpu_s1.json");
+    const auto dev = spec.device(0);
+    const auto lca = [&](const lang::Program& ast, const TileProgram& in) {
+        REQUIRE_FALSE(driver::csp_level_supported(driver::ExecutionLevel::CycleAccurate, ast, &dev));
+        auto r = driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, ast, &dev, in);
+        REQUIRE_FALSE(r.skipped);
+        REQUIRE(r.has_timing);
+        return r;
+    };
+    for (const char* orient : {"col", "row"})
+        for (const char* init : {"none", "bias", "bias-row", "accumulate"}) {
+            CAPTURE(orient, init);
+            const lang::Program ast = lang::parse(gen::generate(matmul(init, orient)));
+            const TileProgram in = driver::csp_inputs(ast);
+            const auto ca = lca(ast, in);
+            const driver::CspReference ref = driver::csp_reference(ast, in, 0);
+            REQUIRE(ref.values);
+            // Every operand, word for word: C computed, the inputs untouched.
+            for (const auto& name : in.operand_order()) {
+                CAPTURE(name);
+                CHECK(ca.values.operand(name).type == in.operand(name).type);
+                CHECK(ca.values.operand(name).values.size() == ref.values->operand(name).values.size());
+                CHECK(ints(ca.values.operand(name)) == ints(ref.values->operand(name)));
+            }
+            CHECK(ints(ca.values.operand("C")) == reference(in, init));
+            CHECK(check_operands(ca.values, *ref.values).pass);
+        }
+    // Accumulating onto words a float copy could change: every C element's word is shaped as a
+    // signalling NaN (exponent all ones, quiet bit clear). L-CA moves them as words, never floats.
+    const lang::Program ast = lang::parse(gen::generate(matmul("accumulate")));
+    TileProgram in = driver::csp_inputs(ast);
+    for (Dim r = 0; r < 8; ++r)
+        for (Dim c = 0; c < 8; ++c) {
+            in.operand("A").set_value(r, c, 127);
+            in.operand("B").set_value(r, c, 127);
+            in.operand("C").set_word(r, c, 0x7F800001u + static_cast<numeric::Word>(r * 8 + c));
+        }
+    const auto ca = lca(ast, in);
+    const auto want = reference(in, "accumulate");
+    CHECK(ints(ca.values.operand("C")) == want);
+    CHECK(want.front() == static_cast<std::int32_t>(0x7F800001u) + 127 * 127 * 8);
 }
