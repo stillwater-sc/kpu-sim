@@ -194,7 +194,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
             const DFR::Snapshot& x = rec.snapshots[k];
             const std::uint32_t w = width.at(rec.tiles.at(x.tile).operand);
             const std::uint64_t n = static_cast<std::uint64_t>(x.rows) * x.cols;
-            if (x.first + n > rec.elements.size())
+            if (x.first > rec.elements.size() || n > rec.elements.size() - x.first)   // no wrap in first + n
                 throw RecordError("record: snapshot " + std::to_string(k) + " runs past the elements it holds");
             byte_first[k] = payload.size();
             for (std::uint64_t e = 0; e < n; ++e) {
@@ -519,7 +519,7 @@ DFR read_dflow(const std::string& dir) {
                         throw RecordError("record: " + dir + ": snapshot " + std::to_string(k) + " names no tile");
                     const std::uint32_t w = dflow_element_bytes(rec.operands[rec.tiles[x.tile].operand].element);
                     const std::uint64_t count = static_cast<std::uint64_t>(x.rows) * x.cols;
-                    if (x.first > bytes.size() || count * w > bytes.size() - x.first)
+                    if (x.first > bytes.size() || count > (bytes.size() - x.first) / w)   // no wrap in count * w
                         throw RecordError("record: " + dir + ": snapshot " + std::to_string(k) + " runs past the payload (" +
                                           std::to_string(bytes.size()) + " bytes)");
                     const std::uint64_t at = x.first;

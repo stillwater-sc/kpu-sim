@@ -27,6 +27,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -426,6 +427,38 @@ TEST_CASE("dflow: the C++ reader refuses what L-B does not write", "[dflow][reco
     m["operands"][0]["domain"] = {{"kind", "lower"}};
     std::ofstream(dir / "manifest.json") << m.dump();
     CHECK_THROWS_WITH(record::read_dflow(dir.string()), ContainsSubstring("this reader holds dense operands only"));
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("dflow: a snapshot's range is checked without wrapping", "[dflow][record][v6]") {
+    const DomainFlowRecord a = record_of(slurp("tests/program/corpus/matmul_48x48x48_t16.csp"), 0, record::parse_value_selection("all")).rec;
+    REQUIRE(!a.snapshots.empty());
+    REQUIRE(a.operands[a.tiles.at(a.snapshots[0].tile).operand].element == "fp32");
+    const auto dir = scratch("v6-wrap");
+    // The writer: a first at the top of the range, where first + n wraps to a small number.
+    {
+        DomainFlowRecord b = a;
+        b.snapshots[0].first = std::numeric_limits<std::uint64_t>::max();
+        CHECK_THROWS_WITH(record::write_dflow(b, dir.string()), ContainsSubstring("runs past the elements it holds"));
+    }
+    // The reader: 2^31 x 2^31 fp32 elements, whose byte count 2^64 wraps to zero.
+    record::write_dflow(a, dir.string());
+    const auto m = nlohmann::json::parse(slurp((dir / "manifest.json").string()));
+    const auto& cols = m["tables"]["snapshots"]["columns"];
+    std::fstream f(dir / "snapshots.bin", std::ios::in | std::ios::out | std::ios::binary);
+    REQUIRE(f.good());
+    const std::uint32_t huge = 1u << 31;
+    int patched = 0;
+    for (const auto& c : cols)
+        if (c["name"] == "height" || c["name"] == "width") {
+            ++patched;
+            REQUIRE(c["dtype"] == "u32");
+            f.seekp(c["offset"].get<std::streamoff>());                 // snapshot 0's entry
+            f.write(reinterpret_cast<const char*>(&huge), sizeof huge);
+        }
+    f.close();
+    REQUIRE(patched == 2);
+    CHECK_THROWS_WITH(record::read_dflow(dir.string()), ContainsSubstring("runs past the payload"));
     std::filesystem::remove_all(dir);
 }
 
