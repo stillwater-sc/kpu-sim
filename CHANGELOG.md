@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-CA executes the walker's L3 placement** (#399, `docs/plans/l3-placement-at-lb.md` step 6, L3 part).
+  - A residency's Load, Inherit or opening Writeback takes its own slot's credit: it waits until
+    the tile placed there before has left L3, and the slot's residencies open in the program's
+    order. No L-CA process picks an L3 slot of its own. The L3 `TagCAM` holds the per-slot claims.
+  - L-CA's slots now hold the same tiles, in the same order, as L-B's and L-T1's
+    (`test_csp_lca_place`). `CspLevelOutcome::l3_placement` reports them.
+  - L-CA now holds a program to its own `l3`, not the machine's whole L3, so its timing changes.
+    The streamed test program goes from 3429 to 2783 cycles.
+  - Not yet: L2 staging at L-CA (each staged Feed still moves from L3) and L3 bank timing (#417).
+
 - **Typed values: number systems from Universal, int8 × int8 → int32 at every level and in `.dflow`** (#394,
   `docs/plans/typed-value-path.md`).
   - An operand declares its number system: `tensor A[M,K] int8 tile 4x4 in;`. With no type it is

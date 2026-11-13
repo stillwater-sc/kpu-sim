@@ -1176,10 +1176,25 @@ inline void ConcurrentTimingExecutor::seed_l3(const TileDescriptor& tile_in, Til
     const TileDescriptor tile = homed(tile_in);
     if (!payload.valid()) throw std::invalid_argument("seed_l3: payload dimensions do not match value count");
     CreditPool& credits = l3_tile_credits(tile.l3_tile);
+    TagCAM& cam = l3_tile_tag_cam(tile.l3_tile);
+    // A placed tile (l3-placement-at-lb.md step 6) opens in its own slot: the operator before
+    // left it there, so the slot must be free of any other tile.
+    if (tile.l3_slot >= 0 && !cam.slot_free(static_cast<uint32_t>(tile.l3_slot)))
+        throw std::runtime_error("seed_l3: " + tile.tile_id.to_string() + " is placed in L3 slot " +
+                                 std::to_string(tile.l3_slot) + ", which holds " +
+                                 cam.slot_owner(static_cast<uint32_t>(tile.l3_slot))->to_string());
+    if (tile.l3_slot >= 0 && !cam.slot_ready(static_cast<uint32_t>(tile.l3_slot), tile.l3_slot_turn))
+        throw std::runtime_error("seed_l3: " + tile.tile_id.to_string() + " is placed in L3 slot " +
+                                 std::to_string(tile.l3_slot) + " after residencies that have not opened");
     if (!credits.acquire(static_cast<size_t>(tile.tile_id.matrix)))
         throw std::runtime_error("seed_l3: no L3 credit is free for " + tile.tile_id.to_string());
-    TagCAM& cam = l3_tile_tag_cam(tile.l3_tile);
-    const auto slot = static_cast<uint32_t>(seeded_l3_++ % cam.capacity());
+    uint32_t slot = 0;
+    if (tile.l3_slot >= 0) {
+        slot = static_cast<uint32_t>(tile.l3_slot);
+        cam.claim_slot(slot, tile.tile_id, tile.l3_slot_turn);
+    } else {
+        slot = static_cast<uint32_t>(seeded_l3_++ % cam.capacity());
+    }
     cam.insert(tile.tile_id, slot, current_cycle_);
     functional_payloads_enabled_ = true;
     write_payload(MemoryLevel::L3, tile.tile_id, std::move(payload), slot);
@@ -2292,6 +2307,10 @@ inline TileDescriptor ConcurrentTimingExecutor::homed(const TileDescriptor& tile
                                     std::to_string(h) + " here and on " +
                                     std::to_string(it->second) +
                                     " by an earlier operation; a tile has one home");
+    if (tile.l3_slot >= 0 && static_cast<size_t>(tile.l3_slot) >= l3_tile_cams_.at(h)->capacity())
+        throw std::invalid_argument(tile.tile_id.to_string() + " is placed in L3 slot " +
+                                    std::to_string(tile.l3_slot) + "; L3 tile " + std::to_string(h) +
+                                    " has " + std::to_string(l3_tile_cams_.at(h)->capacity()) + " slots");
     TileDescriptor t = tile;
     t.l3_tile = static_cast<int32_t>(h);
     return t;

@@ -143,6 +143,15 @@ struct TileDescriptor {
     // the first free compute tile. Ignored by the legacy unbounded compute model.
     int32_t cf_tile = -1;
 
+    // The L3 slot a CSP program placed this residency in (the walker's L3Address::slot,
+    // docs/plans/l3-placement-at-lb.md step 6), within its home L3 tile. The Load, Inherit or
+    // opening Writeback that opens the residency waits for this slot's credit -- the slot is
+    // free -- not for any free one, and the residency's entry lives there until it leaves L3.
+    // -1 = not placed: the legacy path, where the producer picks a slot. `l3_slot_turn`: the
+    // residencies the program placed in this slot before this one -- they take it first.
+    int32_t l3_slot = -1;
+    uint32_t l3_slot_turn = 0;
+
     // L3 residency decided by a CSP program (docs/plans/csp-language.md step 1c.2): the program
     // releases this LOAD's L3 entry with an explicit Release (schedule_release), so the entry
     // holds one reference that Moves out of L3 do not consume. false = the legacy schedule path:

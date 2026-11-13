@@ -443,6 +443,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
+                    events.back().slot_id = in_flight_->slot_id;
                 }
                 in_flight_target_ = nullptr;
                 in_flight_ticket_ = 0;
@@ -829,9 +830,15 @@ private:
         // Check if L3 credit available (writebacks carry C tiles, which have
         // their own partition when the pool is partitioned, per #89). A writeback into a
         // program-held entry writes its slot in place: the residency already holds the credit.
+        // A placed writeback that opens a residency (l3-placement-at-lb.md step 6) takes its own
+        // slot's credit: it waits until the tile placed there before has left L3.
         const bool in_place = writeback_queue_.at(found_index).l3_held;
-        if (!in_place && !l3_credits_.acquire(
-                static_cast<size_t>(writeback_queue_.at(found_index).tile_id.matrix))) {
+        const int32_t placed = writeback_queue_.at(found_index).l3_slot;
+        const bool slot_held = !in_place && placed >= 0 &&
+                               !l3_tag_cam_.slot_ready(static_cast<uint32_t>(placed),
+                                                       writeback_queue_.at(found_index).l3_slot_turn);
+        if (slot_held || (!in_place && !l3_credits_.acquire(
+                static_cast<size_t>(writeback_queue_.at(found_index).tile_id.matrix)))) {
             const auto& tile = writeback_queue_.at(found_index);
             events.push_back(TimingEvent(
                 EventType::BM_STALL_CREDIT,
@@ -851,7 +858,13 @@ private:
         Cycle transfer_cycles = std::max(move, wb_tile.ve_cycles);
         ve_busy_cycles_ += wb_tile.ve_cycles;
         if (wb_tile.ve_cycles > move) ve_bound_cycles_ += wb_tile.ve_cycles - move;
-        uint32_t l3_slot = found_entry->slot_id;  // Reuse slot info for tracking
+        // The L3 slot it lands in: the program's placement, claimed with the credit (an in-place
+        // writeback's residency holds it already). Unplaced, the L2 slot's number stands in.
+        uint32_t l3_slot = found_entry->slot_id;
+        if (wb_tile.l3_slot >= 0) {
+            l3_slot = static_cast<uint32_t>(wb_tile.l3_slot);
+            if (!in_place) l3_tag_cam_.claim_slot(l3_slot, wb_tile.tile_id, wb_tile.l3_slot_turn);   // ready
+        }
 
         in_flight_ = InFlightTransfer(
             wb_tile,

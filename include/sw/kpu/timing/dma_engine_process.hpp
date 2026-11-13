@@ -618,8 +618,15 @@ private:
             // downstream path and wedging the pipeline (credit cycle livelock).
             const size_t load_part = static_cast<size_t>(req.tile.tile_id.matrix);
             CreditPool& credits = l3_credits(req.tile);
-            if (credits.available(load_part) <= config_.l3_credit_reserve ||
-                !credits.acquire(load_part)) {
+            // A placed load (a CSP program's, l3-placement-at-lb.md step 6): its credit is its
+            // own slot's -- the slot is free once the tile placed there before has left L3. The
+            // reserve is a pooled credit's rule; a placed slot is the program's decision.
+            const bool placed = req.tile.l3_slot >= 0;
+            const auto slot = static_cast<uint32_t>(req.tile.l3_slot);
+            const bool got = placed ? cam.slot_ready(slot, req.tile.l3_slot_turn) && credits.acquire(load_part)
+                                    : credits.available(load_part) > config_.l3_credit_reserve &&
+                                          credits.acquire(load_part);
+            if (!got) {
                 if (!credit_stalled) {
                     credit_stalled = true;
                     stalled_tile = req.tile.tile_id;
@@ -628,10 +635,16 @@ private:
             }
 
             // Got credit - submit to MC with our engine_id
-            req.slot_id = allocate_slot(cam);
+            if (placed) {
+                cam.claim_slot(slot, req.tile.tile_id, req.tile.l3_slot_turn);   // ready, as checked
+                req.slot_id = slot;
+            } else {
+                req.slot_id = allocate_slot(cam);
+            }
             if (!submit(req)) {
-                // MC queue full - release credit and retry later
+                // MC queue full - release credit (and the slot) and retry later
                 credits.release(load_part);
+                if (placed) cam.unclaim_slot(slot, req.tile.tile_id);
                 continue;
             }
 
@@ -646,6 +659,7 @@ private:
                 req.tile.tile_id,
                 name()
             ));
+            events.back().slot_id = req.slot_id;
         }
 
         // Stall accounting: at most one stall cycle per tick (matches BM/STR)

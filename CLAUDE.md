@@ -40,8 +40,10 @@ L-B executes the walker's addresses (step 3: its L3 is addressed storage, and it
 into a live slot or a read of the wrong one), and the L0 trace records them (step 4: opset 1.2's
 `L3_*` ops, which the replay checks and the compute-schedule analyses skip), and L-T1 times them
 (step 5a: a Load waits for its own slot's Release) and records them (step 5b: `.tflow` version 5
-carries each residency's slot, one swimlane row per slot). Until step 6 lands, L-CA's `slot_id`
-is a per-DMA-engine counter. Never present a pooled L3 as the intended model.
+carries each residency's slot, one swimlane row per slot), and L-CA executes them (step 6, #399:
+a residency's Load, Writeback or Inherit takes its own slot's credit, in the program's order per
+slot). L-CA's L2 still re-Moves each staged Feed from L3 until #399's L2 part lands, and banks are
+untimed (#417). Never present a pooled L3 as the intended model.
 
 **Every level computes values.** Decomposition changes *when* things happen, never *what*
 is computed. A level that returns timing without values is not a cheaper simulation — it is

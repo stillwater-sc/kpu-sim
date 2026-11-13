@@ -12,6 +12,7 @@
 
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace sw::kpu::timing {
@@ -204,7 +205,10 @@ public:
                 it->second.ref_count--;
                 return false;  // Tile still in use, don't release credit
             } else {
-                // Last consumer - remove the entry, caller should release credit
+                // Last consumer - remove the entry, caller should release credit. A slot the
+                // tile claimed is free with it (the slot's credit returns with the entry's).
+                const auto c = claims_.find(it->second.slot_id);
+                if (c != claims_.end() && c->second == tile_id) claims_.erase(c);
                 entries_.erase(it);
                 return true;  // Tile removed, release credit
             }
@@ -282,7 +286,58 @@ public:
      */
     void reset() {
         entries_.clear();
+        claims_.clear();
+        turns_.clear();
+        claim_log_.clear();
     }
+
+    // ---- Placement (docs/plans/l3-placement-at-lb.md step 6) ----------------------------------
+    // A program places each residency in a slot (the walker's L3 address). A credit for a placed
+    // tile is "slot s is free", not "some slot is free": the producer claims s for the tile when
+    // it takes the credit, and the claim ends when the tile's entry leaves the CAM (invalidate).
+    // A slot's residencies take it in the program's order: each claim names its turn (how many
+    // residencies the program placed in the slot before it), so a Load that runs ahead cannot
+    // take a slot the program gives an earlier Writeback first. Entries the legacy path inserts
+    // claim nothing.
+
+    /// No tile holds slot @p slot.
+    [[nodiscard]] bool slot_free(uint32_t slot) const { return claims_.find(slot) == claims_.end(); }
+
+    /// Slot @p slot is free, and the residency whose turn it is next is turn @p turn.
+    [[nodiscard]] bool slot_ready(uint32_t slot, uint32_t turn) const {
+        const auto t = turns_.find(slot);
+        return slot_free(slot) && (t == turns_.end() ? 0u : t->second) == turn;
+    }
+
+    /// The tile holding slot @p slot, if any.
+    [[nodiscard]] std::optional<TileID> slot_owner(uint32_t slot) const {
+        const auto c = claims_.find(slot);
+        if (c == claims_.end()) return std::nullopt;
+        return c->second;
+    }
+
+    /// Claim @p slot for @p tile_id at its turn @p turn. false: the slot is held, past the
+    /// module's slots, or another residency's turn.
+    bool claim_slot(uint32_t slot, const TileID& tile_id, uint32_t turn = 0) {
+        if (slot >= capacity_ || !slot_ready(slot, turn)) return false;
+        claims_.emplace(slot, tile_id);
+        ++turns_[slot];
+        claim_log_.emplace_back(slot, tile_id);
+        return true;
+    }
+
+    /// Undo a claim whose transfer did not start (its credit is returned with it, and its turn).
+    void unclaim_slot(uint32_t slot, const TileID& tile_id) {
+        const auto c = claims_.find(slot);
+        if (c == claims_.end() || !(c->second == tile_id)) return;
+        claims_.erase(c);
+        --turns_[slot];
+        if (!claim_log_.empty() && claim_log_.back().first == slot && claim_log_.back().second == tile_id)
+            claim_log_.pop_back();
+    }
+
+    /// Every claim, in the order taken: each slot's tiles, in the order they held it.
+    [[nodiscard]] const std::vector<std::pair<uint32_t, TileID>>& claim_log() const { return claim_log_; }
 
     /**
      * @brief Get all valid entries (for debugging/tracing)
@@ -350,6 +405,9 @@ public:
 private:
     size_t capacity_;
     std::unordered_map<TileID, TagCAMEntry, TileIDHash> entries_;
+    std::unordered_map<uint32_t, TileID> claims_;                ///< slot -> the tile placed in it
+    std::unordered_map<uint32_t, uint32_t> turns_;               ///< slot -> the claims it has taken
+    std::vector<std::pair<uint32_t, TileID>> claim_log_;         ///< (slot, tile), in claim order
 };
 
 } // namespace sw::kpu::timing
