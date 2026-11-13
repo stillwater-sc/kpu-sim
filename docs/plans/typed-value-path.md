@@ -1,6 +1,6 @@
 # Typed Value Path: Number Systems from Universal (#394)
 
-**Status:** steps 1 (the type in `.csp`, the registry, L0, L-B and L-T1, the generator) and 2 (L-CA) done; step 3 open
+**Status:** done: steps 1 (the type in `.csp`, the registry, L0, L-B and L-T1, the generator), 2 (L-CA) and 3 (`.dflow`)
 **Issue:** #394 (v0.9.0), the generator side's branes-ai/embodied-ai-soc-generator#51
 **Related:** #384 (end-to-end tests, which this unblocks), #406 step 4 (bit-equal bias and
 accumulate), `docs/plans/shared-tile-flow-record.md` §7 (the record's element types)
@@ -114,6 +114,21 @@ need a wider word. That is a later step, the typed element buffer, kept out of #
      - fp32 keeps the executor's own arithmetic, unchanged.
 3. The C++ `.dflow` writer and reader carry int8 and int32; `dflow_check.py` accepts the record.
    That meets #394's done-when.
+
+   **Done:**
+   - Each operand's manifest `element` is its number system.
+   - The payload holds each element at its width, little-endian: int8 is one byte, int32 and fp32
+     are four. The values cap counts those bytes.
+   - The reader accepts any element that both the format and the registry name (fp32, int8, int32),
+     and decodes it back into words.
+   - fp32 bundles are unchanged byte for byte.
+   - Tests:
+     - the C++ round trip, word for word, with `elements.bin` exactly the payload's bytes;
+     - every final equal to L-B's;
+     - the reader refuses fp8 (format-only) and non-dense domains;
+     - a ctest pair: `kpu-run --dflow` on `tests/program/csp/matmul_int8_16_t4_bias_row.csp`, then
+       `dflow_check.py`, which passes. Its decoded A, B and bias row reproduce C in Python,
+       wrapped to int32.
 
 Later, outside #394:
 - more pairs (bfloat16, fp8, posit);

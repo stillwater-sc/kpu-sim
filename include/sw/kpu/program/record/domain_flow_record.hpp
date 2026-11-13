@@ -42,12 +42,14 @@
 //   (version 6)     the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md,
 //                   #386). The manifest names the level and the producer, time (null at L-B), every
 //                   layer's geometry (L-B models DRAM and L3; L2's banks and rows, the accumulator and
-//                   L1 are declared not modelled), each operand's element type and domain (fp32 and
-//                   dense at L-B), and the result (no cycles at L-B; values unchecked). elements.bin
-//                   becomes a byte payload (column b, u8), decoded by the operand's element type; a
-//                   snapshot's first is a byte offset, and its role says actual or expected (L-B:
-//                   actual). events.bin holds the events a timed level emits; L-B writes it empty,
-//                   with no time column. In memory the record keeps fp32 elements and element offsets.
+//                   L1 are declared not modelled), each operand's element type (its number system:
+//                   fp32, int8, int32; #394 step 3) and domain (dense at L-B), and the result (no
+//                   cycles at L-B; values unchecked). elements.bin becomes a byte payload (column b,
+//                   u8): each element at its operand's width, little-endian (int8 one byte, int32 and
+//                   fp32 four); a snapshot's first is a byte offset, and its role says actual or
+//                   expected (L-B: actual). events.bin holds the events a timed level emits; L-B writes
+//                   it empty, with no time column. In memory the record keeps 32-bit words
+//                   (numeric.hpp) and element offsets.
 //
 // THE L-T1 OVERLAY (§3.7, step 5). L-B has no time; the overlay is a second run, L-T1's, of the same
 // program, joined on the action index. Its cycles are UNCALIBRATED, as L-T1 always says, and only
@@ -58,7 +60,8 @@
 // the tile's value in the channel each action leaves it in: Load (L3), Move (L2), Feed and Call
 // (the fabric; a Call's is the accumulator so far), Drain (L2), Writeback (L3), Store (DRAM) and
 // Inherit (L3). A byte cap bounds them: finals first; snapshots stop at the cap, and the manifest
-// says where. The elements are float32, the format the operands carry (tile_check's ElementFormat).
+// says where. The elements are in each operand's number system, as the operands carry them; the cap
+// counts payload bytes, so an int8 tile costs a quarter of an fp32 one.
 //
 // There is no time column: L-B has no time (§3.7). Indices that name nothing are kNone8/32/64.
 // The record is written by the run that is the oracle (driver::csp_reference, through its
@@ -77,6 +80,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -91,8 +95,24 @@ namespace sw::kpu::program::record {
 // lt1_calls, manifest lt1.fabric and lt1.one_leg). Version 5: L2 staging (l2_staging, the steps'
 // l2_cf, l2_slot and staging, machine.l2). Version 6: the shared record (level, producer, time,
 // geometry, element types, domains, the byte payload, events, result). Versions 1 to 5 are still read;
-// a version-6 bundle is read when it holds what L-B writes (fp32, dense operands, actual values).
+// a version-6 bundle is read when it holds what L-B writes (dense operands, actual values, each
+// operand in a number system both the format and the registry name: fp32, int8, int32).
 inline constexpr std::uint32_t kDflowVersion = 6;
+
+// An operand's element in the byte payload (#394 step 3; shared-tile-flow-record.md §7.1): its
+// bytes per element, little-endian. The name must be one the format defines AND one the numeric
+// registry computes in, since the record's elements are that system's words. Throws RecordError
+// otherwise.
+inline std::uint32_t dflow_element_bytes(const std::string& element) {
+    static const char* const kFormat[] = {"int8", "int32", "fp32", "fp16", "bf16", "fp8_e4m3", "fp8_e5m2"};
+    const bool in_format = std::any_of(std::begin(kFormat), std::end(kFormat),
+                                       [&](const char* e) { return element == e; });
+    const numeric::NumberSystem* ns = numeric::find(element);
+    if (!in_format || !ns || ns->bits % 8 != 0)
+        throw RecordError("record: " + element + " is not a .dflow element this build carries (" + numeric::names() +
+                          " in the registry; the format's int8, int32, fp32, fp16, bf16, fp8_e4m3, fp8_e5m2)");
+    return ns->bits / 8;
+}
 inline constexpr std::uint8_t kNone8 = 0xFF;
 inline constexpr std::uint32_t kNone32 = 0xFFFFFFFFu;
 inline constexpr std::uint64_t kNone64 = ~std::uint64_t{0};
@@ -104,7 +124,11 @@ struct DomainFlowRecord {
     // Residency flags.
     static constexpr std::uint8_t kLoaded = 1, kInherited = 2, kRetained = 4, kResPinned = 8;
 
-    struct Operand { std::string name; std::uint64_t rows = 0, cols = 0, tile_rows = 0, tile_cols = 0; };
+    struct Operand {
+        std::string name;
+        std::uint64_t rows = 0, cols = 0, tile_rows = 0, tile_cols = 0;
+        std::string element = numeric::kFp32;       // its number system (§7.1); the payload's width
+    };
     struct Tile { std::uint32_t operand = 0, ti = 0, tj = 0; };
     struct Step {
         std::uint64_t action = 0;
@@ -148,7 +172,7 @@ struct DomainFlowRecord {
     struct Refusal { std::uint64_t action = 0; std::string what; };
     struct Snapshot {
         std::uint64_t step = kNone64;               // the action after which it was taken; none: final
-        std::uint64_t first = 0;                    // its first element in `elements`
+        std::uint64_t first = 0;                    // its first element in `elements` (in memory, not bytes)
         std::uint32_t tile = 0, rows = 0, cols = 0;
         std::uint8_t chan = static_cast<std::uint8_t>(csp::Chan::Dram);
     };
@@ -172,6 +196,8 @@ struct DomainFlowRecord {
     std::optional<Refusal> refusal;
     // Values (version 2).
     std::vector<Snapshot> snapshots;
+    // In memory each element is a 32-bit word (numeric.hpp): fp32's float, another system's bit
+    // pattern zero-extended. The bundle stores each at its operand's width (dflow_element_bytes).
     std::vector<float> elements;
     std::string values_selected;                    // "" (none), "all", or the selection as given
     std::uint64_t values_cap = 0;                   // bytes
@@ -373,15 +399,13 @@ public:
         std::uint64_t finals = 0;
         for (const auto& name : shapes_.operand_order()) {
             const auto& o = shapes_.operand(name);
-            // The C++ writer carries fp32 elements; int8/int32 operands are #394's step 3
-            // (docs/plans/typed-value-path.md), so a typed program is refused, never recorded
-            // with its words labelled fp32.
-            if (!o.fp32())
-                throw RecordError("record: " + name + " is " + o.type + "; the .dflow writer carries fp32 operands "
-                                  "until docs/plans/typed-value-path.md step 3");
+            // Each operand's elements at its number system's width (#394 step 3): int8 is one
+            // byte in the payload, and the cap counts it so.
+            const std::uint32_t width = dflow_element_bytes(o.type);
             operand_index_[name] = static_cast<std::uint32_t>(rec_.operands.size());
-            rec_.operands.push_back({name, o.rows, o.cols, o.tile_rows, o.tile_cols});
-            finals += static_cast<std::uint64_t>(o.rows) * o.cols * sizeof(float);
+            rec_.operands.push_back({name, o.rows, o.cols, o.tile_rows, o.tile_cols, o.type});
+            widths_[name] = width;
+            finals += static_cast<std::uint64_t>(o.rows) * o.cols * width;
         }
         for (const auto& name : values_.operands)
             if (!operand_index_.count(name)) throw RecordError("--dflow-values: " + name + " is not a declared operand");
@@ -458,10 +482,11 @@ public:
         if (!values_.empty() && !rec_.values_cut_at && values_.selects(a.tile)) {
             if (const auto chan = lands_in(a.kind)) {
                 if (const std::vector<float>* v = lb.tile_in(*chan, a.tile)) {
-                    if (static_cast<std::uint64_t>(v->size()) * sizeof(float) > budget_) {
+                    const std::uint64_t bytes = static_cast<std::uint64_t>(v->size()) * widths_.at(a.tile.operand);
+                    if (bytes > budget_) {
                         rec_.values_cut_at = i;
                     } else {
-                        budget_ -= v->size() * sizeof(float);
+                        budget_ -= bytes;
                         snapshot(i, tile, *chan, a.tile, *v);
                     }
                 }
@@ -524,9 +549,15 @@ public:
                 for (Dim ti = 0; ti < o.n_tile_rows(); ++ti)
                     for (Dim tj = 0; tj < o.n_tile_cols(); ++tj) {
                         const TileCoord t{name, ti, tj};
-                        std::vector<float> v;
+                        // Word by word (memcpy): a typed element is a bit pattern, not a float.
+                        std::vector<float> v(static_cast<std::size_t>(o.row_end(ti) - o.row_begin(ti)) *
+                                             (o.col_end(tj) - o.col_begin(tj)));
+                        std::size_t n = 0;
                         for (Dim r = o.row_begin(ti); r < o.row_end(ti); ++r)
-                            for (Dim c = o.col_begin(tj); c < o.col_end(tj); ++c) v.push_back(o.at(r, c));
+                            for (Dim c = o.col_begin(tj); c < o.col_end(tj); ++c) {
+                                const numeric::Word w = o.word(r, c);
+                                std::memcpy(&v[n++], &w, sizeof w);
+                            }
                         snapshot(kNone64, tile_index(t), csp::Chan::Dram, t, v);
                     }
             }
@@ -658,6 +689,7 @@ private:
     bool finals_fit_ = true;
     std::uint64_t n_ = 0;
     std::map<std::string, std::uint32_t> operand_index_, tile_index_, var_index_;
+    std::map<std::string, std::uint32_t> widths_;    // operand -> bytes per element in the payload
     std::optional<csp::lang::Where> last_where_;
     std::vector<Open> open_;
     std::array<std::uint32_t, csp::kChannels> peak_{};

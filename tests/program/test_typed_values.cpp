@@ -32,6 +32,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <locale>
 #include <sstream>
 #include <string>
@@ -321,7 +323,7 @@ TEST_CASE("typed values: what is refused, and where", "[program][numeric][refuse
     CHECK_THROWS_WITH(apply(p, add, st), ContainsSubstring("operand Y is int32; this kernel computes in fp32 only"));
 }
 
-TEST_CASE("typed values: L-T1 carries L-B's; the .dflow writer refuses until step 3",
+TEST_CASE("typed values: L-T1 carries L-B's",
           "[program][numeric][lt1]") {
     const auto spec = platform::read_spec_file("tests/program/deploy/kpu_s1.json");
     const auto dev = spec.device(0);
@@ -339,9 +341,6 @@ TEST_CASE("typed values: L-T1 carries L-B's; the .dflow writer refuses until ste
     CHECK_FALSE(exact.pass);
     CHECK(exact.misses.size() == 1);
     CHECK(check_tiles(lt.values, lt.values, "C").pass);
-    // The .dflow writer: step 3.
-    CHECK_THROWS_WITH(record::DomainFlowRecorder(ast, src, 0),
-                      ContainsSubstring("A is int8; the .dflow writer carries fp32 operands"));
 }
 
 TEST_CASE("typed values: kpu-csp-gen's dtype", "[program][numeric][gen]") {
@@ -400,4 +399,50 @@ TEST_CASE("typed values: L-CA computes int8 x int8 in int32 with L-B's MAC, bit 
                       ContainsSubstring("the inputs' 'A' is fp32; the program declares int8"));
     CHECK(ints(ca.values.operand("C")) == want);
     CHECK(want.front() == static_cast<std::int32_t>(0x7F800001u) + 127 * 127 * 8);
+}
+
+TEST_CASE("typed values: the .dflow record carries int8 and int32 at their widths", "[program][numeric][dflow]") {
+    const std::string src = gen::generate(matmul("bias-row"));
+    const lang::Program ast = lang::parse(src);
+    record::DomainFlowRecorder rr(ast, src, 0, record::parse_value_selection("all"));
+    const TileProgram in = driver::csp_inputs(ast);
+    const driver::CspReference ref = driver::csp_reference(ast, in, 1'000'000, &rr);
+    REQUIRE(ref.values);
+    const record::DomainFlowRecord rec = rr.finish(&*ref.values);
+    REQUIRE(rec.finals_note.empty());
+    // Each operand names its number system; the payload holds each at its width.
+    std::uint64_t want_bytes = 0;
+    for (const auto& o : rec.operands) {
+        CAPTURE(o.name);
+        CHECK(o.element == in.operand(o.name).type);
+    }
+    for (const auto& s : rec.snapshots)
+        want_bytes += std::uint64_t(s.rows) * s.cols * (rec.operands.at(rec.tiles.at(s.tile).operand).element == "int8" ? 1 : 4);
+    const auto dir = std::filesystem::temp_directory_path() / "dflow-test-int8";
+    std::filesystem::remove_all(dir);
+    record::write_dflow(rec, dir.string());
+    CHECK(std::filesystem::file_size(dir / "elements.bin") == want_bytes);   // int8 is one byte, not four
+    // Read back: the same words, and the finals are L-B's, word for word.
+    const record::DomainFlowRecord back = record::read_dflow(dir.string());
+    REQUIRE(back.snapshots.size() == rec.snapshots.size());
+    REQUIRE(back.elements.size() == rec.elements.size());
+    CHECK(std::memcmp(back.elements.data(), rec.elements.data(), rec.elements.size() * sizeof(float)) == 0);
+    for (std::size_t k = 0; k < rec.snapshots.size(); ++k) CHECK(back.snapshots[k].first == rec.snapshots[k].first);
+    for (std::size_t i = 0; i < back.operands.size(); ++i) CHECK(back.operands[i].element == rec.operands[i].element);
+    std::size_t finals = 0;
+    for (const auto& s : back.snapshots) {
+        if (s.step != record::kNone64) continue;
+        const auto& t = back.tiles.at(s.tile);
+        const TensorOperand& o = ref.values->operand(back.operands.at(t.operand).name);
+        std::size_t e = s.first;
+        for (Dim r = o.row_begin(t.ti); r < o.row_end(t.ti); ++r)
+            for (Dim c = o.col_begin(t.tj); c < o.col_end(t.tj); ++c) {
+                numeric::Word w;
+                std::memcpy(&w, &back.elements[e++], sizeof w);
+                if (w != o.word(r, c)) FAIL("final " << o.name << "[" << r << "," << c << "] differs");
+            }
+        ++finals;
+    }
+    CHECK(finals == 4 + 4 + 2 + 4);                         // A, B, C in 2x2 tiles; b in 2
+    std::filesystem::remove_all(dir);
 }
