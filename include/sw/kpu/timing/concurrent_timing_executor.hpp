@@ -76,6 +76,12 @@ public:
         // result's shape is its value; a one-column tile as tall as the result is wide is a bias
         // row, broadcast down the rows. It is not a k-slice: it adds no MACs.
         std::optional<TileID> init;
+        // A typed gemm (#394 step 2, docs/plans/typed-value-path.md): the registered MAC for the
+        // operands' (input, accumulator) number systems -- the one L-B and L-T1 compute with. Set,
+        // the payloads' elements are 32-bit WORDS (an int8's bit pattern, not a float), moved
+        // by memcpy and computed only by this MAC; bias and activation must be off (a typed
+        // result has no tile context). Null: the fp32 arithmetic below, unchanged.
+        program::numeric::Mac mac = nullptr;
     };
     struct FunctionalComputeSpec {
         std::vector<TileID> input_tiles;
@@ -865,6 +871,7 @@ private:
         compute_payloads_.erase(id);
     }
     void execute_matmul(const PendingCompute& pc);
+    void execute_typed_matmul(const PendingCompute& pc, Size m, Size n);
     void execute_functional(const PendingCompute& pc);
     void apply_payload_event(const TimingEvent& event);
     void write_payload(MemoryLevel level, const TileID& id, TilePayload payload,
@@ -1924,6 +1931,10 @@ inline void ConcurrentTimingExecutor::execute_matmul(const PendingCompute& pc) {
     if (spec.bias.size() != 0 && spec.bias.size() != n) {
         throw std::runtime_error("Matmul bias width does not match output tile");
     }
+    if (spec.mac) {
+        execute_typed_matmul(pc, m, n);
+        return;
+    }
 
     TilePayload output;
     output.rows = m;
@@ -1977,6 +1988,56 @@ inline void ConcurrentTimingExecutor::execute_matmul(const PendingCompute& pc) {
     }
     write_payload(MemoryLevel::COMPUTE, pc.tile.tile_id, std::move(output),
                   next_compute_slot_);
+}
+
+// The typed gemm: the same edge streams and order as execute_matmul, on words. Every element is
+// copied as its 4 bytes (memcpy), never through a float register, so any bit pattern survives.
+inline void ConcurrentTimingExecutor::execute_typed_matmul(const PendingCompute& pc, Size m, Size n) {
+    using program::numeric::Word;
+    const auto& spec = *pc.matmul;
+    if (!spec.bias.empty() || spec.activation != FunctionalActivation::NONE)
+        throw std::runtime_error("Typed matmul " + pc.tile.tile_id.to_string() +
+                                 ": a typed result has no bias or activation stage");
+    const auto words = [](const TilePayload& p) {
+        std::vector<Word> w(p.values.size());
+        std::memcpy(w.data(), p.values.data(), w.size() * sizeof(Word));
+        return w;
+    };
+    std::vector<Word> c(static_cast<size_t>(m) * n, 0u);
+    if (spec.init) {
+        const auto& x = tile_payload(*spec.init);
+        const std::vector<Word> xw = words(x);
+        if (x.rows == m && x.cols == n) {
+            c = xw;
+        } else if (x.cols == 1 && x.rows == n) {
+            for (Size i = 0; i < m; ++i)
+                for (Size j = 0; j < n; ++j) c[static_cast<size_t>(i) * n + j] = xw[j];
+        } else {
+            throw std::runtime_error("Matmul init " + spec.init->to_string() + " is neither the output tile's shape "
+                                     "nor a bias row as wide as it");
+        }
+    } else if (spec.accumulate) {
+        auto it = compute_payloads_.find(pc.tile.tile_id);
+        if (it != compute_payloads_.end()) {
+            if (it->second.payload.rows != m || it->second.payload.cols != n)
+                throw std::runtime_error("Matmul accumulator shape does not match the output tile");
+            c = words(it->second.payload);
+        }
+    }
+    for (size_t t = 0; t < spec.a_tiles.size(); ++t) {
+        const auto& a = tile_payload(spec.a_tiles[t]);
+        const auto& b = tile_payload(spec.b_tiles[t]);
+        if (!a.valid() || !b.valid() || a.rows != m || b.cols != n || a.cols != b.rows)
+            throw std::runtime_error("Incompatible functional matmul tile payloads");
+        spec.mac(words(a).data(), words(b).data(), c.data(), static_cast<std::uint32_t>(m),
+                 static_cast<std::uint32_t>(n), static_cast<std::uint32_t>(a.cols));
+    }
+    TilePayload output;
+    output.rows = m;
+    output.cols = n;
+    output.values.resize(c.size());
+    std::memcpy(output.values.data(), c.data(), c.size() * sizeof(Word));
+    write_payload(MemoryLevel::COMPUTE, pc.tile.tile_id, std::move(output), next_compute_slot_);
 }
 
 inline void ConcurrentTimingExecutor::execute_functional(const PendingCompute& pc) {

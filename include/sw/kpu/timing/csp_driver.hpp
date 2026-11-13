@@ -74,6 +74,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <optional>
@@ -129,6 +130,11 @@ public:
             const auto& v = inputs.operand(name);
             if (d.rows != v.rows || d.cols != v.cols || d.tile_rows != v.tile_rows || d.tile_cols != v.tile_cols)
                 throw std::invalid_argument("CspDriver: the inputs' '" + name + "' is not the shape the program declares");
+            // The number system picks the gemm's MAC: an fp32 input to an int8 program would
+            // silently compute in fp32.
+            if (d.type != v.type)
+                throw std::invalid_argument("CspDriver: the inputs' '" + name + "' is " + v.type +
+                                            "; the program declares " + d.type);
         }
         check_machine(s.capacity());
     }
@@ -209,18 +215,19 @@ public:
                         std::size_t n = 0;
                         for (program::Dim row = t.row_begin(ti); row < t.row_end(ti); ++row)
                             for (program::Dim col = t.col_begin(tj); col < t.col_end(tj); ++col)
-                                t.at(row, col) = present ? exec_.tile_payload_at(MemoryLevel::DRAM, tid).values.at(n++)
-                                                         : 0.0f;
+                                t.set_word(row, col, present ? word_at(exec_.tile_payload_at(MemoryLevel::DRAM, tid), n++)
+                                                             : 0u);
                     }
             }
         // A retained tile's bytes are in its L3 entry; DRAM need not have them.
         if (r.completed)
             for (const program::TileCoord& c : retained_) {
                 auto& t = r.values.operand(c.operand);
-                const auto& v = exec_.tile_payload_at(MemoryLevel::L3, id(c)).values;
+                const TilePayload& v = exec_.tile_payload_at(MemoryLevel::L3, id(c));
                 std::size_t n = 0;
                 for (program::Dim row = t.row_begin(c.ti); row < t.row_end(c.ti); ++row)
-                    for (program::Dim col = t.col_begin(c.tj); col < t.col_end(c.tj); ++col) t.at(row, col) = v.at(n++);
+                    for (program::Dim col = t.col_begin(c.tj); col < t.col_end(c.tj); ++col)
+                        t.set_word(row, col, word_at(v, n++));
             }
         return r;
     }
@@ -359,6 +366,15 @@ private:
                     spec.a_tiles = {id(op->inputs.at(0))};
                     spec.b_tiles = {id(op->inputs.at(1))};
                     spec.accumulate = true;         // one k-slice; C stays in the fabric
+                    // A typed gemm computes with the registered MAC, as L-B does (#394 step 2).
+                    const std::string& in_type = inputs_.operand(op->inputs.at(0).operand).type;
+                    const std::string& acc_type = inputs_.operand(y.operand).type;
+                    if (in_type != program::numeric::kFp32 || acc_type != program::numeric::kFp32) {
+                        spec.mac = program::numeric::mac(in_type, acc_type);
+                        if (!spec.mac)
+                            throw std::invalid_argument("csp driver: no MAC for " + in_type + " -> " + acc_type +
+                                                        " (registered: " + program::numeric::mac_names() + ")");
+                    }
                     if (auto in = inits_.find(y.to_string()); in != inits_.end()) {
                         spec.init = in->second;     // the chain's first call starts from its init
                         inits_.erase(in);
@@ -449,9 +465,21 @@ private:
         TilePayload p;
         p.rows = t.row_end(ti) - t.row_begin(ti);
         p.cols = t.col_end(tj) - t.col_begin(tj);
+        p.values.resize(static_cast<std::size_t>(p.rows) * p.cols);
+        std::size_t n = 0;
         for (program::Dim r = t.row_begin(ti); r < t.row_end(ti); ++r)
-            for (program::Dim c = t.col_begin(tj); c < t.col_end(tj); ++c) p.values.push_back(t.at(r, c));
+            for (program::Dim c = t.col_begin(tj); c < t.col_end(tj); ++c) {
+                // The element's word, by memcpy: a typed operand's bits are not a float's.
+                const program::numeric::Word w = t.word(r, c);
+                std::memcpy(&p.values[n++], &w, sizeof w);
+            }
         return p;
+    }
+
+    static program::numeric::Word word_at(const TilePayload& p, std::size_t i) {
+        program::numeric::Word w;
+        std::memcpy(&w, &p.values.at(i), sizeof w);
+        return w;
     }
 };
 

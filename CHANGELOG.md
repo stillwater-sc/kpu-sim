@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Typed values: number systems from Universal, int8 × int8 → int32 at L-B and L-T1** (#394 step 1,
+- **Typed values: number systems from Universal, int8 × int8 → int32 at L-B, L-T1 and L-CA** (#394 steps 1-2,
   `docs/plans/typed-value-path.md`).
   - An operand declares its number system: `tensor A[M,K] int8 tile 4x4 in;`. With no type it is
     fp32, so fp32 programs, traces and the golden corpus are unchanged byte for byte.
@@ -21,7 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - L-B, the L0 replay and L-T1 compute the same bits. `tile_check` compares integers exactly.
   - L0 carries `OPERAND … type=` (container 1.3.0, `MIN_CONSUMER 1.3.0` only for typed files).
   - `kpu-csp-gen --dtype int8` writes an int8 matmul, with all the init forms.
-  - L-CA and the `.dflow` writer refuse typed programs until steps 2 and 3.
+  - L-CA computes typed gemms with the same registered MAC (#394 step 2). Its payloads carry the
+    words by `memcpy`, and it matches L-B bit for bit on every init form.
+  - The `.dflow` writer refuses typed programs until step 3.
+  - Limit: the timed levels still size each element at 4 bytes, so an int8 program's traffic and
+    timing are an fp32 program's.
 
 - **L-T1 times L2 credits; `.tflow` version 6** (`docs/plans/l2-reuse-and-fabric-pipeline-view.md`
   step 4).

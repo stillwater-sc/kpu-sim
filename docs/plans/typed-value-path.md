@@ -1,6 +1,6 @@
 # Typed Value Path: Number Systems from Universal (#394)
 
-**Status:** step 1 done (the type in `.csp`, the registry, L0, L-B and L-T1, the generator); steps 2-3 open
+**Status:** steps 1 (the type in `.csp`, the registry, L0, L-B and L-T1, the generator) and 2 (L-CA) done; step 3 open
 **Issue:** #394 (v0.9.0), the generator side's branes-ai/embodied-ai-soc-generator#51
 **Related:** #384 (end-to-end tests, which this unblocks), #406 step 4 (bit-equal bias and
 accumulate), `docs/plans/shared-tile-flow-record.md` §7 (the record's element types)
@@ -102,8 +102,24 @@ need a wider word. That is a later step, the typed element buffer, kept out of #
    - L-T1 agrees, and the check reads an integer exactly.
 2. L-CA carries the values, through the same MAC: the executor's payloads carry words, and its
    matmul calls the registered MAC. The test is L-CA bit-equal to L-B on int8.
+
+   **Done:**
+   - `MatMulComputeSpec::mac` holds the registered MAC. The CSP driver sets it on a typed gemm.
+   - The executor's typed matmul streams the init, the accumulator and the k-slices as before. It
+     computes on words, and every copy is a `memcpy`.
+   - The driver writes payloads and reads results back as words.
+   - Tests:
+     - L-CA equals L-B on every operand, for every init form in both loop orders;
+     - C seeded with words shaped as signalling NaNs survives the run.
+     - fp32 keeps the executor's own arithmetic, unchanged.
 3. The C++ `.dflow` writer and reader carry int8 and int32; `dflow_check.py` accepts the record.
    That meets #394's done-when.
 
-Later, outside #394: more pairs (bfloat16, fp8, posit), a Universal upgrade from v3.91, and the
-typed element buffer for formats wider than 32 bits.
+Later, outside #394:
+- more pairs (bfloat16, fp8, posit);
+- a Universal upgrade from v3.91;
+- the typed element buffer for formats wider than 32 bits;
+- **traffic sized by number system.** The timed levels size an element as the device's
+  `element_bytes` (L-T1) or 4 bytes (L-CA's driver). An int8 tile therefore moves 4× the bytes the
+  RTL moves. The values are right; the timing of an int8 program is an fp32 program's. Sizing
+  per operand from `NumberSystem::bits` belongs with the RTL timing cross-check.

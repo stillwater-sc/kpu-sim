@@ -113,11 +113,8 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
             break;
     }
     if (!device) return std::string("L-CA builds its machine from a deployment spec (--deploy)");
-    // The executor's matmul computes in fp32 until the typed MAC reaches it (#394 step 2).
-    for (const auto& d : ast.decls)
-        if (d.type != "fp32")
-            return "L-CA computes in fp32 until docs/plans/typed-value-path.md step 2; '" + d.name + "' is " + d.type +
-                   " (csp line " + std::to_string(d.line) + ")";
+    // A typed gemm computes with the registered MAC, the one L-B uses (#394 step 2); the
+    // validator has already refused what has no MAC and every typed operand outside a gemm.
     // The tile functions L-CA computes: gemm (alpha 1) and the epilogue. An accumulator's init
     // (acc ... init X) is one more edge stream, fed as the operands are (#406 step 2).
     std::optional<std::string> refused;
