@@ -393,6 +393,11 @@ TEST_CASE("typed values: L-CA computes int8 x int8 in int32 with L-B's MAC, bit 
         }
     const auto ca = lca(ast, in);
     const auto want = reference(in, "accumulate");
+    // Inputs in another number system than the program declares are refused, not computed in fp32.
+    TileProgram wrong = in;
+    wrong.operand("A").type = "fp32";
+    CHECK_THROWS_WITH(driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, ast, &dev, wrong),
+                      ContainsSubstring("the inputs' 'A' is fp32; the program declares int8"));
     CHECK(ints(ca.values.operand("C")) == want);
     CHECK(want.front() == static_cast<std::int32_t>(0x7F800001u) + 127 * 127 * 8);
 }

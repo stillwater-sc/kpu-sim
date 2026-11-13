@@ -130,6 +130,11 @@ public:
             const auto& v = inputs.operand(name);
             if (d.rows != v.rows || d.cols != v.cols || d.tile_rows != v.tile_rows || d.tile_cols != v.tile_cols)
                 throw std::invalid_argument("CspDriver: the inputs' '" + name + "' is not the shape the program declares");
+            // The number system picks the gemm's MAC: an fp32 input to an int8 program would
+            // silently compute in fp32.
+            if (d.type != v.type)
+                throw std::invalid_argument("CspDriver: the inputs' '" + name + "' is " + v.type +
+                                            "; the program declares " + d.type);
         }
         check_machine(s.capacity());
     }
