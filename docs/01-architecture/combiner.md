@@ -29,7 +29,8 @@ result memory. For each result vector that leaves the fabric through L1, it can:
   - scaling up or down (requantization, with rounding and saturation);
   - block-format conversion (compression). The first block formats are the OCP Microscaling
     (MX) formats, an open specification: blocks of 32 elements sharing one 8-bit
-    power-of-two scale (MXFP8, MXFP6, MXFP4, MXINT8).
+    power-of-two scale (MXFP8, MXFP6, MXFP4, MXINT8). MXINT8 comes first, then MXFP8;
+    MXFP6 and MXFP4 later.
 
   The activation functions run on the **SFU banks**, which are part of the Combiner: they
   are how the Vector Engine fused activations, and they come with it.
@@ -52,7 +53,7 @@ fused operations cost no extra pass over memory.
 | kpu-sim today | In the Combiner model |
 |---|---|
 | Push-based fusion, [KPU architecture](kpu-architecture.md) §2.7: fused operations inserted on the egress path, with SFU banks alongside it | The Combiner is the named unit at that insertion point, and the SFU banks are part of it. |
-| The Vector Engine (`VectorEngine` at L-T1/L-CA, `BehavioralVectorEngine` at L-B, the `VE_*` instructions and `VE_ENABLE` on `STR_DRAIN_OUTPUT`) and its fused drain (`docs/06-compiler/schedule-dsl.md`) | **The Combiner**, renamed (#429). It keeps its operations, the softmax's elementwise ops and reductions among them, and gains the merge of partials, scaling and block-format conversion. |
+| The Vector Engine (`VectorEngine` at L-T1/L-CA, `BehavioralVectorEngine` at L-B, the `VE_*` instructions and `VE_ENABLE` on `STR_DRAIN_OUTPUT`) and its fused drain (`docs/06-compiler/schedule-dsl.md`) | **The Combiner**, renamed (#429), with the `CMB_` instruction prefix (`CMB_ELEMENTWISE`, `CMB_REDUCE`, `CMB_ENABLE`). It keeps its operations, the softmax's elementwise ops and reductions among them, and gains the merge of partials, scaling and block-format conversion. |
 | The fused epilogue: `MatMulComputeSpec { bias, activation }` applied in `execute_matmul` (`docs/plans/e10_fused_epilogue_pattern.md`) | The Combiner's bias and activation, applied as the result is written to L2. |
 | The accumulator as its own banked memory with slot credits (#401, #383, #387) | Gone. Partials and results occupy L2 slots, and the Combiner's merges are L2 traffic. |
 | The `systolic` block of a deployment: accumulator slots, banks, rows, latency (#396) | The Combiner's configuration. The accumulator fields retire when the RTL drops them (branes-ai/embodied-ai-soc-generator#67). |

@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the accumulator in #401's cycle-accurate plan. It is linked from the architecture
   overview, the execution model's `DRAIN` event and `CLAUDE.md`.
   - Decided: the Combiner is the Vector Engine, renamed and given the merge of partials
-    (#429); the SFU banks are part of it; the first block formats are OCP Microscaling (MX).
+    (#429), with the `CMB_` instruction prefix; the SFU banks are part of it; the first block
+    formats are OCP Microscaling (MX), MXINT8 first, then MXFP8.
 - **The KPU RTL generator's machine as a kpu-sim deployment** (#396).
   - `tools/deploy/kpuarch_to_deployment.py` converts the generator's expanded KPUArchitecture
     (`kpugen expand`) to a DeploymentSpec. It carries each field, says which kpu-sim default
