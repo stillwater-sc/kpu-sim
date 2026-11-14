@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`.dflow` 6.1: the RTL's accumulator → L3 store and its word-addressed L3** (#398,
+  `docs/plans/shared-tile-flow-record.md`).
+  - A version-6 manifest may carry `"minor": 1`. Minor revisions keep the `layers` and
+    `event_kinds` lists; a 6.0 record may use none of 6.1's additions.
+  - A `DRAIN` may go from acc to l3. It joins the `WRITEBACK` action and also stands for the tile's
+    `DRAIN` step, as the RTL's STORE does both.
+  - L3 may be declared flat and word-addressed (`words`, `word_bytes`). Its events then carry word
+    addresses, a residency keeps one address, and no credit frees L3. An L3 declared both ways is
+    refused.
+  - `dflow_check.py`, `dflow_writer.py` (writes 6.1), `dflow_rtl_sample.py --addressed`, the
+    domain-flow viewer and the spec are updated. The 6.1 sample's results equal the 6.0 sample's.
+
 - **L-CA executes the walker's L3 placement** (#399, `docs/plans/l3-placement-at-lb.md` step 6, L3 part).
   - A residency's Load, Inherit or opening Writeback takes its own slot's credit: it waits until
     the tile placed there before has left L3, and the slot's residencies open in the program's

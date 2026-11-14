@@ -17,8 +17,14 @@ the ones kpu-run's L-B executes for PROGRAM, in order and at the same L3 slots. 
 invented: a fixed cost per transaction, run back to back. It is a sample of the format, not a
 model of the hardware.
 
+With --addressed it is a version-6.1 record (#398), as the RTL is built: the accumulator drains
+straight to L3 (one acc -> l3 DRAIN for each DRAIN and WRITEBACK pair), and L3 is flat
+word-addressed memory with no slots and no L3 credits. A residency's word address is its slot
+times a fixed pitch (the host's placement, invented here).
+
 Usage:
     python3 dflow_rtl_sample.py -o rtl_sample.dflow
+    python3 dflow_rtl_sample.py --addressed -o rtl_sample_addressed.dflow
 
 Standard library only.
 
@@ -127,7 +133,11 @@ def partial_c(L, B, i, upto):
             for r in range(T) for c in range(T)]
 
 
-def build():
+L3_WORD_BYTES = 4
+L3_PITCH = 16                                   # words per residency: the largest tile (4 x 4 int32)
+
+
+def build(addressed=False):
     V = values()
     names = [o[0] for o in OPERANDS]
     tiles, tile_at = [], {}
@@ -259,19 +269,23 @@ def build():
         clock = e["end"]
         return e
 
+    # An L3 address: the slot, or (word-addressed, 6.1) the residency's first word.
+    def l3(s):
+        return s["slot"] * L3_PITCH if addressed else s["slot"]
+
     for s in steps:
         kind, ti = KINDS[s["kind"]], s["tile"]
         bytes_ = T * T * ELEMENTS[OPERANDS[tiles[ti][0]][3]]
         if kind == "LOAD":
-            e = transaction("DMA", s, "dram", "l3", NONE64, s["slot"], 8 + bytes_ // 8, "dma")
+            e = transaction("DMA", s, "dram", "l3", NONE64, l3(s), 8 + bytes_ // 8, "dma")
             emit("TOKEN", s, "l3", "l2", proc="dma", at=e["end"])           # tile ready, to the BlockMover
         elif kind == "MOVE":
             row0 = l2_next
             l2_next = (l2_next + T) % l2_rows
             l2_of[ti] = row0
-            e = transaction("BLOCK_MOVE", s, "l3", "l2", s["slot"], row0, 2 + T, "bm")
+            e = transaction("BLOCK_MOVE", s, "l3", "l2", l3(s), row0, 2 + T, "bm")
             for r in range(T):                                              # one burst per row
-                emit("BM_ROW", s, "l3", "l2", s["slot"], row0 + r, 1, e["id"], r, 0, "bm", at=e["cycle"] + 2 + r)
+                emit("BM_ROW", s, "l3", "l2", l3(s), row0 + r, 1, e["id"], r, 0, "bm", at=e["cycle"] + 2 + r)
             emit("TOKEN", s, "l2", "l1", l2_of[ti], proc="bm", at=e["end"])  # tile ready, to the Streamer
         elif kind == "FEED":
             e = transaction("STREAM", s, "l2", "l1", l2_of[ti], NONE64, 2 * T - 1, "str")
@@ -281,6 +295,8 @@ def build():
         elif kind == "CALL":
             acc_of.setdefault(ti, (tiles[ti][1] * T) % acc_rows)
             transaction("COMPUTE", s, "l1", "acc", NONE64, acc_of[ti], T + 2 * (T - 1), "cf")
+        elif kind == "DRAIN" and addressed:
+            continue                                                        # the store below drains it
         elif kind == "DRAIN":
             row0 = l2_next
             l2_next = (l2_next + T) % l2_rows
@@ -290,19 +306,30 @@ def build():
                 emit("DRAIN_ROW", s, "acc", "l2", acc_of[ti] + r, row0 + r, 1, e["id"], r, 0, "str", at=e["cycle"] + 1 + r)
             emit("CREDIT", s, "acc", "l1", acc_of[ti], proc="str", at=e["end"])  # the accumulator rows are free
             emit("TOKEN", s, "l2", "l3", row0, proc="str", at=e["end"])          # result ready, to the BlockMover
+        elif kind == "WRITEBACK" and addressed:
+            # The RTL's store: the accumulator straight into L3 (6.1), the DRAIN and WRITEBACK as one.
+            e = transaction("DRAIN", s, "acc", "l3", acc_of[ti], l3(s), 1 + T, "str")
+            for r in range(T):
+                emit("DRAIN_ROW", s, "acc", "l3", acc_of[ti] + r, l3(s) + r * T * 4 // L3_WORD_BYTES, 1, e["id"], r, 0,
+                     "str", at=e["cycle"] + 1 + r)
+            emit("CREDIT", s, "acc", "l1", acc_of[ti], proc="str", at=e["end"])  # the accumulator rows are free
+            emit("TOKEN", s, "l3", "dram", l3(s), proc="str", at=e["end"])      # result ready, to the DMA
         elif kind == "WRITEBACK":
-            e = transaction("BLOCK_MOVE", s, "l2", "l3", l2_of[ti], s["slot"], 2 + T, "bm")
-            emit("TOKEN", s, "l3", "dram", s["slot"], proc="bm", at=e["end"])  # result ready, to the DMA
+            e = transaction("BLOCK_MOVE", s, "l2", "l3", l2_of[ti], l3(s), 2 + T, "bm")
+            emit("TOKEN", s, "l3", "dram", l3(s), proc="bm", at=e["end"])  # result ready, to the DMA
         elif kind == "STORE":
-            transaction("DMA", s, "l3", "dram", s["slot"], NONE64, 8 + bytes_ // 8, "dma")
+            transaction("DMA", s, "l3", "dram", l3(s), NONE64, 8 + bytes_ // 8, "dma")
+        elif kind == "RELEASE" and addressed:
+            pass                                                            # flat memory: no L3 credit
         elif kind == "RELEASE":
-            emit("CREDIT", s, "l3", "dram", s["slot"], at=clock)            # the slot is free: credit to the DMA
+            emit("CREDIT", s, "l3", "dram", l3(s), at=clock)            # the slot is free: credit to the DMA
     cycles = max(e["end"] for e in ev)
 
     # ---- the manifest and the tables ----
     loads = sum(1 for s in steps if KINDS[s["kind"]] == "LOAD")
     stores = sum(1 for s in steps if KINDS[s["kind"]] == "STORE")
     manifest = {
+        "minor": 1 if addressed else 0,
         "level": "RTL", "producer": "dflow_rtl_sample.py (hand-written sample; stands in for kpugen)",
         "run_id": "", "program": {"name": "trmm_8x4", "text": PROGRAM},
         "machine": {"kind": "flat", "l3": 4, "banks": 1, "place": "fifo", "l2": 0},
@@ -315,7 +342,8 @@ def build():
         "time": {"unit": "cycle", "clock": None, "cycles": cycles},
         "geometry": {
             "dram": {"modelled": True},
-            "l3": {"modelled": True, "slots": 4, "banks": 1},
+            "l3": ({"modelled": True, "words": 4 * L3_PITCH, "word_bytes": L3_WORD_BYTES} if addressed
+                   else {"modelled": True, "slots": 4, "banks": 1}),
             "l2": {"modelled": True, "banks": 2, "rows": l2_rows, "row_bytes": 16, "interleave": "row-mod-banks"},
             "acc": {"modelled": True, "banks": 2, "rows": acc_rows, "row_bytes": 16, "interleave": "row-mod-banks"},
             "l1": {"modelled": True, "rows": T, "cols": T},
@@ -395,8 +423,10 @@ def build():
 def main():
     ap = argparse.ArgumentParser(description="Write the hand-written RTL-level .dflow sample.")
     ap.add_argument("-o", "--output", required=True)
+    ap.add_argument("--addressed", action="store_true",
+                    help="version 6.1: the accumulator stores straight to L3, and L3 is word-addressed")
     a = ap.parse_args()
-    manifest, tables = build()
+    manifest, tables = build(a.addressed)
     d = write_bundle(a.output, manifest, tables)
     ev = next(t for t in tables if t.name == "events")
     print(f"wrote {d} (RTL sample: {manifest['totals']['actions']} actions, {ev.rows} events, "

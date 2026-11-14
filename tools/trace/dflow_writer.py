@@ -29,6 +29,10 @@ import struct
 from pathlib import Path
 
 VERSION = 6
+# Version 6's minor revision (manifest "minor"): 1 adds the acc -> l3 DRAIN (the RTL's store) and the
+# word-addressed L3 (geometry.l3 words and word_bytes instead of slots and banks; #398). A record
+# that uses neither may say 0. Readers of 6.1 read 6.0.
+MINOR = 1
 NONE8, NONE32, NONE64 = 0xFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF
 
 # The format's enums. A producer writes them into the manifest verbatim (layers, event_kinds), and
@@ -87,6 +91,7 @@ def write_bundle(directory, manifest, tables):
     m = dict(manifest)
     m.setdefault("format", "kpu-dflow")
     m.setdefault("version", VERSION)
+    m.setdefault("minor", MINOR)
     m["tables"] = {t.name: write_table(d, t) for t in tables}
     (d / "manifest.json").write_text(json.dumps(m, indent=1) + "\n", encoding="utf-8")
     return d
