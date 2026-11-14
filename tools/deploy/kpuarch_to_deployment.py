@@ -52,7 +52,10 @@ GENERATOR_DEFAULTS = {
     "tile_rows": 1,             # tile.py _config: the grid is the array, one PE per tile
     "tile_cols": 1,
 }
-BITS = {"int4": 4, "int8": 8, "int16": 16, "int32": 32, "fp16": 16, "bf16": 16, "fp32": 32}
+# The MAC formats a deployment can state: whole-byte integers. A floating-point format has no field
+# in DeploymentSpec yet (its bits alone would read as an integer's), and int4 needs a packing
+# contract: both are refused until the deployment can represent them.
+BITS = {"int8": 8, "int16": 16, "int32": 32}
 DATAFLOWS = {"output_stationary", "weight_stationary", "input_stationary"}
 DRAM = {"lpddr5": "lpddr5", "lpddr5x": "lpddr5x", "ddr5": "ddr5", "gddr6": "gddr6", "gddr7": "gddr7",
         "hbm2": "hbm2", "hbm3": "hbm3"}             # deployment_spec.hpp known_dram_technology
@@ -87,15 +90,37 @@ class Refused(Exception):
     pass
 
 
+def _no_duplicates(pairs, where="JSON"):
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError(f"{where}: the key {k!r} appears twice (a converter must not pick one)")
+        out[k] = v
+    return out
+
+
 def load(path):
+    """The spec, refusing a key that appears twice in one mapping: YAML and JSON loaders keep the
+    last value silently, which would change the converted machine without a word."""
     text = Path(path).read_text(encoding="utf-8")
     if path.endswith((".yaml", ".yml")):
         try:
             import yaml
         except ImportError as e:
             raise ValueError("reading YAML needs PyYAML; convert to JSON first") from e
-        return yaml.safe_load(text)
-    return json.loads(text)
+
+        class Strict(yaml.SafeLoader):
+            pass
+
+        def mapping(loader, node, deep=False):
+            loader.flatten_mapping(node)
+            pairs = [(loader.construct_object(k, deep=deep), loader.construct_object(v, deep=deep))
+                     for k, v in node.value]
+            return _no_duplicates(pairs, f"YAML line {node.start_mark.line + 1}")
+
+        Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+        return yaml.load(text, Loader=Strict)  # noqa: S506 -- Strict is a SafeLoader
+    return json.loads(text, object_pairs_hook=_no_duplicates)
 
 
 def convert(doc, tiles="one"):
@@ -153,7 +178,8 @@ def convert(doc, tiles="one"):
         raise Refused("tiles[0].mac.modes[0]: lanes and issue_interval_cycles must be 1 (one MAC per PE per cycle)")
     inp, acc = take(m, "operand_format", "tiles[0].mac.modes[0]"), take(m, "accumulate_format", "tiles[0].mac.modes[0]")
     if inp not in BITS or acc not in BITS:
-        raise Refused(f"the MAC's formats {inp} -> {acc}: not one of {sorted(BITS)}")
+        raise Refused(f"the MAC's formats {inp} -> {acc}: a deployment states whole-byte integer formats "
+                      f"({', '.join(BITS)}); floating-point and int4 have no DeploymentSpec field yet")
     mem = {}
     for lm in take(t, "local_memory", "tiles[0]"):
         for k in lm:
@@ -252,7 +278,9 @@ def convert(doc, tiles="one"):
                     f"memory.memory_size_gb {memory['memory_size_gb']} -> memory.dram.capacity_bytes {size}"]
         defaulted.append("memory.dram ranks, bank groups, banks, page and burst bytes, address map: kpu-sim's "
                          "defaults (the architecture does not state them)")
-    defaulted += ["dma.engines, dma.bytes_per_cycle: kpu-sim's defaults (no DMA in the architecture)",
+    defaulted += [f"dma.engines = {controllers}: one per memory controller, kpu-sim's choice (no DMA in the "
+                  "architecture; the engines must divide among the controllers)",
+                  "dma.bytes_per_cycle: kpu-sim's default (no DMA in the architecture)",
                   "movers.*: kpu-sim's defaults (no mover rates in the architecture)",
                   "clock: none (KPUArchitecture has no clock; kpu-sim counts cycles)"]
 
@@ -287,6 +315,7 @@ def convert(doc, tiles="one"):
         "fabric": {"pe_rows": rows, "pe_cols": cols},
         "systolic": systolic,
         "element_bytes": BITS[inp] // 8,
+        "dma": {"engines": controllers},
         "l3": {"tiles": 1, "capacity_tiles": l3_bytes // tile_bytes},
         "memory": {"controllers": controllers, **({"dram": dram} if dram else {})},
     }

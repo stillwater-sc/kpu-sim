@@ -88,6 +88,37 @@ class Convert(unittest.TestCase):
         dep, _ = k.convert(self.doc)
         self.assertEqual(dep["devices"][0]["memory"]["dram"]["channels"], 2)
 
+    def test_floating_point_and_int4_formats_are_refused(self):
+        for inp, acc in (("fp16", "fp32"), ("bf16", "fp32"), ("int4", "int32")):
+            with self.subTest(inp=inp):
+                self.setUp()
+                self.tile["mac"]["modes"][0]["operand_format"] = inp
+                self.tile["mac"]["modes"][0]["accumulate_format"] = acc
+                self.refused("whole-byte integer formats")
+
+    def test_two_controllers_get_an_engine_each(self):
+        m = self.doc["architecture"]["memory"]
+        m["memory_controllers"], m["memory_bus_bits"], m["memory_bandwidth_gbps"] = 2, 64, 51.2
+        dep, _ = k.convert(self.doc)
+        d = dep["devices"][0]
+        self.assertEqual(d["dma"]["engines"], 2)
+        self.assertEqual(d["memory"]["dram"]["channels"], 2)      # 4 x16 channels over 2 controllers
+
+    def test_a_duplicate_key_is_refused(self):
+        import tempfile
+        text = Path(ARCH).read_text(encoding="utf-8").replace("    array_rows: 4\n", "    array_rows: 4\n    array_rows: 8\n", 1)
+        self.assertIn("array_rows: 8", text)
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "dup.full.yaml"
+            p.write_text(text, encoding="utf-8")
+            with self.assertRaises(ValueError) as e:
+                k.load(str(p))
+            self.assertIn("'array_rows' appears twice", str(e.exception))
+            j = Path(d) / "dup.json"
+            j.write_text('{"name": "x", "name": "y"}', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                k.load(str(j))
+
     def test_an_unknown_dram_is_refused(self):
         self.doc["architecture"]["memory"]["memory_type"] = "sdr"
         self.refused("memory_type 'sdr'")

@@ -15,7 +15,8 @@ defaulted:
   - systolic.acc_latency = 2: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
   - systolic.tile_rows = 1: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
   - systolic.tile_cols = 1: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
-  - dma.engines, dma.bytes_per_cycle: kpu-sim's defaults (no DMA in the architecture)
+  - dma.engines = 1: one per memory controller, kpu-sim's choice (no DMA in the architecture; the engines must divide among the controllers)
+  - dma.bytes_per_cycle: kpu-sim's default (no DMA in the architecture)
   - movers.*: kpu-sim's defaults (no mover rates in the architecture)
   - clock: none (KPUArchitecture has no clock; kpu-sim counts cycles)
 not carried:

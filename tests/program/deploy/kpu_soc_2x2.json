@@ -30,6 +30,9 @@
         "acc_macro": "sram_hd"
       },
       "element_bytes": 1,
+      "dma": {
+        "engines": 1
+      },
       "l3": {
         "tiles": 1,
         "capacity_tiles": 1024
