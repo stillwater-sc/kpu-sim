@@ -11,8 +11,12 @@ Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 """
 
 import copy
+import itertools
 import json
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -135,6 +139,39 @@ class Convert(unittest.TestCase):
                 m["memory_type"], m["memory_bus_bits"], m["memory_controllers"] = "ddr5", bus, controllers
                 m["memory_bandwidth_gbps"] = gbps
                 self.refused("power-of-two controller and channel counts")
+
+    def test_every_deployment_it_writes_kpu_sim_reads(self):
+        # Over a spread of memory systems: each conversion is either refused by the converter, or
+        # read by kpu-sim and run. A deployment kpu-sim refuses is the converter's bug.
+        kpu_run = os.environ.get("KPU_RUN")
+        if not kpu_run:
+            self.skipTest("KPU_RUN (the kpu-run binary) not given")
+        program = ("csp 1.0\nprogram t machine flat(l3 = 3) {\n  tensor A[4,4] int8 tile 4x4 in;\n"
+                   "  tensor B[4,4] int8 tile 4x4 in;\n  tensor C[4,4] int32 tile 4x4 out;\n"
+                   "  resident A[0, 0], B[0, 0];\n  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
+                   "  store C[0, 0];\n  release A[0, 0], B[0, 0];\n}\n")
+        written = 0
+        with tempfile.TemporaryDirectory() as d:
+            prog = Path(d) / "t.csp"
+            prog.write_text(program, encoding="utf-8")
+            for tech, bus, controllers in itertools.product(("lpddr5", "ddr5", "hbm3"), (16, 32, 48, 64, 96, 128),
+                                                            (1, 2, 3, 4)):
+                doc = copy.deepcopy(self.doc)
+                m = doc["architecture"]["memory"]
+                m["memory_type"], m["memory_bus_bits"], m["memory_controllers"] = tech, bus, controllers
+                m["memory_bandwidth_gbps"] = bus / 8 * 6400 / 1000
+                try:
+                    dep, _ = k.convert(doc)
+                except k.Refused:
+                    continue
+                path = Path(d) / f"{tech}_{bus}_{controllers}.json"
+                path.write_text(json.dumps(dep), encoding="utf-8")
+                with self.subTest(tech=tech, bus=bus, controllers=controllers):
+                    p = subprocess.run([kpu_run, "--program", str(prog), "--deploy", str(path), "--level", "all"],
+                                       capture_output=True, text=True)
+                    self.assertEqual(p.returncode, 0, p.stderr[-600:])
+                written += 1
+        self.assertGreater(written, 4, "the spread converts some memory systems")
 
     def test_an_unknown_dram_is_refused(self):
         self.doc["architecture"]["memory"]["memory_type"] = "sdr"
