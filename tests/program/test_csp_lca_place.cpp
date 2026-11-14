@@ -308,6 +308,7 @@ TEST_CASE("L-CA: a staged copy is moved once and holds its L2 slot until its L2R
     // copy (a B tile, a drained C) never takes a placed slot.
     std::map<std::uint32_t, std::string> held;
     std::map<std::string, std::uint32_t> slot_of;
+    std::map<std::string, std::uint64_t> fed_until;    // a staged tile's latest Feed completion
     std::size_t released = 0, fed = 0;
     for (const auto& e : staged.events) {
         const std::string t = e.tile_id.to_string();
@@ -325,9 +326,12 @@ TEST_CASE("L-CA: a staged copy is moved once and holds its L2 slot until its L2R
             CHECK(e.slot_id == slot_of.at(t));
             CHECK(held.count(e.slot_id));
             ++fed;
+        } else if (e.type == EventType::TILE_FED_TO_COMPUTE && is_a) {
+            fed_until[t] = std::max<std::uint64_t>(fed_until[t], e.cycle);
         } else if (e.type == EventType::CREDIT_RELEASED && e.component_name == "L2:release") {
             REQUIRE(held.count(e.slot_id));
             CHECK(held.at(e.slot_id) == t);
+            CHECK(e.cycle >= fed_until[t]);             // after the copy's Feeds have completed
             held.erase(e.slot_id);
             ++released;
         }
