@@ -4,7 +4,10 @@ Self-test for dflow_check.py's version-6 invariants (docs/plans/shared-tile-flow
 the record kpu-sim and the KPU RTL share. Each invariant must FAIL on a bundle that breaks it, and
 the clean bundles must pass. A checker that passes everything is not a checker.
 
-Usage: python3 test_dflow_check_v6.py <rtl-sample.dflow> <lb.dflow>
+Usage: python3 test_dflow_check_v6.py <rtl-sample.dflow> <lb.dflow> [<rtl-sample-addressed.dflow>]
+
+The third bundle is the sample's version-6.1 form (dflow_rtl_sample.py --addressed; #398): the
+accumulator stores straight to L3, and L3 is word-addressed.
 
 The RTL sample is the hand-written timed record (dflow_rtl_sample.py): L2, accumulator and L1
 geometry, a cycle column, progress events, credits and tokens, int8 and int32 values with expected
@@ -29,6 +32,7 @@ from test_dflow_check import Bundle, run  # noqa: E402
 CHECK = HERE / "dflow_check.py"
 RTL = None
 LB = None
+ADDRESSED = None
 NONE64 = dc.NONE64
 KIND = {k: i for i, k in enumerate(dc.EVENT_KINDS)}
 LAYER = {k: i for i, k in enumerate(dc.LAYERS)}
@@ -129,6 +133,12 @@ class RtlSample(Checks):
         self.b.manifest["geometry"]["l3"]["slots"] = 5
         self.b.save_manifest()
         self.assertFails("G1", "the machine is")
+
+    def test_e1_a_six_zero_record_has_no_acc_to_l3_store(self):
+        d = self.event("DRAIN")
+        self.set_ev("dst", d, LAYER["l3"])
+        self.set_ev("dst_addr", d, 0)
+        self.assertFails("E1", "needs version 6.1")
 
     def test_g1_unknown_interleave(self):
         self.b.manifest["geometry"]["l2"]["interleave"] = "xor-hash"
@@ -481,6 +491,88 @@ class Decoding(unittest.TestCase):
         self.assertTrue(dc.in_domain(pad, 5, 3) and not dc.in_domain(pad, 6, 0) and not dc.in_domain(pad, 0, 4))
 
 
+class RtlSixOne(Checks):
+    """Version 6.1 (#398): the RTL's acc -> l3 store and its flat, word-addressed L3."""
+
+    @classmethod
+    def setUpClass(cls):
+        if ADDRESSED is None:
+            raise unittest.SkipTest("no 6.1 sample given")
+        cls.SOURCE = ADDRESSED
+
+    def store(self):
+        return self.event("DRAIN", lambda i: self.ev("dst", i) == LAYER["l3"])
+
+    def has(self, kind, pred):
+        return any(self.ev("kind", i) == KIND[kind] and pred(i) for i in range(self.b.rows("events")))
+
+    def test_clean_sample_passes(self):
+        self.assertPasses()
+
+    def test_the_sample_exercises_what_is_checked(self):
+        m = self.b.manifest
+        self.assertEqual((m["version"], m["minor"]), (6, 1))
+        self.assertEqual(set(m["geometry"]["l3"]) - {"modelled"}, {"words", "word_bytes"})
+        self.assertTrue(self.has("DRAIN", lambda i: self.ev("dst", i) == LAYER["l3"]), "an acc -> l3 DRAIN")
+        # No DRAIN into L2: every drain is the store.
+        self.assertFalse(self.has("DRAIN", lambda i: self.ev("dst", i) == LAYER["l2"]))
+        self.assertFalse(self.has("CREDIT", lambda i: self.ev("src", i) == LAYER["l3"]), "no L3 credit")
+        addrs = {self.ev("dst_addr", i) for i in range(self.b.rows("events")) if self.ev("dst", i) == LAYER["l3"]}
+        self.assertTrue(any(a >= self.b.manifest["machine"]["l3"] for a in addrs), "word addresses, not slots")
+
+    def test_same_result_as_the_slotted_sample(self):
+        _, slotted = result(RTL)
+        _, addressed = result(self.b.dir)
+        self.assertEqual(slotted["finals"], addressed["finals"])
+
+    def test_g1_mixes_the_two_l3_forms(self):
+        self.b.manifest["geometry"]["l3"]["slots"] = 4
+        self.b.save_manifest()
+        self.assertFails("G1", "mixes the two L3 forms")
+
+    def test_g1_word_addressed_needs_six_one(self):
+        self.b.manifest["minor"] = 0
+        self.b.save_manifest()
+        self.assertFails("G1", "needs version 6.1")
+
+    def test_e1_store_needs_six_one(self):
+        self.b.manifest["minor"] = 0
+        self.b.save_manifest()
+        self.assertFails("E1", "needs version 6.1")
+
+    def test_unknown_minor_is_unreadable(self):
+        self.b.manifest["minor"] = 2
+        self.b.save_manifest()
+        self.assertUnreadable()
+
+    def test_g1_words_must_be_declared(self):
+        del self.b.manifest["geometry"]["l3"]["words"]
+        self.b.save_manifest()
+        self.assertFails("G1", "words")
+
+    def test_e1_word_outside_l3(self):
+        self.set_ev("dst_addr", self.store(), self.b.manifest["geometry"]["l3"]["words"])
+        self.assertFails("E1", "outside l3")
+
+    def test_e4_no_l3_credit(self):
+        c = self.event("CREDIT")
+        self.set_ev("src", c, LAYER["l3"])
+        self.set_ev("dst", c, LAYER["dram"])
+        self.assertFails("E4", "no credits")
+
+    def test_e5_a_residency_keeps_its_word(self):
+        mv = self.event("BLOCK_MOVE", lambda i: self.ev("src", i) == LAYER["l3"])
+        self.set_ev("src_addr", mv, self.ev("src_addr", mv) + 1)
+        self.assertFails("E5", "put its residency at word")
+
+    def test_e5_the_store_stands_for_the_drain_step(self):
+        # Drained into L2 instead, it is a DRAIN of a WRITEBACK action, and the DRAIN step goes uncovered.
+        st = self.store()
+        self.set_ev("dst", st, LAYER["l2"])
+        self.set_ev("dst_addr", st, 0)
+        self.assertFails("E5", "transaction events")
+
+
 class LbRecord(Checks):
     """kpu-sim's own L-B record, version 6: no time, every layer declared, fp32 dense values."""
 
@@ -529,4 +621,6 @@ if __name__ == "__main__":
         sys.exit(2)
     RTL = Path(sys.argv.pop(1)).resolve()
     LB = Path(sys.argv.pop(1)).resolve()
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        ADDRESSED = Path(sys.argv.pop(1)).resolve()
     unittest.main()

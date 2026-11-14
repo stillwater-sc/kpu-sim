@@ -101,6 +101,7 @@ for (const s of JSON.parse(stepsArg)) {
 }
 out.lb = R.lb;
 out.level = R.level; out.cycles = R.cycles; out.events = R.events ? R.events.rows : null;
+out.minor = R.minor; out.l3Words = R.l3Words;
 // Where the derivation puts a tile, at every step a snapshot recorded it in L2 or the fabric: an
 // identity check (the held counts check only how many).
 out.snapIn = [];
@@ -442,6 +443,10 @@ class ViewerTest(unittest.TestCase):
                 self.assertEqual(got["level"], m["level"] if v6 else "L-B")
                 self.assertEqual(got["cycles"], m["time"]["cycles"] if v6 and m["time"] else None)
                 self.assertEqual(got["events"], T["events"]["rows"] if v6 else None)
+                # 6.1 (#398): the minor revision, and a word-addressed L3's size.
+                self.assertEqual(got["minor"], m.get("minor", 0) if v6 else 0)
+                l3 = m["geometry"]["l3"] if v6 else {}
+                self.assertEqual(got["l3Words"], l3.get("words"))
                 for e in got["snapIn"]:
                     self.assertTrue(e[e["chan"]], f"a snapshot has a tile in {e['chan']} after step {e['s']}; the derivation does not")
                 if m["version"] >= 3 and m["lt1"]:

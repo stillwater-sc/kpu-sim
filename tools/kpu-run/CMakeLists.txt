@@ -551,6 +551,14 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/dflow_rtl_sample.py
                     -o ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow)
         set_tests_properties(dflow_rtl_sample PROPERTIES FIXTURES_SETUP dflow_rtl_sample)
+        # Version 6.1 (#398): the RTL's acc -> l3 store and its word-addressed L3.
+        add_test(NAME dflow_rtl_sample_addressed
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/dflow_rtl_sample.py --addressed
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow)
+        set_tests_properties(dflow_rtl_sample_addressed PROPERTIES FIXTURES_SETUP dflow_rtl_sample_addressed)
+        add_test(NAME dflow_check_rtl_sample_addressed
+            COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow)
+        set_tests_properties(dflow_check_rtl_sample_addressed PROPERTIES FIXTURES_REQUIRED dflow_rtl_sample_addressed)
         add_test(NAME dflow_check_rtl_sample
             COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow)
         add_test(NAME dflow_result_rtl_sample
@@ -559,9 +567,11 @@ if(KPU_BUILD_TESTS)
         add_test(NAME dflow_check_v6_selftest
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_check_v6.py
                     ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow
-                    ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_48x48x48_t16.dflow)
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_48x48x48_t16.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow)
         set_tests_properties(dflow_check_rtl_sample dflow_result_rtl_sample PROPERTIES FIXTURES_REQUIRED dflow_rtl_sample)
-        set_tests_properties(dflow_check_v6_selftest PROPERTIES FIXTURES_REQUIRED "dflow_rtl_sample;dflow_matmul_48x48x48_t16")
+        set_tests_properties(dflow_check_v6_selftest PROPERTIES FIXTURES_REQUIRED
+            "dflow_rtl_sample;dflow_matmul_48x48x48_t16;dflow_rtl_sample_addressed")
         # The viewer (step 3): pack each bundle, refuse a non-bundle, and run the page's data layer
         # in Node on the reference run, a retain chain, LU, a cut bundle and the RTL sample.
         add_test(NAME domainflow_viewer
@@ -573,15 +583,17 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_streamed.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow
-                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow)
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow)
         set_tests_properties(domainflow_viewer PROPERTIES FIXTURES_REQUIRED
-            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged;dflow_rtl_sample")
+            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged;dflow_rtl_sample;dflow_rtl_sample_addressed")
         set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
             kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest domainflow_viewer
             kpu_run_csp_dflow_values_refuses kpu_run_csp_dflow_streamed dflow_check_streamed
             csp_gen_dflow_staged kpu_run_csp_dflow_staged dflow_check_staged
             tflow_check_staged tflow_check_v6_selftest tileflow_viewer_staged
             dflow_rtl_sample dflow_check_rtl_sample dflow_result_rtl_sample dflow_check_v6_selftest
+            dflow_rtl_sample_addressed dflow_check_rtl_sample_addressed
             PROPERTIES LABELS "program;domainflow;csp")
     endif()
     # Residency across operators (step 4d): the first operator of a chain retains its result

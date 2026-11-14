@@ -322,6 +322,7 @@ footer ul { margin: 0; padding-left: 18px; }
 "use strict";
 globalThis.DflowCore = (() => {
   const VERSIONS = [1, 2, 3, 4, 5, 6];
+  const MINORS = [0, 1];                      // version 6's minor revisions (6.1: #398)
   // Version 6, the shared record (docs/plans/shared-tile-flow-record.md): the element types and
   // domains a value is decoded by, and the levels a record can come from.
   const ELEMENTS = { int8: 1, int32: 4, fp16: 2, bf16: 2, fp32: 4, fp8_e4m3: 1, fp8_e5m2: 1 };
@@ -369,6 +370,13 @@ globalThis.DflowCore = (() => {
     R.level = m.version >= 6 ? m.level : "L-B";
     R.producer = m.version >= 6 ? m.producer : null;
     R.cycles = m.version >= 6 && m.time ? int(m.time.cycles, "time.cycles", 0) : null;
+    // Version 6.1 (#398): the RTL's flat, word-addressed L3. The steps still carry the program's
+    // slots; the events' L3 addresses are words.
+    R.minor = m.version >= 6 ? (m.minor === undefined ? 0 : m.minor) : 0;
+    if (!MINORS.includes(R.minor)) throw new Error(`a version-6.${JSON.stringify(R.minor)} .dflow bundle; this viewer reads 6.${MINORS.join(", 6.")}`);
+    const g3 = m.version >= 6 && m.geometry ? m.geometry.l3 : null;
+    R.l3Words = g3 && g3.words !== undefined ? int(g3.words, "geometry.l3.words", 1) : null;
+    R.l3WordBytes = R.l3Words !== null ? int(g3.word_bytes, "geometry.l3.word_bytes", 1) : null;
     if (m.version >= 6) {
       if (!LEVELS.includes(m.level)) throw new Error(`level ${JSON.stringify(m.level)}; a record is one of ${LEVELS.join(", ")}`);
       for (const o of m.operands) {
@@ -931,6 +939,7 @@ globalThis.DflowCore = (() => {
     const shape = M.operands.map(o => `${esc(o.name)} ${esc(o.rows)}&times;${esc(o.cols)} in ${esc(o.tile_rows)}&times;${esc(o.tile_cols)} tiles`).join(" &middot; ");
     $("meta").innerHTML = `<span>program <b>${esc(M.program.name)}</b></span><span>${shape}</span>` +
       `<span>L3 ${esc(R.cap)} slots, ${esc(R.banks)} bank${R.banks > 1 ? "s" : ""}, place = ${esc(M.machine.place)}</span>` +
+      (R.l3Words !== null ? `<span>${esc(R.level)} L3: flat, ${fmt(R.l3Words)} words of ${esc(R.l3WordBytes)} bytes (events address words)</span>` : "") +
       `<span>${fmt(M.totals.actions)} actions &middot; ${fmt(M.totals.loads)} loads &middot; ${fmt(M.totals.stores)} stores</span>`;
     $("runid").textContent = (M.run_id ? `run id: ${M.run_id}` : R.level === "L-B" ? "run id: none (L-B did not run as a level)" : "run id: none")
       + (R.producer ? ` · producer: ${R.producer}` : "");

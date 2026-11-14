@@ -52,9 +52,15 @@ A u64 index that names nothing is all ones (`0xFFFF…`); a u32 is `0xFFFFFFFF`,
 | 4 | the fabric pipeline: `lt1_chains`, `lt1_calls` |
 | 5 | L2 staging: `l2_staging`; the steps' `staging`, `l2_cf`, `l2_slot` |
 | **6** | **the shared record: level, producer, time, geometry, events, element types, domains, expected values, the result** |
+| 6.1 | the RTL's accumulator → L3 store and its flat, word-addressed L3 (§5.1, §6; #398) |
 
 Readers of version 6 read versions 1 to 5 as before. A version-1 to version-5 record is L-B's,
 fp32 and dense.
+
+**Minor revisions.** A version-6 manifest may carry `"minor"`: 0 when absent. A minor revision adds
+a transaction's layer pair or a geometry form; it keeps the `layers` and `event_kinds` lists, whose
+change needs a new version. A reader of 6.*n* reads every 6.*m* with *m* ≤ *n*, and refuses a
+later one. A 6.0 record may use none of 6.1's additions.
 
 Two writers produce the format:
 
@@ -151,9 +157,16 @@ of layers is one CSP action kind:
 | `STREAM` | l2 → l1 | `FEED` | `str` |
 | `COMPUTE` | l1 → acc | `CALL` (its tile is the accumulator) | `cf` |
 | `DRAIN` | acc → l2 | `DRAIN` | `str` |
+| `DRAIN` | acc → l3 (6.1) | `WRITEBACK`, standing for its `DRAIN` too | `str` |
 
 A transaction that names its action has that action's tile, and the action's L3 slot as its
-address in L3.
+address in L3 (with a word-addressed L3, its residency's word address; §6).
+
+**The RTL's store (6.1, #398).** The RTL's STORE reads the accumulator straight into L3, without
+passing through L2. The CSP program still says `DRAIN` then `WRITEBACK`. The record writes one
+`DRAIN` transaction from acc to l3, joined to the `WRITEBACK` action. It also stands for the tile's
+`DRAIN` step, the last one before that `WRITEBACK`, so with full joining the `DRAIN` step has no
+transaction of its own.
 
 When every transaction names its action, each recorded data step has exactly one transaction. A
 producer that cannot join its events to the CSP actions leaves `action` none. The other identities
@@ -171,7 +184,8 @@ Both signals are events:
   credit's source, which frees the space. Examples: an L2 → L3 credit after a stream reads its
   rows; an L3 → DRAM credit when a slot is released; an acc → L1 credit after a drain.
 
-The data edges are dram → l3, l3 → l2, l2 → l1, l1 → acc, acc → l2, l2 → l3 and l3 → dram.
+The data edges are dram → l3, l3 → l2, l2 → l1, l1 → acc, acc → l2, l2 → l3 and l3 → dram, and from
+6.1 acc → l3.
 
 A credit or token may name its tile and the action it follows, for example a `RELEASE`. This
 matches the RTL's credit and tile-ready handshakes once kpugen #16 lands.
@@ -224,6 +238,19 @@ through a layer the record declares not modelled.
 | `l1` | `{"modelled": true, "rows", "cols"}`: the array's edge | the edge lane, `< max(rows, cols)`, or none |
 
 Not modelled is `{"modelled": false, "why": "<reason>"}`.
+
+**A word-addressed L3 (6.1, #398).** The RTL's L3 is a flat, word-addressed memory cell per site,
+placed by the host or `plan_gemm`, with no slots and no L3 credits (credits exist for its L2 and
+accumulator only). Such an L3 is declared `{"modelled": true, "words": W, "word_bytes": b}`:
+
+- the events' L3 addresses are word addresses, `< words`;
+- a residency keeps one address from open to close (E5), where a slotted L3 checks the action's slot;
+- no `CREDIT` frees L3 (E4). A credit frees its source, so an L2 credit sent up to L3's BlockMover
+  is still an L2 credit;
+- the steps keep the CSP program's slots: they are the program's placement, which the host maps to
+  words. The machine's `l3` and `banks` are not checked against it (G1).
+
+An L3 declared both ways, `words` or `word_bytes` together with `slots` or `banks`, is refused.
 
 `row-mod-banks` is the RTL's interleave: consecutive rows walk the banks, so row *r* is in bank
 *r mod banks*. A different interleave needs a new name in the format.
@@ -304,13 +331,13 @@ Version 6 adds these invariants:
 
 | Invariant | Holds when |
 |---|---|
-| G1 geometry | every layer is declared; a modelled L3 is the machine's slots and banks; L2 and the accumulator have banks, rows, a row width and a known interleave; L1 has rows and cols |
+| G1 geometry | every layer is declared; a modelled L3 is the machine's slots and banks, or (6.1) words and a word width, never both; L2 and the accumulator have banks, rows, a row width and a known interleave; L1 has rows and cols |
 | T1 time | L-B has no time, no `cycle` or `end` column and no result cycles. A timed level has all three; every event has `cycle <= end`; the latest end is `time.cycles`; and `result.cycles` equals it |
-| E1 references | `id` is the row; every index resolves; layers are modelled; addresses are inside their layer; a transaction moves between its kind's layers |
+| E1 references | `id` is the row; every index resolves; layers are modelled; addresses are inside their layer; a transaction moves between its kind's layers (acc → l3 from 6.1) |
 | E2 identities | §5.3: no two events share a key, or a (kind, action, row, beat) |
 | E3 progress | §5.4: a row event is a child of its kind's transaction, of the same tile and action, inside the tile, and inside its parent's time |
-| E4 credits and tokens | §5.2: a token goes downstream after its tile arrived; a credit goes upstream after its tile left |
-| E5 the join | §5.1: a transaction's action has the matching kind, tile and L3 slot; with full joining, one transaction per data step |
+| E4 credits and tokens | §5.2: a token goes downstream after its tile arrived; a credit goes upstream after its tile left; no credit frees a word-addressed L3 |
+| E5 the join | §5.1: a transaction's action has the matching kind, tile and L3 slot (word-addressed: its residency keeps one word address); an acc → l3 `DRAIN` also stands for its tile's `DRAIN` step; with full joining, one transaction per data step |
 | X1 element types | known types; each snapshot is height × width elements of its type; its role is 0 or 1 |
 | X2 domains | domains are well formed; out-of-domain elements are zero bytes |
 | X3 expected values | §7.3; and `result.values` is `match` exactly when every final equals its expected value |
@@ -375,6 +402,11 @@ The sample also has:
 Its timing is invented, a fixed cost per transaction run back to back. It is a sample of the
 format, not a model of the hardware.
 
+With `--addressed` the sample is a 6.1 record, built as the RTL is: each `DRAIN` and `WRITEBACK`
+pair is one acc → l3 `DRAIN`, L3 is 64 words of 4 bytes, a residency sits at its slot × 16 words,
+and no credit frees L3. Its final values, and so its `--result` digests, equal the slotted
+sample's.
+
 ## 10. The viewer
 
 The domain-flow viewer (`tools/visualization/domainflow/`) reads versions 1 to 6. On a version-6
@@ -406,6 +438,7 @@ python3 tools/trace/dflow_rtl_sample.py -o rtl_sample.dflow
 python3 tools/trace/dflow_check.py rtl_sample.dflow                     # OK
 python3 tools/trace/dflow_check.py --result rtl_sample.dflow            # cycles 212, values match
 build/tools/kpu-run/kpu-run --program p.csp --level behavioral --dflow lb.dflow
-python3 tools/trace/test_dflow_check_v6.py rtl_sample.dflow lb.dflow   # every v6 invariant bites
+python3 tools/trace/dflow_rtl_sample.py --addressed -o rtl_addr.dflow  # 6.1: acc -> l3, word-addressed L3
+python3 tools/trace/test_dflow_check_v6.py rtl_sample.dflow lb.dflow rtl_addr.dflow   # every invariant bites
 cd build && ctest -L domainflow --output-on-failure
 ```

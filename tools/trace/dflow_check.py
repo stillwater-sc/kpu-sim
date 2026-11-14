@@ -141,6 +141,12 @@ emit (with identities), typed element values, operand domains, expected values a
                               result's values say match exactly when every final equals its
                               expected (bit for bit, or within result.bound for floating types)
 
+Version 6.1 (manifest "minor": 1; #398) describes two things the RTL does: a DRAIN from the
+accumulator straight to L3 (it joins the WRITEBACK action and stands for the tile's DRAIN step
+too), and an L3 declared as flat word-addressed memory (geometry.l3 words and word_bytes instead
+of slots and banks): its addresses are words, a residency keeps one, and no credit names it. A
+6.0 record may use neither, and an L3 declared both ways is refused (G1).
+
     --result prints only the result -- the level, the producer, the cycles to result and a digest
     of each operand's final values -- which is what CI compares (D3), never the event sequence.
 """
@@ -211,9 +217,13 @@ TRANSACTION = {EV_DMA: {(DRAM, L3): 0, (L3, DRAM): 1},           # LOAD, STORE
                EV_BM: {(L3, L2): 2, (L2, L3): 3},                 # MOVE, WRITEBACK
                EV_STREAM: {(L2, L1): 4},                          # FEED
                EV_COMPUTE: {(L1, ACC): 6},                        # CALL
-               EV_DRAIN: {(ACC, L2): 5}}                          # DRAIN
+               EV_DRAIN: {(ACC, L2): 5,                           # DRAIN
+                          (ACC, L3): 3}}                          # 6.1: the RTL's store, acc -> l3: WRITEBACK
 PROGRESS = {EV_BM_ROW: EV_BM, EV_STR_ROW: EV_STREAM, EV_DRAIN_ROW: EV_DRAIN}
-DATA_EDGES = {(DRAM, L3), (L3, L2), (L2, L1), (L1, ACC), (ACC, L2), (L2, L3), (L3, DRAM)}
+DATA_EDGES = {(DRAM, L3), (L3, L2), (L2, L1), (L1, ACC), (ACC, L2), (L2, L3), (L3, DRAM), (ACC, L3)}
+# Version 6's minor revisions: 1 adds the acc -> l3 DRAIN and the word-addressed L3 (#398).
+MINORS = (0, 1)
+DRAIN_KIND, WRITEBACK_KIND = 5, 3
 ELEMENTS = {"int8": 1, "int32": 4, "fp16": 2, "bf16": 2, "fp32": 4, "fp8_e4m3": 1, "fp8_e5m2": 1}
 INTERLEAVES = ("row-mod-banks",)
 DOMAINS = ("dense", "lower", "upper", "band")
@@ -292,6 +302,8 @@ def _manifest_v6(m):
             raise Unreadable(f"level is {m['level']!r}, not one of {', '.join(LEVELS)}")
         if not isinstance(m["producer"], str) or not m["producer"]:
             raise Unreadable("producer is not a non-empty string")
+        if m.get("minor", 0) not in MINORS or isinstance(m.get("minor", 0), bool):
+            raise Unreadable(f"version 6.{m.get('minor')} (this checker reads 6.{', 6.'.join(map(str, MINORS))})")
         if m["layers"] != LAYERS:
             raise Unreadable(f"layers are {m['layers']!r}; version 6 names {LAYERS}")
         if m["event_kinds"] != EVENT_KINDS:
@@ -1025,11 +1037,17 @@ def check_values(m, T, bad, nr):
                 bad("V5", f"tile {t}'s last Store (snapshot {k}) differs from its final value (snapshot {f})")
 
 
+def _addressed(g):
+    """Whether the record declares its L3 as flat word-addressed memory (6.1), not slots."""
+    x = g.get("l3")
+    return isinstance(x, dict) and ("words" in x or "word_bytes" in x)
+
+
 def _extent(g, layer):
-    """How many addresses a modelled layer has: L3 slots, L2 or accumulator rows, L1 edge lanes;
-    None when any address is valid (DRAM)."""
+    """How many addresses a modelled layer has: L3 slots (or words, addressed), L2 or accumulator
+    rows, L1 edge lanes; None when any address is valid (DRAM)."""
     if layer == L3:
-        return g["l3"]["slots"]
+        return g["l3"]["words"] if _addressed(g) else g["l3"]["slots"]
     if layer in (L2, ACC):
         return g[LAYERS[layer]]["rows"]
     if layer == L1:
@@ -1042,6 +1060,8 @@ def check_v6(m, T, bad):
     n, actions, ops = S["rows"], m["totals"]["actions"], m["operands"]
     timed = m["level"] != "L-B"
     g = m["geometry"]
+    minor = m.get("minor", 0)
+    addressed = _addressed(g)
 
     # G1: every layer declared; the modelled ones well formed.
     modelled = [False] * len(LAYERS)
@@ -1057,8 +1077,15 @@ def check_v6(m, T, bad):
                 bad("G1", f"geometry.{name} is not modelled but does not say why")
             continue
         modelled[i] = True
-        need = {"l3": ("slots", "banks"), "l2": ("banks", "rows", "row_bytes"), "acc": ("banks", "rows", "row_bytes"),
-                "l1": ("rows", "cols")}.get(name, ())
+        if name == "l3" and addressed:
+            # 6.1: the RTL's L3, flat memory placed by the host, in words. Not also slots.
+            if minor < 1:
+                bad("G1", "geometry.l3 is word-addressed; that needs version 6.1 (minor 1)")
+            if "slots" in x or "banks" in x:
+                bad("G1", "geometry.l3 mixes the two L3 forms: words and word_bytes, and slots or banks")
+                geometry_ok = False
+        need = {"l3": ("words", "word_bytes") if addressed else ("slots", "banks"), "l2": ("banks", "rows", "row_bytes"),
+                "acc": ("banks", "rows", "row_bytes"), "l1": ("rows", "cols")}.get(name, ())
         for k in need:
             v = x.get(k)
             if not isinstance(v, int) or isinstance(v, bool) or v < 1:
@@ -1066,7 +1093,7 @@ def check_v6(m, T, bad):
                 geometry_ok = False
         if name in ("l2", "acc") and x.get("interleave") not in INTERLEAVES:
             bad("G1", f"geometry.{name}.interleave is {x.get('interleave')!r}, not one of {', '.join(INTERLEAVES)}")
-        if name == "l3" and geometry_ok and (x["slots"], x["banks"]) != (m["machine"]["l3"], m["machine"]["banks"]):
+        if name == "l3" and geometry_ok and not addressed and (x["slots"], x["banks"]) != (m["machine"]["l3"], m["machine"]["banks"]):
             bad("G1", f"geometry.l3 is {x['slots']} slots in {x['banks']} banks; the machine is "
                       f"{m['machine']['l3']} in {m['machine']['banks']}")
 
@@ -1141,6 +1168,9 @@ def check_v6(m, T, bad):
             elif addr != NONE64 and geometry_ok and _extent(g, layer) is not None and addr >= _extent(g, layer):
                 bad("E1", f"event {e}'s {side} address {addr} is outside {LAYERS[layer]} ({_extent(g, layer)})")
                 ok = False
+        if k == EV_DRAIN and (src, dst) == (ACC, L3) and minor < 1:
+            bad("E1", f"event {e} is a DRAIN from acc to l3; that needs version 6.1 (minor 1)")
+            ok = False
         if k in TRANSACTION and ok and (src, dst) not in TRANSACTION[k]:
             names = lambda x: LAYERS[x] if x < len(LAYERS) else "none"
             bad("E1", f"event {e} is a {EVENT_KINDS[k]} from {names(src)} to {names(dst)}; a {EVENT_KINDS[k]} moves "
@@ -1210,6 +1240,11 @@ def check_v6(m, T, bad):
         if not good[e] or k not in (EV_CREDIT, EV_TOKEN):
             continue
         src, dst, t = E["src"][e], E["dst"][e], E["tile"][e]
+        if k == EV_CREDIT and addressed and src == L3:
+            # A credit frees its source; a word-addressed L3 has no slots to free (an L2 credit
+            # sent up to L3's BlockMover is still an L2 credit).
+            bad("E4", f"event {e} is a CREDIT freeing l3; a word-addressed L3 has no credits")
+            continue
         edge = (src, dst) if k == EV_TOKEN else (dst, src)
         if edge not in DATA_EDGES:
             what = "downstream along" if k == EV_TOKEN else "upstream against"
@@ -1226,6 +1261,7 @@ def check_v6(m, T, bad):
 
     # E5: the join with the CSP actions.
     covered, transactions, joined = [0] * n, 0, 0
+    l3_word = {}                                # residency -> (event, its word address) (addressed L3)
     for e in range(ne):
         k = E["kind"][e]
         if not good[e] or k not in TRANSACTION:
@@ -1245,10 +1281,25 @@ def check_v6(m, T, bad):
             continue
         if E["tile"][e] != S["tile"][a]:
             bad("E5", f"event {e} is of tile {E['tile'][e]}; its action {a} is of tile {S['tile'][a]}")
-        if S["flags"][a] & HAS_PLACE:
-            addr = E["dst_addr"][e] if E["dst"][e] == L3 else E["src_addr"][e] if E["src"][e] == L3 else NONE64
+        addr = E["dst_addr"][e] if E["dst"][e] == L3 else E["src_addr"][e] if E["src"][e] == L3 else NONE64
+        if addressed:
+            # A word-addressed L3 has no slots: the residency keeps one address, from open to close.
+            r = S["residency"][a]
+            if addr != NONE64 and r != NONE64:
+                first = l3_word.setdefault(r, (e, addr))
+                if first[1] != addr:
+                    bad("E5", f"event {e} is at L3 word {addr}; event {first[0]} put its residency at word {first[1]}")
+        elif S["flags"][a] & HAS_PLACE:
             if addr != NONE64 and addr != S["slot"][a]:
                 bad("E5", f"event {e} is at L3 slot {addr}; its action {a} is at slot {S['slot'][a]}")
+        if k == EV_DRAIN and E["dst"][e] == L3:
+            # The RTL's store drains the accumulator into L3: it is the tile's DRAIN step too, the
+            # last one before its WRITEBACK.
+            d = next((b for b in range(a - 1, -1, -1) if S["kind"][b] == DRAIN_KIND and S["tile"][b] == S["tile"][a]), None)
+            if d is None:
+                bad("E5", f"event {e} drains acc -> l3 for action {a}; no DRAIN of its tile precedes it")
+            else:
+                covered[d] += 1
     if transactions and joined == transactions:
         data_kinds = {v for d in TRANSACTION.values() for v in d.values()}
         for a in range(n):
