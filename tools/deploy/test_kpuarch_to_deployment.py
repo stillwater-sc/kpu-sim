@@ -119,6 +119,15 @@ class Convert(unittest.TestCase):
             with self.assertRaises(ValueError):
                 k.load(str(j))
 
+    def test_a_repeated_memory_level_is_refused(self):
+        self.tile["local_memory"].append(copy.deepcopy(self.tile["local_memory"][0]))
+        self.refused("two weight_buffer entries")
+
+    def test_channels_that_controllers_cannot_share_are_refused(self):
+        m = self.doc["architecture"]["memory"]
+        m["memory_type"], m["memory_controllers"] = "ddr5", 3     # 4 x16 channels over 3 controllers
+        self.refused("cannot share evenly")
+
     def test_an_unknown_dram_is_refused(self):
         self.doc["architecture"]["memory"]["memory_type"] = "sdr"
         self.refused("memory_type 'sdr'")

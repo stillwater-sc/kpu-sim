@@ -190,6 +190,8 @@ def convert(doc, tiles="one"):
         if lm["level"] not in ("weight_buffer", "accumulator"):
             raise Refused(f"local_memory {lm['level']}: a systolic tile's memories are its weight_buffer "
                           "(scratchpad) and accumulator")
+        if lm["level"] in mem:
+            raise Refused(f"tiles[0].local_memory has two {lm['level']} entries; a deployment states one of each")
         mem[lm["level"]] = lm
     for need in ("weight_buffer", "accumulator"):
         if need not in mem:
@@ -259,12 +261,15 @@ def convert(doc, tiles="one"):
         raise Refused(f"memory_bandwidth_gbps {memory['memory_bandwidth_gbps']} over {bus} bits is not a whole MT/s")
     controllers = memory["memory_controllers"]
     channels = bus // 16
+    if not isinstance(controllers, int) or controllers < 1 or channels % controllers:
+        raise Refused(f"memory_bus_bits {bus} is {channels} x16 channels, which {controllers} memory controllers "
+                      "cannot share evenly")
     dram = {"technology": DRAM[tech], "channels": channels // controllers, "channel_width_bits": 16,
             "data_rate_mtps": int(round(rate)), "capacity_bytes": size}
     carried.append(f"memory.memory_controllers {controllers} -> memory.controllers")
     # kpu-sim's LPDDR5 controller drives one or two x16 channels (dram_bridge). A wider bus on one
     # controller is a machine kpu-sim's DRAM model cannot host: the block is not carried, and said so.
-    if tech.startswith("lpddr") and (channels % controllers or channels // controllers > 2):
+    if tech.startswith("lpddr") and channels // controllers > 2:
         dram = None
         dropped.append(f"memory.memory_type {tech}, memory_bus_bits {bus}, memory_bandwidth_gbps "
                        f"{memory['memory_bandwidth_gbps']}, memory_size_gb {memory['memory_size_gb']}: "
