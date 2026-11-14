@@ -365,20 +365,34 @@ struct StagingRig {
     sw::kpu::timing::TileDescriptor a;          // one A tile, resident in L3
 
     StagingRig() : exec(sw::kpu::timing::csp_config_from(s1().device(0))->config) {
-        using namespace sw::kpu::timing;
         exec.reset();
         exec.l2_tag_cam().set_placed_slots(4);
-        a.tile_id.matrix = sw::kpu::isa::MatrixID::A;
-        a.ordered = true;
-        a.height = a.width = 16;
-        a.element_size = 4;
-        a.size_bytes = 16 * 16 * 4;
-        a.matrix_base_address = a.dram_address = 0x100000;
+        a = tile(0);
+    }
+    // An A tile A[ti, 0], resident in L3.
+    sw::kpu::timing::TileDescriptor tile(std::uint32_t ti) {
+        using namespace sw::kpu::timing;
+        TileDescriptor d;
+        d.tile_id.matrix = sw::kpu::isa::MatrixID::A;
+        d.tile_id.ti = static_cast<decltype(d.tile_id.ti)>(ti);
+        d.ordered = true;
+        d.height = d.width = 16;
+        d.element_size = 4;
+        d.size_bytes = 16 * 16 * 4;
+        d.matrix_base_address = 0x100000;
+        d.dram_address = 0x100000 + ti * d.size_bytes;
         TilePayload p;
         p.rows = p.cols = 16;
-        p.values.assign(256, 1.0f);
-        exec.seed_l3(a, p);
-        a.l3_held = true;
+        p.values.assign(256, 1.0f + static_cast<float>(ti));
+        exec.seed_l3(d, p);
+        d.l3_held = true;
+        return d;
+    }
+    static sw::kpu::timing::TileDescriptor staged(sw::kpu::timing::TileDescriptor d, std::uint32_t slot,
+                                                  std::uint32_t turn) {
+        d.l2_slot = static_cast<std::int32_t>(slot);
+        d.l2_slot_turn = turn;
+        return d;
     }
     sw::kpu::timing::TileDescriptor staged(std::uint32_t slot, std::uint32_t turn) const {
         auto d = a;
@@ -440,4 +454,31 @@ TEST_CASE("L-CA L2: an L2Release retires its own staging's copy, not another of 
     }
     REQUIRE(release < events.size());
     CHECK(staged_arrival < release);
+}
+
+TEST_CASE("L-CA L2: a tile's stagings keep their order, though a later one's slot is free first", "[csp][lca][l2]") {
+    using sw::kpu::timing::EventType;
+    StagingRig g;
+    const auto x = g.tile(1);
+    auto held = [](sw::kpu::timing::TileDescriptor d) { d.l2_held = true; return d; };
+    // X is staged in slot 0. A is staged next in slot 0 (after X leaves), then again in slot 1,
+    // which is free from the start. A's first staging must still come first.
+    g.exec.schedule_move(StagingRig::staged(x, 0, 0));
+    g.exec.schedule_feed(held(x));
+    g.exec.schedule_move(g.staged(0, 1));
+    g.exec.schedule_feed(held(g.a));
+    g.exec.schedule_l2_release(g.staged(0, 1));
+    g.exec.schedule_move(g.staged(1, 0));
+    g.exec.schedule_feed(held(g.a));
+    g.exec.schedule_l2_release(g.staged(1, 0));
+    g.exec.schedule_l2_release(StagingRig::staged(x, 0, 0));
+    const auto events = g.run();
+    std::vector<std::uint32_t> a_arrivals, a_feeds;
+    for (const auto& e : events) {
+        if (!(e.tile_id == g.a.tile_id)) continue;
+        if (e.type == EventType::TILE_ARRIVED_L2) a_arrivals.push_back(e.slot_id);
+        if (e.type == EventType::STR_FEED_START) a_feeds.push_back(e.slot_id);
+    }
+    CHECK(a_arrivals == std::vector<std::uint32_t>{0, 1});
+    CHECK(a_feeds == std::vector<std::uint32_t>{0, 1});
 }

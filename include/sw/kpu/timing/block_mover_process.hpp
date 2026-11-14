@@ -127,6 +127,7 @@ public:
         t.l3_epoch = releases_issued_[t.tile_id];   // the tile's Releases issued before it
         t.after_writebacks = writebacks_issued_[t.tile_id];
         ++moves_issued_[t.tile_id];
+        if (t.l2_slot >= 0) ++staged_queued_;
         move_queue_.enqueue(t);
         transpose_flags_.push_back(transpose);
     }
@@ -259,6 +260,7 @@ public:
 
     void reset() override {
         move_queue_.reset();
+        staged_queued_ = 0;
         writeback_queue_.reset();
         eject_queue_.clear();
         release_queue_.clear();
@@ -342,6 +344,7 @@ private:
     TagCAM& l2_tag_cam_;
 
     WorkQueue<TileDescriptor> move_queue_;
+    size_t staged_queued_ = 0;              // staging Moves in move_queue_ (#399)
     WorkQueue<TileDescriptor> writeback_queue_;
     std::vector<bool> transpose_flags_;  // Parallel to move_queue
     std::optional<InFlightTransfer> in_flight_;
@@ -764,6 +767,7 @@ private:
 
         // Start the move - remove from queue at found position
         TileDescriptor move_tile = move_queue_.remove_at(found_index);
+        if (move_tile.l2_slot >= 0) --staged_queued_;
 
         // Also remove corresponding transpose flag if any
         if (found_index < transpose_flags_.size()) {
@@ -995,14 +999,19 @@ private:
     /**
      * @brief Allocate an L2 bank slot (round-robin)
      */
-    // An unstaged Move queued after a staging Move of the same tile waits for it (#399): were it
-    // to arrive first (a dedup onto another copy, or a transfer), its arrival would open the
-    // staged Feeds' gate before the staged copy is in its slot.
+    // Where a staging is involved, a tile's Moves keep their program order (#399): a Move waits
+    // behind an earlier queued Move of its tile when either of them is a staging Move. Arriving
+    // first, an unstaged Move would open the staged Feeds' gate (after_moves) before the staged
+    // copy is in its slot; a later staging would hold L2 while the earlier one waits for it to
+    // leave; and a staging that overtook an unstaged Move would leave its copy to that Move's
+    // Feed. With no staging Move queued (staged_queued_), nothing is scanned.
     [[nodiscard]] bool behind_staging(size_t i) const {
+        if (staged_queued_ == 0) return false;
         const TileDescriptor& t = move_queue_.at(i);
-        if (t.l2_slot >= 0) return false;
-        for (size_t j = 0; j < i; ++j)
-            if (move_queue_.at(j).l2_slot >= 0 && move_queue_.at(j).tile_id == t.tile_id) return true;
+        for (size_t j = 0; j < i; ++j) {
+            const TileDescriptor& e = move_queue_.at(j);
+            if (e.tile_id == t.tile_id && (e.l2_slot >= 0 || t.l2_slot >= 0)) return true;
+        }
         return false;
     }
 
