@@ -104,9 +104,12 @@ if(KPU_PYTHON3)
                     ${CMAKE_SOURCE_DIR}/tests/program/deploy/generator/kpu_2x2_systolic.full.yaml
                     ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_soc_2x2.json
                     ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_soc_2x2.notes.txt)
-        # Every deployment the converter writes, kpu-sim reads and runs (KPU_RUN).
-        set_tests_properties(kpuarch_to_deployment_selftest PROPERTIES LABELS "program;deploy;kpu_soc"
-            ENVIRONMENT "KPU_RUN=$<TARGET_FILE:run>")
+        set_tests_properties(kpuarch_to_deployment_selftest PROPERTIES LABELS "program;deploy;kpu_soc")
+        # Every deployment the converter writes, kpu-sim reads and runs (KPU_RUN). kpu-run is a
+        # tool: without the tools the check skips, and the converter's own checks still run.
+        if(KPU_BUILD_TOOLS)
+            set_tests_properties(kpuarch_to_deployment_selftest PROPERTIES ENVIRONMENT "KPU_RUN=$<TARGET_FILE:run>")
+        endif()
     else()
         message(STATUS "kpuarch_to_deployment_selftest: skipped (python3 has no PyYAML)")
     endif()
