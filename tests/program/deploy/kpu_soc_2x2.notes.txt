@@ -1,0 +1,40 @@
+carried:
+  - tiles[0].array_rows/array_cols -> fabric 4 x 4, macs_per_cycle 16
+  - tiles[0].dataflow -> systolic.dataflow weight_stationary
+  - tiles[0].mac.modes[0] int8 -> int32 -> systolic.input_bits/weight_bits 8, acc_bits 32; element_bytes 1
+  - local_memory weight_buffer 1.0 KiB -> systolic.sp_rows_per_bank 64 (4 banks of 32-bit rows)
+  - local_memory accumulator 2.0 KiB -> systolic.acc_rows_per_bank 64 (2 banks of 128-bit rows)
+  - memory.l3_kib_per_tile 64 -> l3.capacity_tiles 1024 (64-byte tiles)
+  - memory.memory_controllers 1 -> memory.controllers
+defaulted:
+  - systolic.l2_slots = 4: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
+  - systolic.acc_slots = 2: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
+  - systolic.sp_banks = 4: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
+  - systolic.acc_banks = 2: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
+  - systolic.spad_read_delay = 4: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
+  - systolic.acc_latency = 2: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
+  - systolic.tile_rows = 1: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
+  - systolic.tile_cols = 1: kpugen's SystolicConfig / tile.py value, not a KPUArchitecture field
+  - dma.engines, dma.bytes_per_cycle: kpu-sim's defaults (no DMA in the architecture)
+  - movers.*: kpu-sim's defaults (no mover rates in the architecture)
+  - clock: none (KPUArchitecture has no clock; kpu-sim counts cycles)
+not carried:
+  - memory.memory_type lpddr5, memory_bus_bits 64, memory_bandwidth_gbps 51.2, memory_size_gb 8.0: 4 x16 channels on 1 controller(s), and kpu-sim's LPDDR controller drives 1 or 2; memory.dram is not carried (kpu-sim's built-in memory timing stands in)
+  - tile_type: a label
+  - tile_class_id: a label (the deployment's device name says which tile)
+  - tile_class_ref: a label
+  - circuit_class: the array's logic circuit class: an energy and area input, not a timing one
+  - supported_kernels: what the tile's FSMs run; a program says what it computes
+  - notes: free text
+  - mac.unit_id: a label
+  - mac.op: mac (the only op a systolic tile has)
+  - mac.notes: free text
+  - mac.modes[0].issue_interval_cycles: 1: one MAC per PE per cycle, which macs_per_cycle already states
+  - mac.modes[0].energy: an energy estimate; kpu-sim's analytical energy is its own
+  - multi_precision_alu: the vector ALU's formats; kpu-sim's vector units are movers.vector
+  - memory.l2_kib_per_tile: 0: the L2 is the tile's local_memory (weight_buffer)
+  - memory.l1_kib_per_tile: 0: no L1 beyond the array's edge
+  - noc: the 2x2 grid's mesh: single tile first; all four tiles are v0.12.0
+  - checkerboard: the 2x2 grid's sites: single tile first; all four tiles are v0.12.0
+  - total_tiles: the architecture's 4 tiles: the deployment is one of them
+  - num_tiles: 4 tiles of this class: the deployment is one of them

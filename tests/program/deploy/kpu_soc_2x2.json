@@ -1,0 +1,42 @@
+{
+  "devices": [
+    {
+      "name": "kpu_2x2_systolic.tile0",
+      "topology": "single",
+      "compute_tiles": 1,
+      "macs_per_cycle": 16,
+      "fabric": {
+        "pe_rows": 4,
+        "pe_cols": 4
+      },
+      "systolic": {
+        "dataflow": "weight_stationary",
+        "input_bits": 8,
+        "weight_bits": 8,
+        "acc_bits": 32,
+        "grid_rows": 4,
+        "grid_cols": 4,
+        "tile_rows": 1,
+        "tile_cols": 1,
+        "l2_slots": 4,
+        "acc_slots": 2,
+        "sp_banks": 4,
+        "sp_rows_per_bank": 64,
+        "acc_banks": 2,
+        "acc_rows_per_bank": 64,
+        "spad_read_delay": 4,
+        "acc_latency": 2,
+        "sp_macro": "sram_hd",
+        "acc_macro": "sram_hd"
+      },
+      "element_bytes": 1,
+      "l3": {
+        "tiles": 1,
+        "capacity_tiles": 1024
+      },
+      "memory": {
+        "controllers": 1
+      }
+    }
+  ]
+}

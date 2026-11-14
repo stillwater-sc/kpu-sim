@@ -149,6 +149,9 @@ inline std::optional<CspDeviceConfig> csp_config_from(
     if (d.l2.banks_per_tile)
         out.unmapped.push_back("l2.banks_per_tile: an L-T2 bank count, not tile-sized L2 "
                                "buffers; l2_bank_count keeps its default");
+    if (d.systolic)
+        out.unmapped.push_back("systolic: the RTL tile's slots, banks, latencies, widths and dataflow (#396) "
+                               "are declared; the executor keeps its own L2 and accumulator model");
     return out;
 }
 

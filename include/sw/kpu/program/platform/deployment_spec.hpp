@@ -71,6 +71,23 @@ struct DeviceSpecification {
     struct Fabric { std::optional<Dim> pe_rows, pe_cols; } fabric;
     Dim element_bytes = 4;
 
+    // The RTL systolic tile's own configuration (#396): what the KPU RTL generator builds for
+    // one compute tile (kpugen SystolicConfig), so a deployment derived from its KPUArchitecture
+    // states the same machine. Declared or not at all. No level models these yet; each level
+    // reports them as declared but not modelled (SpecField::Systolic).
+    struct Systolic {
+        std::string dataflow;                   // output_stationary | weight_stationary | input_stationary
+        Dim input_bits = 0, weight_bits = 0, acc_bits = 0;
+        // The PE array's grouping: grid_rows x grid_cols PE tiles of tile_rows x tile_cols PEs.
+        Dim grid_rows = 0, grid_cols = 0, tile_rows = 0, tile_cols = 0;
+        Dim l2_slots = 0, acc_slots = 0;        // the tile's L2 (scratchpad) and accumulator slots
+        Dim sp_banks = 0, sp_rows_per_bank = 0; // the scratchpad: banks, rows of grid_cols*tile_cols inputs
+        Dim acc_banks = 0, acc_rows_per_bank = 0;
+        Dim spad_read_delay = 0, acc_latency = 0;   // read latencies, cycles
+        std::string sp_macro, acc_macro;        // the memory macros' circuit class (sram_hd, sram_hp, ...)
+    };
+    std::optional<Systolic> systolic;
+
     // DMA: DRAM <-> L3.
     struct Dma {
         Dim engines = 1;
@@ -489,6 +506,35 @@ inline std::string DeploymentSpec::validate() const {
                        std::to_string(*d.fabric.pe_cols) + " PEs, but macs_per_cycle is " +
                        std::to_string(d.macs_per_cycle) + "; one PE does one MAC a cycle, so they must agree";
         }
+        if (d.systolic) {
+            const auto& y = *d.systolic;
+            if (y.dataflow != "output_stationary" && y.dataflow != "weight_stationary" &&
+                y.dataflow != "input_stationary")
+                return where + ": systolic.dataflow is '" + y.dataflow +
+                       "'; one of output_stationary, weight_stationary, input_stationary";
+            for (const auto& [name, v] : {std::pair{"input_bits", y.input_bits}, std::pair{"weight_bits", y.weight_bits},
+                                          std::pair{"acc_bits", y.acc_bits}})
+                if (v != 4 && v != 8 && v != 16 && v != 32)
+                    return where + ": systolic." + name + " is " + std::to_string(v) + "; one of 4, 8, 16, 32";
+            for (const auto& [name, v] :
+                 {std::pair{"grid_rows", y.grid_rows}, std::pair{"grid_cols", y.grid_cols},
+                  std::pair{"tile_rows", y.tile_rows}, std::pair{"tile_cols", y.tile_cols},
+                  std::pair{"l2_slots", y.l2_slots}, std::pair{"acc_slots", y.acc_slots},
+                  std::pair{"sp_banks", y.sp_banks}, std::pair{"sp_rows_per_bank", y.sp_rows_per_bank},
+                  std::pair{"acc_banks", y.acc_banks}, std::pair{"acc_rows_per_bank", y.acc_rows_per_bank}})
+                if (v == 0) return where + ": systolic." + name + " must be non-zero";
+            if (y.sp_macro.empty() || y.acc_macro.empty())
+                return where + ": systolic.sp_macro and systolic.acc_macro name the memories' circuit class";
+            // The grouping is the fabric: one PE does one MAC a cycle.
+            const double pes = double(y.grid_rows) * y.tile_rows * double(y.grid_cols) * y.tile_cols;
+            if (pes != d.macs_per_cycle)
+                return where + ": systolic is " + std::to_string(y.grid_rows * y.tile_rows) + " x " +
+                       std::to_string(y.grid_cols * y.tile_cols) + " PEs, but macs_per_cycle is " +
+                       std::to_string(d.macs_per_cycle);
+            if (d.fabric.pe_rows && (*d.fabric.pe_rows != y.grid_rows * y.tile_rows ||
+                                     *d.fabric.pe_cols != y.grid_cols * y.tile_cols))
+                return where + ": systolic's PE grouping is not fabric.pe_rows x fabric.pe_cols";
+        }
         // The physical shape. Validated only when DECLARED: an absent shape is derived where
         // it can be (array_layout.hpp), and a spec that never mentions one stays valid.
         if (d.array.rows.has_value() != d.array.cols.has_value())
@@ -569,7 +615,7 @@ inline DeviceDescriptor DeploymentSpec::device_view(Dim i) const {
 // Named as data so the report and the "does this level model it" table cannot drift
 // apart — a table keyed on a string typed twice is a table that disagrees with itself.
 enum class SpecField { L3Tiles, L3Banks, L2BanksPerTile, L1Vectors, DmaBurst, L3Capacity, Dram,
-                       Noc, DmaWindow };
+                       Noc, DmaWindow, Systolic };
 
 inline const char* to_string(SpecField f) {
     switch (f) {
@@ -582,6 +628,7 @@ inline const char* to_string(SpecField f) {
         case SpecField::L3Capacity:     return "l3.capacity_tiles";
         case SpecField::Dram:           return "memory.dram";
         case SpecField::Noc:            return "noc";
+        case SpecField::Systolic:       return "systolic";
     }
     return "?";
 }
@@ -600,6 +647,7 @@ inline bool declared(const DeviceSpecification& s, SpecField f) {
         case SpecField::L3Capacity:     return s.l3.capacity_tiles != 0;
         case SpecField::Dram:           return s.memory.dram.has_value();
         case SpecField::Noc:            return s.noc.has_value();
+        case SpecField::Systolic:       return s.systolic.has_value();
     }
     return false;
 }
@@ -630,6 +678,13 @@ inline std::string declared_value(const DeviceSpecification& s, SpecField f) {
                                                : std::string("derived")) +
                    " per engine, " + n.port.arbitration;
         }
+        case SpecField::Systolic: {
+            if (!s.systolic) return "0";
+            const auto& y = *s.systolic;
+            return y.dataflow + ", int" + std::to_string(y.input_bits) + " -> int" + std::to_string(y.acc_bits) +
+                   ", " + std::to_string(y.l2_slots) + " L2 / " + std::to_string(y.acc_slots) + " acc slots, " +
+                   std::to_string(y.sp_banks) + " sp / " + std::to_string(y.acc_banks) + " acc banks";
+        }
     }
     return "?";
 }
@@ -638,7 +693,7 @@ inline const std::vector<SpecField>& all_spec_fields() {
     static const std::vector<SpecField> f = {
         SpecField::L3Tiles, SpecField::L3Banks, SpecField::L2BanksPerTile,
         SpecField::L1Vectors, SpecField::DmaBurst, SpecField::L3Capacity, SpecField::Dram,
-        SpecField::Noc, SpecField::DmaWindow};
+        SpecField::Noc, SpecField::DmaWindow, SpecField::Systolic};
     return f;
 }
 

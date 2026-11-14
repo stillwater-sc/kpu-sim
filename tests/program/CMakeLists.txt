@@ -83,6 +83,33 @@ set_tests_properties(test_tile_commands PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# The KPU RTL generator's machine as a deployment (#396): kpu_soc_2x2.json, one tile of the
+# generator's kpu_2x2_systolic, read and run; and the converter keeps it in step with the vendored
+# generator config.
+kpu_add_component_test(test_kpu_soc_deployment "program"
+    test_kpu_soc_deployment.cpp
+)
+
+set_tests_properties(test_kpu_soc_deployment PROPERTIES
+    LABELS "program;deploy;kpu_soc;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+find_program(KPU_PYTHON3 NAMES python3 python)
+if(KPU_PYTHON3)
+    execute_process(COMMAND ${KPU_PYTHON3} -c "import yaml" RESULT_VARIABLE _kpu_no_yaml OUTPUT_QUIET ERROR_QUIET)
+    if(_kpu_no_yaml EQUAL 0)
+        add_test(NAME kpuarch_to_deployment_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/deploy/test_kpuarch_to_deployment.py
+                    ${CMAKE_SOURCE_DIR}/tests/program/deploy/generator/kpu_2x2_systolic.full.yaml
+                    ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_soc_2x2.json
+                    ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_soc_2x2.notes.txt)
+        set_tests_properties(kpuarch_to_deployment_selftest PROPERTIES LABELS "program;deploy;kpu_soc")
+    else()
+        message(STATUS "kpuarch_to_deployment_selftest: skipped (python3 has no PyYAML)")
+    endif()
+endif()
+
 # L-T1 executes placement: a credit is a slot (docs/plans/l3-placement-at-lb.md step 5)
 kpu_add_component_test(test_csp_lt1_place "program"
     test_csp_lt1_place.cpp

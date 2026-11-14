@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The KPU RTL generator's machine as a kpu-sim deployment** (#396).
+  - `tools/deploy/kpuarch_to_deployment.py` converts the generator's expanded KPUArchitecture
+    (`kpugen expand`) to a DeploymentSpec. It carries each field, says which kpu-sim default
+    stands in for one the architecture lacks, names what it does not carry and why, and refuses
+    any field it does not know.
+  - `DeploymentSpec` gains an optional `systolic` block for the RTL tile's own configuration:
+    dataflow, input/weight/accumulator widths, the PE grouping, L2 and accumulator slots, banks
+    and rows, read latencies and memory macros. It is validated against the fabric. Every level
+    reports it as declared but not modelled.
+  - `tests/program/deploy/kpu_soc_2x2.json` is one tile of the generator's `kpu_2x2_systolic`,
+    converted from a vendored copy of its config. A ctest keeps the two in step, and an int8
+    program runs on it at L-B, L-T1 and L-CA with L-B's values.
+  - The generator's DRAM (one LPDDR5 controller, a 64-bit bus) is not carried: kpu-sim's LPDDR5
+    controller drives 1 or 2 x16 channels. The notes say so.
 - **One program on both sides: a CSP program as the KPU RTL's tile command stream** (#397,
   `docs/plans/tile-command-stream.md`).
   - `kpu-run --tile-commands out.json` lowers a program to `kpu-tile-cmds` version 1: the RTL's

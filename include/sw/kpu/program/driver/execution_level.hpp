@@ -156,6 +156,11 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
             // port processes (timing/noc_fabric.hpp) are not wired into the executor until
             // docs/plans/noc-port-arbitration.md step 4b.
             return false;
+        case SpecField::Systolic:
+            // The RTL tile's own configuration (#396): its slots, banks, latencies, widths and
+            // dataflow. Declared and validated so a deployment derived from the generator states
+            // the same machine; no level models the tile at that grain yet.
+            return false;
     }
     return false;
 }
