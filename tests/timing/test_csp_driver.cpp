@@ -27,6 +27,7 @@
 #include <sw/kpu/timing/schedule/schedule_executor.hpp>
 
 #include "../program/trace_fixtures.hpp"
+#include <cmath>
 
 #include <algorithm>
 #include <cstdio>
@@ -285,6 +286,7 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
         check_c(r.values, ref);
     }
     SECTION("a window bounds what the driver holds; values and loads do not change") {
+        unsigned long long slowest = 0;
         for (const std::size_t w : {1u, 2u, 4u, 16u, 64u, 256u}) {
             CAPTURE(w);
             csp::lang::ActionStream s(csp::lang::parse(kWrittenMatmul));
@@ -295,7 +297,13 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
             CHECK(r.peak_held <= w + 1);        // one pull hands over at most one more
             CHECK(r.dram_loads == 32);
             check_c(r.values, ref);
-            CHECK(r.cycles >= t.cycles);
+            // A window is lookahead, and less of it is no faster, as a rule: window 1 is the
+            // slowest, and from 16 up every window is within 2% of the whole program. Not "never
+            // faster": handed everything at once, the mover runs ahead and holds L2 credits that
+            // nearer Moves need, so a window of 16 is a little faster than no window (#424).
+            if (w == 1) slowest = r.cycles;
+            CHECK(r.cycles <= slowest);
+            if (w >= 16) CHECK(std::abs(double(r.cycles) - double(t.cycles)) <= 0.02 * double(t.cycles));
             std::printf("csp driver, streamed matmul 128^3/32^3 on S1, window %2zu: %llu cycles (trace %llu)\n", w,
                         static_cast<unsigned long long>(r.cycles), static_cast<unsigned long long>(t.cycles));
         }

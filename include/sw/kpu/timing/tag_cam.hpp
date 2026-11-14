@@ -26,11 +26,15 @@ struct TagCAMEntry {
     Cycle arrival_cycle;   ///< When the tile arrived at this level
     bool valid;            ///< Whether this entry is valid
     uint32_t ref_count;    ///< Reference count for tile reuse
+    /// Physical copies of the tile this entry stands for, each holding its own credit: a CSP
+    /// program's Move always transfers (#424), so a second Move of a tile still in the buffer
+    /// lands a second copy rather than reusing the first. 1 for every other entry.
+    uint32_t copies;
 
-    TagCAMEntry() : slot_id(0), arrival_cycle(0), valid(false), ref_count(0) {}
+    TagCAMEntry() : slot_id(0), arrival_cycle(0), valid(false), ref_count(0), copies(0) {}
 
     TagCAMEntry(const TileID& id, uint32_t slot, Cycle arrival)
-        : tile_id(id), slot_id(slot), arrival_cycle(arrival), valid(true), ref_count(1) {}
+        : tile_id(id), slot_id(slot), arrival_cycle(arrival), valid(true), ref_count(1), copies(1) {}
 };
 
 /**
@@ -127,6 +131,24 @@ public:
     }
 
     /**
+     * @brief Land one more physical copy of a tile (a CSP program's Move; #424)
+     *
+     * The copy is the program's: its Move transferred it and took its own credit. Unlike a
+     * reference added to a resident entry, it is not reuse. If the tile is already present, the
+     * entry stands for one more copy and one more consumer, and a credit returns each time a
+     * consumer leaves the entry with fewer references than copies (invalidate).
+     */
+    bool insert_copy(const TileID& tile_id, uint32_t slot_id, Cycle arrival_cycle) {
+        auto it = entries_.find(tile_id);
+        if (it != entries_.end()) {
+            ++it->second.ref_count;
+            ++it->second.copies;
+            return true;
+        }
+        return insert(tile_id, slot_id, arrival_cycle, 1);
+    }
+
+    /**
      * @brief Check if a tile is present in the CAM
      * @param tile_id The tile to look up
      * @return true if tile is present and valid
@@ -201,8 +223,14 @@ public:
         auto it = entries_.find(tile_id);
         if (it != entries_.end()) {
             if (it->second.ref_count > 1) {
-                // More consumers remaining - just decrement, don't release credit
+                // More consumers remaining - just decrement. A credit is held per copy: when the
+                // references left no longer need every copy, one copy is free and its credit
+                // returns (#424). An entry of one copy keeps its credit until the last consumer.
                 it->second.ref_count--;
+                if (it->second.copies > 1 && it->second.ref_count < it->second.copies) {
+                    --it->second.copies;
+                    return true;   // one copy left the buffer: release its credit
+                }
                 return false;  // Tile still in use, don't release credit
             } else {
                 // Last consumer - remove the entry, caller should release credit. A slot the
