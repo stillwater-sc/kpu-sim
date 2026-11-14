@@ -32,7 +32,14 @@ const std::set<std::string>& device_keys() {
                                             "dma",           "l3",       "l2",
                                             "l1",            "movers",   "analytical",
                                             "array",         "memory",   "cpu",
-                                            "noc",           "fabric"};
+                                            "noc",           "fabric",   "systolic"};
+    return k;
+}
+const std::set<std::string>& systolic_keys() {
+    static const std::set<std::string> k = {
+        "dataflow",  "input_bits", "weight_bits", "acc_bits",   "grid_rows",        "grid_cols",
+        "tile_rows", "tile_cols",  "l2_slots",    "acc_slots",  "sp_banks",         "sp_rows_per_bank",
+        "acc_banks", "acc_rows_per_bank",         "spad_read_delay", "acc_latency", "sp_macro", "acc_macro"};
     return k;
 }
 const std::set<std::string>& dma_keys() {
@@ -265,6 +272,34 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
             }
         }
     }
+    if (obj.contains("systolic")) {
+        const json& s = obj.at("systolic");
+        const std::string w = where + ".systolic";
+        reject_unknown(s, systolic_keys(), w);
+        // Every field is required: the block states the RTL tile, or is absent.
+        for (const std::string& k : systolic_keys())
+            if (!s.contains(k)) throw SpecError("deployment: " + w + "." + k + " is required");
+        DeviceSpecification::Systolic y;
+        y.dataflow = read_string(s, "dataflow", "", w);
+        y.input_bits = read_dim(s, "input_bits", 0, w);
+        y.weight_bits = read_dim(s, "weight_bits", 0, w);
+        y.acc_bits = read_dim(s, "acc_bits", 0, w);
+        y.grid_rows = read_dim(s, "grid_rows", 0, w);
+        y.grid_cols = read_dim(s, "grid_cols", 0, w);
+        y.tile_rows = read_dim(s, "tile_rows", 0, w);
+        y.tile_cols = read_dim(s, "tile_cols", 0, w);
+        y.l2_slots = read_dim(s, "l2_slots", 0, w);
+        y.acc_slots = read_dim(s, "acc_slots", 0, w);
+        y.sp_banks = read_dim(s, "sp_banks", 0, w);
+        y.sp_rows_per_bank = read_dim(s, "sp_rows_per_bank", 0, w);
+        y.acc_banks = read_dim(s, "acc_banks", 0, w);
+        y.acc_rows_per_bank = read_dim(s, "acc_rows_per_bank", 0, w);
+        y.spad_read_delay = read_dim(s, "spad_read_delay", 0, w);
+        y.acc_latency = read_dim(s, "acc_latency", 0, w);
+        y.sp_macro = read_string(s, "sp_macro", "", w);
+        y.acc_macro = read_string(s, "acc_macro", "", w);
+        d.systolic = y;
+    }
     if (obj.contains("fabric")) {
         const json& s = obj.at("fabric");
         const std::string w = where + ".fabric";
@@ -407,6 +442,27 @@ json write_device(const DeviceSpecification& d) {
         if (d.fabric.pe_rows) f["pe_rows"] = *d.fabric.pe_rows;
         if (d.fabric.pe_cols) f["pe_cols"] = *d.fabric.pe_cols;
         o["fabric"] = f;
+    }
+    if (d.systolic) {
+        const auto& y = *d.systolic;
+        o["systolic"] = json{{"dataflow", y.dataflow},
+                             {"input_bits", y.input_bits},
+                             {"weight_bits", y.weight_bits},
+                             {"acc_bits", y.acc_bits},
+                             {"grid_rows", y.grid_rows},
+                             {"grid_cols", y.grid_cols},
+                             {"tile_rows", y.tile_rows},
+                             {"tile_cols", y.tile_cols},
+                             {"l2_slots", y.l2_slots},
+                             {"acc_slots", y.acc_slots},
+                             {"sp_banks", y.sp_banks},
+                             {"sp_rows_per_bank", y.sp_rows_per_bank},
+                             {"acc_banks", y.acc_banks},
+                             {"acc_rows_per_bank", y.acc_rows_per_bank},
+                             {"spad_read_delay", y.spad_read_delay},
+                             {"acc_latency", y.acc_latency},
+                             {"sp_macro", y.sp_macro},
+                             {"acc_macro", y.acc_macro}};
     }
     if (d.array.rows || d.array.cols) {
         json a = json::object();
