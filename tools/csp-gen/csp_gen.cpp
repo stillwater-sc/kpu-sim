@@ -7,7 +7,7 @@
 // is an ordinary program -- read it, edit it, run it.
 //
 //   kpu-csp-gen --algo matmul --size 256 --tile 32 --l3 128 -o matmul.csp
-//   kpu-csp-gen --algo linear --size 128 --tile 32 --target s1.json --act atan --place str.drain
+//   kpu-csp-gen --algo linear --size 128 --tile 32 --target s1.json --act atan --place combiner
 //
 // Exit codes: 0 written; 1 the schedule or the language refused it; 2 a usage error.
 //
@@ -53,7 +53,7 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
   --dtype <fp32|int8>           matmul: A's and B's number system; C (and D or b) is in its
                                 registered accumulator's: int8 -> int32 (default fp32)
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
-  --place <fabric|str.drain|bm.egress|unfused>
+  --place <fabric|combiner|bm.egress|unfused>
                                 linear: where the epilogue runs      (default fabric)
   -o <file>                     write here                           (default: stdout)
 
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
         o.stage_a = true;
         if (!a.count("--orient")) o.orient = "row";   // A's panel outer: the schedule staging needs
     }
-    if (a.count("--place")) o.place = a["--place"];
+    if (a.count("--place")) o.place = a["--place"] == "str.drain" ? "combiner" : a["--place"];   // str.drain: deprecated (#429)
     if (a.count("--init")) {
         if (o.algo != "matmul") return usage("--init is matmul's; --algo is '" + o.algo + "'");
         o.init = a["--init"];

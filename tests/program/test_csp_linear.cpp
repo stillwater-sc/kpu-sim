@@ -26,6 +26,8 @@
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include "trace_fixtures.hpp"
 
 #include <string>
@@ -120,11 +122,11 @@ std::string validate_error(const std::string& src, const lang::Target* t = nullp
     return "validated";
 }
 
-// S1 with vector units: the BlockMovers' lack atan, the streamers' have it.
+// S1 with vector units: the BlockMovers' lack atan, the Combiner has it.
 platform::DeviceSpecification s1_with_vector_units() {
     auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
     d.movers.bm_vector = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu", "gelu", "silu"}};
-    d.movers.str_vector =
+    d.combiner =
         platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu", "gelu", "silu", "atan"}};
     return d;
 }
@@ -201,11 +203,11 @@ TEST_CASE("Linear: every placement of the epilogue, and none, computes what L-B 
     // The fabric runs add and relu (what execute_matmul builds today).
     cases.push_back({ActivationFn::Relu, " via add(b[j]) @ fabric, relu @ fabric"});
     for (ActivationFn act : {ActivationFn::Relu, ActivationFn::Gelu, ActivationFn::Silu, ActivationFn::Atan})
-        for (const char* place : {"str.drain", "bm.egress"})
+        for (const char* place : {"combiner", "bm.egress"})
             cases.push_back({act, std::string(" via add(b[j]) @ ") + place + ", " + to_string(act) + " @ " + place});
     // Split across places, in path order.
     cases.push_back({ActivationFn::Gelu, " via add(b[j]) @ fabric, gelu @ bm.egress"});
-    cases.push_back({ActivationFn::Atan, " via add(b[j]) @ str.drain, atan @ bm.egress"});
+    cases.push_back({ActivationFn::Atan, " via add(b[j]) @ combiner, atan @ bm.egress"});
 
     for (const Case& c : cases) {
         CAPTURE(c.via);
@@ -273,10 +275,10 @@ TEST_CASE("Linear: a stage runs where the machine has it, or the program is refu
     // Without a target, placement is not checked: the values do not depend on it.
     CHECK(compile_error(misplaced) == "compiled");
 
-    // Its legal placement, on the streamer's drain, runs and computes what L-B computes.
-    const std::string legal = linear_source(" via add(b[j]) @ bm.egress, atan @ str.drain");
+    // Its legal placement, on the Combiner, runs and computes what L-B computes.
+    const std::string legal = linear_source(" via add(b[j]) @ bm.egress, atan @ combiner");
     CHECK_THAT(compile_error(legal, &target), ContainsSubstring("listed after a stage @ bm.egress"));
-    const std::string ordered = linear_source(" via add(b[j]) @ str.drain, atan @ str.drain");
+    const std::string ordered = linear_source(" via add(b[j]) @ combiner, atan @ combiner");
     const csp::CspProgram p = lang::compile(ordered, &target);
     CHECK(lang::validate(ordered, &target).peak_l3 == p.reuse().peak_l3);
     CHECK(run_lb(p, ordered) == linear_oracle(ActivationFn::Atan));
@@ -284,12 +286,12 @@ TEST_CASE("Linear: a stage runs where the machine has it, or the program is refu
     // The fabric runs add and relu only.
     CHECK_THAT(compile_error(linear_source(" via add(b[j]) @ fabric, gelu @ fabric"), &target),
                ContainsSubstring("gelu @ fabric: the target's compute fabric vector unit runs add, relu, not gelu"));
-    // A machine without a streamer vector unit.
+    // A machine without a Combiner.
     auto bare = spec;
-    bare.movers.str_vector.reset();
+    bare.combiner.reset();
     const lang::Target bare_target = lang::target_from(bare);
     CHECK_THAT(compile_error(ordered, &bare_target),
-               ContainsSubstring("add @ str.drain: the target's streamer has no vector unit"));
+               ContainsSubstring("add @ combiner: the target has no Combiner"));
 }
 
 TEST_CASE("Linear: movers.vector in the deployment spec", "[program][csp][linear][spec]") {
@@ -303,7 +305,7 @@ TEST_CASE("Linear: movers.vector in the deployment spec", "[program][csp][linear
     CHECK(back.devices.at(0).movers.bm_vector->lanes == 32);
     CHECK(back.devices.at(0).movers.bm_vector->rate == 0.5);
     CHECK(back.devices.at(0).movers.bm_vector->ops == std::vector<std::string>{"add", "relu"});
-    CHECK_FALSE(back.devices.at(0).movers.str_vector.has_value());
+    CHECK_FALSE(back.devices.at(0).combiner.has_value());
     CHECK(platform::deployment_digest(back) == platform::deployment_digest(spec));
 
     std::string bad = text;
@@ -363,4 +365,52 @@ program t machine flat(l3 = 16) {
     CHECK_THAT(compile_error(prog("  resident C[0, 0], A[0, 0];\n  call add(C[0, 0], A[0, 0]) -> C[0, 0];\n"
                                   "  store C[0, 0];\n  release C[0, 0], A[0, 0];\n")),
                ContainsSubstring("add(y, b): b must be a vector operand"));
+}
+
+// #429: the streamer's drain vector unit is the Combiner. The spellings from before the rename,
+// `@ str.drain` in a program and movers.vector.str in a deployment, are deprecated aliases for
+// one release: they read as the Combiner, and what is written back says combiner.
+TEST_CASE("Combiner: str.drain and movers.vector.str are its deprecated spellings",
+          "[program][csp][linear][lang][combiner]") {
+    const lang::Target target = lang::target_from(s1_with_vector_units());
+    const std::string now = linear_source(" via add(b[j]) @ combiner, atan @ combiner");
+    const std::string before = linear_source(" via add(b[j]) @ str.drain, atan @ str.drain");
+    const csp::CspProgram p_now = lang::compile(now, &target);
+    const csp::CspProgram p_before = lang::compile(before, &target);
+    CHECK(lang::print(p_before) == lang::print(p_now));
+    CHECK(lang::print(p_now).find("@ combiner") != std::string::npos);
+    CHECK(lang::print(p_now).find("str.drain") == std::string::npos);
+    CHECK(run_lb(p_before, before) == run_lb(p_now, now));
+
+    // The deployment: combiner is written at the device's top level, and read back.
+    platform::DeploymentSpec spec = platform::read_spec_file("tests/program/deploy/kpu_s1.json");
+    spec.devices.at(0).combiner = platform::DeviceSpecification::Movers::VectorUnit{8, 2.0, {"add", "gelu"}};
+    const std::string text = platform::to_json(spec);
+    CHECK(text.find("\"combiner\"") != std::string::npos);
+    CHECK(text.find("\"vector\"") == std::string::npos);   // no BlockMover unit, so no movers.vector
+    const platform::DeploymentSpec back = platform::from_json(text);
+    REQUIRE(back.devices.at(0).combiner.has_value());
+    CHECK(back.devices.at(0).combiner->lanes == 8);
+    CHECK(back.devices.at(0).combiner->rate == 2.0);
+    CHECK(back.devices.at(0).combiner->ops == std::vector<std::string>{"add", "gelu"});
+
+    // The old spelling reads as the same Combiner, with the same digest.
+    nlohmann::json legacy = nlohmann::json::parse(text);
+    nlohmann::json& dev = legacy["devices"][0];
+    dev["movers"]["vector"] = nlohmann::json{{"str", dev["combiner"]}};
+    dev.erase("combiner");
+    const platform::DeploymentSpec old = platform::from_json(legacy.dump());
+    REQUIRE(old.devices.at(0).combiner.has_value());
+    CHECK(old.devices.at(0).combiner->ops == back.devices.at(0).combiner->ops);
+    CHECK(platform::deployment_digest(old) == platform::deployment_digest(back));
+    CHECK(platform::to_json(old) == text);
+
+    // Both spellings at once are refused rather than one silently winning.
+    nlohmann::json both = nlohmann::json::parse(text);
+    both["devices"][0]["movers"]["vector"] = nlohmann::json{{"str", both["devices"][0]["combiner"]}};
+    CHECK_THROWS_WITH(platform::from_json(both.dump()), ContainsSubstring("declares both combiner and"));
+    // A bad combiner is refused by its own name.
+    std::string bad = text;
+    bad.replace(bad.find("\"gelu\""), 6, "\"tanh\"");
+    CHECK_THROWS_WITH(platform::from_json(bad), ContainsSubstring("combiner.ops: 'tanh' is not a vector operation"));
 }

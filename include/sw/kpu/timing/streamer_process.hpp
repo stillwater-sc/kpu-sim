@@ -211,7 +211,7 @@ public:
     /// A feed also waits while this says its own copy has not arrived (a program's ordering).
     void set_feed_guard(std::function<bool(const TileDescriptor&)> guard) { feed_guard_ = std::move(guard); }
 
-    /// The streamer's vector unit (str.drain): its busy cycles, and the cycles it slowed drains by.
+    /// The Combiner, timed on this streamer's drain (`@ combiner`): its busy cycles, and the cycles it slowed drains by.
     [[nodiscard]] Cycle ve_busy_cycles() const { return ve_busy_cycles_; }
     [[nodiscard]] Cycle ve_bound_cycles() const { return ve_bound_cycles_; }
 

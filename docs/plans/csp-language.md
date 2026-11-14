@@ -32,9 +32,9 @@ Three drivers shape it:
 **The linear driver has nothing to build on below the language either:**
 - L0 has no bias or activation ops.
 - The epilogue runs only inside `execute_matmul`, as part of the compute, at no cost.
-- A `VectorEngine` timing model exists (`models/temporal/datamovement/vector_engine.hpp`, the
+- A `Combiner` timing model (the Vector Engine before #429) exists (`models/temporal/datamovement/combiner.hpp`, the
   streamer's L1→L2 path), but nothing executes it.
-- The ISA's inline-VE drain fields are serialized and never executed.
+- The ISA's inline-Combiner drain fields are serialized and never executed.
 - No vector unit exists on the BlockMover path.
 
 So this plan also builds the epilogue's operations and the vector processor that runs them.
@@ -103,7 +103,7 @@ inherit    := 'inherit' tiles ';'          -- resident from the operator before 
 retain     := 'retain' tiles [ context ] ';'   -- stays resident for the operator after
 context    := 'via' stage ( ',' stage )*   -- the tile context (§3.4)
 stage      := VEOP '(' args ')' '@' place
-place      := 'fabric' | 'str.drain' | 'bm.egress' | 'bm.ingress'
+place      := 'fabric' | 'combiner' | 'bm.egress' | 'bm.ingress'
 
 tiles      := tile ( ',' tile )*
 tile       := NAME '[' index ( ',' index )? ']'
@@ -151,11 +151,11 @@ moves. The linear driver adds the epilogue. A context names where each stage run
 | `place` | Hardware | Status today |
 |---|---|---|
 | `fabric` | the compute fabric, on the accumulator before it leaves | built: `execute_matmul`'s bias + ReLU, at no cost |
-| `str.drain` | a vector engine on the streamer's L1 → L2 drain | `VectorEngine` timing model exists, unused |
+| `combiner` | the Combiner, on the tile's L1 → L2 result path ([combiner.md](../01-architecture/combiner.md)) | built: timed on each streamer's drain (`combiner_lanes`, `combiner_rate`); `str.drain` before #429 |
 | `bm.egress` | a vector processor on the BlockMover's L2 → L3 path | new |
 | `bm.ingress` | a vector processor on the BlockMover's L3 → L2 path (dequantize, scale) | new |
 
-VE operations start with the epilogue (Q4): `add(vector)` (a broadcast bias), `scale(s)`,
+Vector operations start with the epilogue (Q4): `add(vector)` (a broadcast bias), `scale(s)`,
 `relu`, `gelu`, `silu`, and **`atan`**. Each stage costs vector-processor time
 (elements / lanes x rate). That time overlaps the move it rides on, unless the vector processor
 is the slower of the two.
@@ -168,7 +168,7 @@ sites and not others.
 - The validator checks every context stage against its place on the target machine. `atan @
   bm.egress` on a machine whose BlockMover vector unit lacks it is refused by name, before any
   run.
-- The program must then put the stage where the hardware has it (`@ str.drain`, say), or split
+- The program must then put the stage where the hardware has it (`@ combiner`, say), or split
   the epilogue across places.
 
 This is the language feature `atan` forces: an operation's placement depends on the machine,
@@ -205,7 +205,7 @@ program linear machine flat(l3 = 128) {
 **The same operator in its other placements:**
 - `via add(b[j]) @ fabric, relu @ fabric`: as built today, but now charged its time on the
   compute fabric.
-- `@ str.drain`: on the streamer's vector engine.
+- `@ combiner`: on the Combiner (written `@ str.drain` before #429; still accepted, deprecated).
 - **Unfused:** `store Y[i, j]`, then later `resident Y[i, j]`,
   `call bias_act(Y[i, j], b[j]) -> Y[i, j]`, and `store Y[i, j]`. Y makes a second DRAM round
   trip.
@@ -213,7 +213,7 @@ program linear machine flat(l3 = 128) {
 **What the placements let the record measure:**
 - DRAM bytes: unfused adds 2 x |Y|.
 - Compute-fabric busy: `fabric` adds the epilogue's cycles.
-- Vector-processor busy and stalls: whether the VE keeps up with the move.
+- Vector-processor busy and stalls: whether each vector unit keeps up with the move.
 - The makespan.
 
 Values are identical in every placement. Placement changes when things happen, never what is
@@ -371,7 +371,7 @@ Each step is one PR and ends green.
      - `vector` operands, indexed `b[j]`;
      - the unfused epilogue as in-place calls: `add(y, b) -> y`, `relu(y) -> y`, and so on;
      - tile contexts: `store y via op @ place, ...`, and on an in-place call's result. A stage
-       becomes part of the result's Drain (`fabric`, `str.drain`) or Writeback (`bm.egress`).
+       becomes part of the result's Drain (`fabric`, `combiner`) or Writeback (`bm.egress`).
        The IR's `Action::context` carries it, and the behavioral interpreter applies it to the
        tile it moves.
      - The walker and the symbolic validator check the same rules: known operations and
@@ -388,7 +388,7 @@ Each step is one PR and ends green.
        (bias + ReLU). It is not a spec field until a fabric with more exists.
      - **`bm.ingress` is refused for a result.** It is an operand's way in, and operand contexts
        (a fused prologue: dequantize, scale) need syntax on call arguments; that is a later
-       step. The "four placements" tested are `fabric`, `str.drain`, `bm.egress`, and
+       step. The "four placements" tested are `fabric`, `combiner`, `bm.egress`, and
        unfused.
      - **The L0 → `.csp` emitter refuses the epilogue ops.** L0 does not say where the epilogue
        runs, and the emitter has no basis to choose. DFP → `.csp` should arrive with its
@@ -400,7 +400,7 @@ Each step is one PR and ends green.
      - L0 against a double-precision direct computation (ADR rtol);
      - the ops serialize and refuse a missing or unknown `act`;
      - the lowered L0 at L-B;
-     - 12 placements (each activation at `str.drain` and `bm.egress`, relu in the fabric, two
+     - 12 placements (each activation at `combiner` and `bm.egress`, relu in the fabric, two
        split placements) and unfused, bit-identical to the reference through the trace and the
        stream;
      - symbolic totals equal traced, and the printer round-trips contexts;
@@ -410,8 +410,8 @@ Each step is one PR and ends green.
 3. **The vector processor at L-CA** (done).
    - **Timing:**
      - A stage costs `ceil(elements / (lanes x rate))` cycles on its site (`movers.vector`,
-       mapped to the executor's `bm_ve_*` / `str_ve_*`).
-     - On a Drain (`str.drain`) or a Writeback (`bm.egress`), the move takes the longer of its
+       mapped to the executor's `bm_ve_*` / `combiner_*`).
+     - On a Drain (`combiner`) or a Writeback (`bm.egress`), the move takes the longer of its
        transfer and the vector unit's time. The excess is the unit's *bound* cycles.
      - `fabric` stages run first, at `macs_per_cycle` elements per cycle, and charge the compute
        tile that holds the accumulator.
@@ -439,10 +439,10 @@ Each step is one PR and ends green.
        `program_seq`, since the driver hands Loads over later than Stores.
    - **Results** (linear 128^3 / 32^3, S1, 16-lane units, relu unless named):
 
-     | placement | cycles | DRAM bytes | cf busy | VE busy / bound |
+     | placement | cycles | DRAM bytes | cf busy | vector busy / bound |
      |---|---|---|---|---|
      | fabric | 17,628 | 393,728 | 1,312 | fabric 32 |
-     | str.drain | 17,865 | 393,728 | 1,280 | str 2,048 / 1,376 |
+     | combiner | 17,865 | 393,728 | 1,280 | combiner 2,048 / 1,376 |
      | bm.egress | 17,894 | 393,728 | 1,280 | bm 2,048 / 704 |
      | unfused | 22,643 | 524,800 | 3,360 | none |
 
@@ -470,7 +470,7 @@ Each step is one PR and ends green.
 - **Fusion, measured:**
   - unfused moves 2 x |Y| more DRAM bytes than any fused placement;
   - `fabric` adds the epilogue to compute-fabric busy;
-  - `bm.egress` and `str.drain` add none, as long as the VE keeps up.
+  - `bm.egress` and `combiner` add none, as long as the vector unit keeps up.
 
 ## 6. Key Invariants
 
@@ -480,7 +480,7 @@ Each step is one PR and ends green.
   not write.
 - **Contexts change when, never what.** Every placement of a fused epilogue computes the same
   values.
-- **Machine parameters stay in the spec** (L3 capacity, VE lanes). Schedule choices stay in the
+- **Machine parameters stay in the spec** (L3 capacity, vector lanes). Schedule choices stay in the
   program: order, residency, placement of a context.
 
 ## 7. Decisions and Questions

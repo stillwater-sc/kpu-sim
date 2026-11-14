@@ -23,7 +23,7 @@
 
 using namespace sw::kpu::timing;
 using namespace sw::kpu::timing::schedule;
-using sw::kpu::isa::VEOp;
+using sw::kpu::isa::CMBOp;
 
 namespace {
 
@@ -229,7 +229,7 @@ TEST_CASE("Functional correctness under credit pressure",
 
     FunctionalElementwiseExecutor executor(
         make_generator_config(n, Form::BINARY, env), make_executor_config(env));
-    auto result = executor.run(VEOp::MUL, a, b);
+    auto result = executor.run(CMBOp::MUL, a, b);
     REQUIRE(result.execution.success);
     REQUIRE_FALSE(result.execution.livelock_detected);
 

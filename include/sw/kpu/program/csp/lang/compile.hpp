@@ -22,7 +22,7 @@
 // relu(y) -> y, gelu(y) -> y, silu(y) -> y, atan(y) -> y.
 //
 // Contexts (step 2): `store y via op @ place, ...` and `call f(..) -> y via ...` put the
-// epilogue on the result's way out -- the stages of its Drain (fabric, str.drain) and its
+// epilogue on the result's way out -- the stages of its Drain (fabric, combiner) and its
 // Writeback (bm.egress). See context.hpp.
 //
 // SPDX-License-Identifier: MIT

@@ -1,8 +1,8 @@
 // ============================================================================
-// include/sw/kpu/models/behavioral/compute/vector_engine.hpp
-// Behavioral (functional) Vector Engine - bias addition and activation
+// include/sw/kpu/models/behavioral/compute/combiner.hpp
+// Behavioral (functional) Combiner - bias addition and activation
 //
-// The Vector Engine applies elementwise operations to matmul results:
+// The Combiner applies elementwise operations to matmul results:
 // - Bias addition: output[i,j] += bias[j] (broadcast across rows)
 // - Activation functions: output = activation(output)
 //
@@ -18,7 +18,7 @@
 
 namespace sw::kpu::behavioral {
 
-/// Behavioral Vector Engine for bias and activation
+/// Behavioral Combiner for bias and activation
 ///
 /// This is a functional simulation that performs actual computation:
 /// - Bias addition (row-broadcast)
@@ -27,7 +27,7 @@ namespace sw::kpu::behavioral {
 /// Used for:
 /// - Functional verification of MLP layers
 /// - Executing complete neural network inference
-class BehavioralVectorEngine {
+class BehavioralCombiner {
 public:
     /// Statistics tracking
     struct Stats {
@@ -46,14 +46,14 @@ public:
     // Constructors
     // ========================================================================
 
-    BehavioralVectorEngine();
-    ~BehavioralVectorEngine() = default;
+    BehavioralCombiner();
+    ~BehavioralCombiner() = default;
 
     // Non-copyable, movable
-    BehavioralVectorEngine(const BehavioralVectorEngine&) = delete;
-    BehavioralVectorEngine& operator=(const BehavioralVectorEngine&) = delete;
-    BehavioralVectorEngine(BehavioralVectorEngine&&) = default;
-    BehavioralVectorEngine& operator=(BehavioralVectorEngine&&) = default;
+    BehavioralCombiner(const BehavioralCombiner&) = delete;
+    BehavioralCombiner& operator=(const BehavioralCombiner&) = delete;
+    BehavioralCombiner(BehavioralCombiner&&) = default;
+    BehavioralCombiner& operator=(BehavioralCombiner&&) = default;
 
     // ========================================================================
     // In-Place Operations on Memory Model

@@ -34,7 +34,7 @@ include/sw/kpu/
 │   ├── memory_model.hpp
 │   ├── mlp_executor.hpp
 │   ├── orchestrator.hpp
-│   └── vector_engine.hpp
+│   └── combiner.hpp
 ├── components/             # OLD - flat structure, wrong names
 │   ├── lpddr5_memory_controller.hpp    # Should be: temporal/memory/controllers/lpddr5_controller.hpp
 │   ├── ddr5_memory_controller.hpp
@@ -90,7 +90,7 @@ include/sw/kpu/
 │   │   │   └── noc.hpp                 # Was: behavioral_noc.hpp
 │   │   ├── orchestrator.hpp
 │   │   ├── mlp_executor.hpp
-│   │   └── vector_engine.hpp
+│   │   └── combiner.hpp
 │   │
 │   ├── transactional/
 │   │   ├── compute/
@@ -112,7 +112,7 @@ include/sw/kpu/
 │       │   ├── streamer.hpp
 │       │   ├── stateful_block_mover.hpp
 │       │   ├── l3_interconnect.hpp
-│       │   └── vector_engine.hpp
+│       │   └── combiner.hpp
 │       ├── memory/
 │       │   ├── l1_buffer.hpp
 │       │   ├── l2_bank.hpp
@@ -174,7 +174,7 @@ include/sw/kpu/
 | Current Path | New Path |
 |-------------|----------|
 | `behavioral/block_mover.hpp` | `models/behavioral/datamovement/block_mover.hpp` |
-| `behavioral/vector_engine.hpp` | `models/behavioral/compute/vector_engine.hpp` |
+| `behavioral/combiner.hpp` | `models/behavioral/compute/combiner.hpp` |
 | `behavioral/memory_model.hpp` | `models/behavioral/memory/memory_model.hpp` |
 | `behavioral/orchestrator.hpp` | `models/behavioral/orchestrator.hpp` |
 | `behavioral/mlp_executor.hpp` | `models/behavioral/mlp_executor.hpp` |
@@ -223,7 +223,7 @@ include/sw/kpu/
 | `components/streamer.hpp` | `models/temporal/datamovement/streamer.hpp` |
 | `components/stateful_block_mover.hpp` | `models/temporal/datamovement/stateful_block_mover.hpp` |
 | `components/l3_interconnect.hpp` | `models/temporal/datamovement/l3_interconnect.hpp` |
-| `components/vector_engine.hpp` | `models/temporal/datamovement/vector_engine.hpp` |
+| `components/combiner.hpp` | `models/temporal/datamovement/combiner.hpp` |
 | `components/l1_buffer.hpp` | `models/temporal/memory/l1_buffer.hpp` |
 | `components/l2_bank.hpp` | `models/temporal/memory/l2_bank.hpp` |
 | `components/l3_tile.hpp` | `models/temporal/memory/l3_tile.hpp` |

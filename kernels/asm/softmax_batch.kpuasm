@@ -4,7 +4,7 @@
 ; Input:  X[4, 16]  B=4 batch, D=16 dimension
 ; Output: Y[4, 16]
 ;
-; This is a 3-pass reduction kernel using the Vector Engine (VE):
+; This is a 3-pass reduction kernel using the Combiner:
 ;   Pass 1: Find max per row (reduction over D)
 ;   Pass 2: Compute exp(x - max) (elementwise over D)
 ;   Pass 3: Sum and divide (reduction then elementwise)
@@ -16,8 +16,8 @@
 ;   sum[4]:     4*4    = 16 bytes at 0x0210 (scratch)
 ;   exp_buf[4,16]: 256 bytes at 0x0220 (scratch)
 ;
-; Note: This kernel uses VE_REDUCE and VE_ELEMENTWISE opcodes
-; which operate on L1 data via the Vector Engine rather than
+; Note: This kernel uses CMB_REDUCE and CMB_ELEMENTWISE opcodes
+; which operate on L1 data via the Combiner rather than
 ; the systolic array.
 
 .name "softmax_batch_4x16"
@@ -52,7 +52,7 @@ move_to_l2:
 ; ============================================================
 pass1_max:
     STR_FEED_ROWS A, (0,0,0), 0, 0, 0, 0, 4, 16, 16, BUF_0
-    VE_REDUCE MAX
+    CMB_REDUCE MAX
     ; max values now in L1 scratch
     BARRIER
 
@@ -63,8 +63,8 @@ pass1_max:
 pass2_exp:
     ; Re-stream X for subtraction
     STR_FEED_ROWS A, (0,0,0), 0, 0, 0, 0, 4, 16, 16, BUF_0
-    VE_ELEMENTWISE SUB
-    VE_ELEMENTWISE EXP
+    CMB_ELEMENTWISE SUB
+    CMB_ELEMENTWISE EXP
     ; exp values now in L2 (exp_buf)
     BARRIER
 
@@ -73,10 +73,10 @@ pass2_exp:
 ; ============================================================
 pass3_sum_div:
     ; Reduce exp values to get sum per row
-    VE_REDUCE SUM
+    CMB_REDUCE SUM
     BARRIER
     ; Divide exp values by sum
-    VE_ELEMENTWISE DIV
+    CMB_ELEMENTWISE DIV
     BARRIER
 
 ; ============================================================

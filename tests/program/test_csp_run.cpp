@@ -34,7 +34,7 @@ platform::DeviceSpecification s1(bool vector_units = true) {
     if (vector_units) {
         using VU = platform::DeviceSpecification::Movers::VectorUnit;
         d.movers.bm_vector = VU{16, 1.0, {"add", "relu", "gelu", "silu"}};
-        d.movers.str_vector = VU{16, 1.0, {"add", "relu", "gelu", "silu", "atan"}};
+        d.combiner = VU{16, 1.0, {"add", "relu", "gelu", "silu", "atan"}};
     }
     return d;
 }
@@ -74,7 +74,7 @@ TEST_CASE("CSP run: matmul and the linear operator at L-B, L-T1 and L-CA compute
         o.l3 = 64;
         cases.push_back(o);
     }
-    for (const char* place : {"fabric", "str.drain", "bm.egress", "unfused"}) {
+    for (const char* place : {"fabric", "combiner", "bm.egress", "unfused"}) {
         gen::Options o;
         o.algo = "linear";
         o.size = 96;

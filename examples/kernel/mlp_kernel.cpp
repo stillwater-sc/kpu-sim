@@ -43,7 +43,7 @@
  Key Output Highlights
 
   - Fused operation: matmul + bias + activation in single pass
-  - Vector Engine (VE) inline processing for zero additional latency
+  - Combiner inline processing for zero additional latency
   - SFU-based activation with LUT + interpolation for accuracy
 */
 
@@ -311,7 +311,7 @@ int main() {
     // Without fusion: 3 separate passes
     Size unfused_l2_traffic = matmul_output * 5;  // write + read(bias) + write + read(act) + write
 
-    // With fusion: single pass through Vector Engine
+    // With fusion: single pass through Combiner
     Size fused_l2_traffic = matmul_output;  // single write with inline bias+activation
 
     std::cout << "Without MLP fusion (3 separate operations):\n";
@@ -320,7 +320,7 @@ int main() {
     std::cout << "  3. Activ:  activation(temp2) -> C      (" << format_bytes(matmul_output * 2) << " read+write)\n";
     std::cout << "  Total L2 traffic: " << format_bytes(unfused_l2_traffic) << "\n";
 
-    std::cout << "\nWith MLP fusion (Vector Engine inline processing):\n";
+    std::cout << "\nWith MLP fusion (Combiner inline processing):\n";
     std::cout << "  Single pass: activation(A @ B + bias) -> C\n";
     std::cout << "  Total L2 traffic: " << format_bytes(fused_l2_traffic) << "\n";
 

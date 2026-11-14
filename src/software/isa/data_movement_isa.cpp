@@ -241,10 +241,10 @@ DMInstruction DMInstruction::str_drain(TileCoord tile,
                                        uint8_t l2_bank, uint8_t l1_buf,
                                        Address l2_addr, Address l1_addr,
                                        Size height, Size width, Size fabric_size,
-                                       bool ve_enabled,
-                                       ActivationType ve_activation,
-                                       bool ve_bias_enabled,
-                                       Address ve_bias_addr) {
+                                       bool cmb_enabled,
+                                       ActivationType cmb_activation,
+                                       bool cmb_bias_enabled,
+                                       Address cmb_bias_addr) {
     DMInstruction instr;
     instr.opcode = DMOpcode::STR_DRAIN_OUTPUT;
 
@@ -260,24 +260,24 @@ DMInstruction DMInstruction::str_drain(TileCoord tile,
     ops.fabric_size = fabric_size;
     ops.buffer = BufferSlot::AUTO;
 
-    // Vector Engine configuration for fused bias+activation
-    ops.ve_enabled = ve_enabled;
-    ops.ve_activation = ve_activation;
-    ops.ve_bias_enabled = ve_bias_enabled;
-    ops.ve_bias_addr = ve_bias_addr;
+    // Combiner configuration for fused bias+activation
+    ops.cmb_enabled = cmb_enabled;
+    ops.cmb_activation = cmb_activation;
+    ops.cmb_bias_enabled = cmb_bias_enabled;
+    ops.cmb_bias_addr = cmb_bias_addr;
 
     instr.operands = ops;
 
     // C_tile uses [ti, tj] - the output matrix tile coordinates
     std::ostringstream oss;
     oss << "STR_DRAIN C_tile[" << tile.ti << "," << tile.tj << "]";
-    if (ve_enabled) {
-        oss << " +VE";
-        if (ve_bias_enabled) {
+    if (cmb_enabled) {
+        oss << " +CMB";
+        if (cmb_bias_enabled) {
             oss << "+bias";
         }
-        if (ve_activation != ActivationType::NONE) {
-            oss << "+" << activation_type_name(ve_activation);
+        if (cmb_activation != ActivationType::NONE) {
+            oss << "+" << activation_type_name(cmb_activation);
         }
     }
     instr.label = oss.str();
@@ -587,10 +587,10 @@ DMInstruction DMInstruction::str_feed_rows_auto(uint8_t l1_buffer, BufferSlot bu
     AutoStreamerOperands ops;
     ops.l1_buffer = l1_buffer;
     ops.buffer = buf;
-    ops.ve_enabled = false;
-    ops.ve_activation = ActivationType::NONE;
-    ops.ve_bias_enabled = false;
-    ops.ve_bias_addr = 0;
+    ops.cmb_enabled = false;
+    ops.cmb_activation = ActivationType::NONE;
+    ops.cmb_bias_enabled = false;
+    ops.cmb_bias_addr = 0;
     instr.operands = ops;
 
     std::ostringstream oss;
@@ -608,10 +608,10 @@ DMInstruction DMInstruction::str_feed_cols_auto(uint8_t l1_buffer, BufferSlot bu
     AutoStreamerOperands ops;
     ops.l1_buffer = l1_buffer;
     ops.buffer = buf;
-    ops.ve_enabled = false;
-    ops.ve_activation = ActivationType::NONE;
-    ops.ve_bias_enabled = false;
-    ops.ve_bias_addr = 0;
+    ops.cmb_enabled = false;
+    ops.cmb_activation = ActivationType::NONE;
+    ops.cmb_bias_enabled = false;
+    ops.cmb_bias_addr = 0;
     instr.operands = ops;
 
     std::ostringstream oss;
@@ -623,24 +623,24 @@ DMInstruction DMInstruction::str_feed_cols_auto(uint8_t l1_buffer, BufferSlot bu
 }
 
 DMInstruction DMInstruction::str_drain_auto(uint8_t l2_bank, BufferSlot buf,
-                                            bool ve_enabled, ActivationType ve_act) {
+                                            bool cmb_enabled, ActivationType cmb_act) {
     DMInstruction instr;
     instr.opcode = DMOpcode::STR_DRAIN_AUTO;
 
     AutoStreamerOperands ops;
     ops.l1_buffer = l2_bank;  // Reuse l1_buffer field for l2_bank on drain
     ops.buffer = buf;
-    ops.ve_enabled = ve_enabled;
-    ops.ve_activation = ve_act;
-    ops.ve_bias_enabled = false;
-    ops.ve_bias_addr = 0;
+    ops.cmb_enabled = cmb_enabled;
+    ops.cmb_activation = cmb_act;
+    ops.cmb_bias_enabled = false;
+    ops.cmb_bias_addr = 0;
     instr.operands = ops;
 
     std::ostringstream oss;
     oss << "STR_DRAIN_AUTO " << static_cast<int>(l2_bank)
         << ", " << (buf == BufferSlot::BUF_0 ? "BUF_0" : buf == BufferSlot::BUF_1 ? "BUF_1" : "AUTO");
-    if (ve_enabled) {
-        oss << " +VE";
+    if (cmb_enabled) {
+        oss << " +CMB";
     }
     instr.label = oss.str();
 
@@ -648,37 +648,37 @@ DMInstruction DMInstruction::str_drain_auto(uint8_t l2_bank, BufferSlot buf,
 }
 
 // ============================================================================
-// Vector Engine factory methods (issue #100)
+// Combiner factory methods (issue #100)
 // ============================================================================
 
-const char* to_string(VEOp op) {
+const char* to_string(CMBOp op) {
     switch (op) {
-        case VEOp::ADD:   return "ADD";
-        case VEOp::SUB:   return "SUB";
-        case VEOp::MUL:   return "MUL";
-        case VEOp::DIV:   return "DIV";
-        case VEOp::MAX:   return "MAX";
-        case VEOp::MIN:   return "MIN";
-        case VEOp::NEG:   return "NEG";
-        case VEOp::ABS:   return "ABS";
-        case VEOp::SQRT:  return "SQRT";
-        case VEOp::EXP:   return "EXP";
-        case VEOp::LOG:   return "LOG";
-        case VEOp::ADD_S: return "ADD_S";
-        case VEOp::MUL_S: return "MUL_S";
-        case VEOp::POW_S: return "POW_S";
+        case CMBOp::ADD:   return "ADD";
+        case CMBOp::SUB:   return "SUB";
+        case CMBOp::MUL:   return "MUL";
+        case CMBOp::DIV:   return "DIV";
+        case CMBOp::MAX:   return "MAX";
+        case CMBOp::MIN:   return "MIN";
+        case CMBOp::NEG:   return "NEG";
+        case CMBOp::ABS:   return "ABS";
+        case CMBOp::SQRT:  return "SQRT";
+        case CMBOp::EXP:   return "EXP";
+        case CMBOp::LOG:   return "LOG";
+        case CMBOp::ADD_S: return "ADD_S";
+        case CMBOp::MUL_S: return "MUL_S";
+        case CMBOp::POW_S: return "POW_S";
     }
     return "UNKNOWN";
 }
 
-bool ve_op_from_string(const std::string& name, VEOp& op) {
-    static const std::pair<const char*, VEOp> kMap[] = {
-        {"ADD", VEOp::ADD},     {"SUB", VEOp::SUB},   {"MUL", VEOp::MUL},
-        {"DIV", VEOp::DIV},     {"MAX", VEOp::MAX},   {"MIN", VEOp::MIN},
-        {"NEG", VEOp::NEG},     {"ABS", VEOp::ABS},   {"SQRT", VEOp::SQRT},
-        {"EXP", VEOp::EXP},     {"LOG", VEOp::LOG},
-        {"ADD_S", VEOp::ADD_S}, {"MUL_S", VEOp::MUL_S},
-        {"POW_S", VEOp::POW_S},
+bool cmb_op_from_string(const std::string& name, CMBOp& op) {
+    static const std::pair<const char*, CMBOp> kMap[] = {
+        {"ADD", CMBOp::ADD},     {"SUB", CMBOp::SUB},   {"MUL", CMBOp::MUL},
+        {"DIV", CMBOp::DIV},     {"MAX", CMBOp::MAX},   {"MIN", CMBOp::MIN},
+        {"NEG", CMBOp::NEG},     {"ABS", CMBOp::ABS},   {"SQRT", CMBOp::SQRT},
+        {"EXP", CMBOp::EXP},     {"LOG", CMBOp::LOG},
+        {"ADD_S", CMBOp::ADD_S}, {"MUL_S", CMBOp::MUL_S},
+        {"POW_S", CMBOp::POW_S},
     };
     for (const auto& [key, value] : kMap) {
         if (name == key) {
@@ -689,12 +689,12 @@ bool ve_op_from_string(const std::string& name, VEOp& op) {
     return false;
 }
 
-DMInstruction DMInstruction::ve_elementwise(VEOp op, uint8_t l1_src_a,
+DMInstruction DMInstruction::cmb_elementwise(CMBOp op, uint8_t l1_src_a,
                                             uint8_t l1_src_b, uint8_t l1_dst) {
     DMInstruction instr;
-    instr.opcode = DMOpcode::VE_ELEMENTWISE;
+    instr.opcode = DMOpcode::CMB_ELEMENTWISE;
 
-    VEOperands ops;
+    CMBOperands ops;
     ops.op = op;
     ops.num_inputs = 2;
     ops.l1_src_a = l1_src_a;
@@ -703,7 +703,7 @@ DMInstruction DMInstruction::ve_elementwise(VEOp op, uint8_t l1_src_a,
     instr.operands = ops;
 
     std::ostringstream oss;
-    oss << "VE_ELEMENTWISE " << to_string(op)
+    oss << "CMB_ELEMENTWISE " << to_string(op)
         << ", L1[" << static_cast<int>(l1_src_a) << "]"
         << ", L1[" << static_cast<int>(l1_src_b) << "]"
         << " -> L1[" << static_cast<int>(l1_dst) << "]";
@@ -711,12 +711,12 @@ DMInstruction DMInstruction::ve_elementwise(VEOp op, uint8_t l1_src_a,
     return instr;
 }
 
-DMInstruction DMInstruction::ve_elementwise_unary(VEOp op, uint8_t l1_src,
+DMInstruction DMInstruction::cmb_elementwise_unary(CMBOp op, uint8_t l1_src,
                                                   uint8_t l1_dst) {
     DMInstruction instr;
-    instr.opcode = DMOpcode::VE_ELEMENTWISE;
+    instr.opcode = DMOpcode::CMB_ELEMENTWISE;
 
-    VEOperands ops;
+    CMBOperands ops;
     ops.op = op;
     ops.num_inputs = 1;
     ops.l1_src_a = l1_src;
@@ -724,20 +724,20 @@ DMInstruction DMInstruction::ve_elementwise_unary(VEOp op, uint8_t l1_src,
     instr.operands = ops;
 
     std::ostringstream oss;
-    oss << "VE_ELEMENTWISE " << to_string(op)
+    oss << "CMB_ELEMENTWISE " << to_string(op)
         << ", L1[" << static_cast<int>(l1_src) << "]"
         << " -> L1[" << static_cast<int>(l1_dst) << "]";
     instr.label = oss.str();
     return instr;
 }
 
-DMInstruction DMInstruction::ve_elementwise_scalar(VEOp op, float scalar,
+DMInstruction DMInstruction::cmb_elementwise_scalar(CMBOp op, float scalar,
                                                    uint8_t l1_src,
                                                    uint8_t l1_dst) {
     DMInstruction instr;
-    instr.opcode = DMOpcode::VE_ELEMENTWISE;
+    instr.opcode = DMOpcode::CMB_ELEMENTWISE;
 
-    VEOperands ops;
+    CMBOperands ops;
     ops.op = op;
     ops.num_inputs = 1;
     ops.scalar = scalar;
@@ -746,29 +746,29 @@ DMInstruction DMInstruction::ve_elementwise_scalar(VEOp op, float scalar,
     instr.operands = ops;
 
     std::ostringstream oss;
-    oss << "VE_ELEMENTWISE " << to_string(op) << " " << scalar
+    oss << "CMB_ELEMENTWISE " << to_string(op) << " " << scalar
         << ", L1[" << static_cast<int>(l1_src) << "]"
         << " -> L1[" << static_cast<int>(l1_dst) << "]";
     instr.label = oss.str();
     return instr;
 }
 
-const char* to_string(VEReduceOp op) {
+const char* to_string(CMBReduceOp op) {
     switch (op) {
-        case VEReduceOp::MAX:  return "MAX";
-        case VEReduceOp::MIN:  return "MIN";
-        case VEReduceOp::SUM:  return "SUM";
-        case VEReduceOp::MEAN: return "MEAN";
-        case VEReduceOp::VAR:  return "VAR";
+        case CMBReduceOp::MAX:  return "MAX";
+        case CMBReduceOp::MIN:  return "MIN";
+        case CMBReduceOp::SUM:  return "SUM";
+        case CMBReduceOp::MEAN: return "MEAN";
+        case CMBReduceOp::VAR:  return "VAR";
     }
     return "UNKNOWN";
 }
 
-bool ve_reduce_op_from_string(const std::string& name, VEReduceOp& op) {
-    static const std::pair<const char*, VEReduceOp> kMap[] = {
-        {"MAX", VEReduceOp::MAX},   {"MIN", VEReduceOp::MIN},
-        {"SUM", VEReduceOp::SUM},   {"MEAN", VEReduceOp::MEAN},
-        {"VAR", VEReduceOp::VAR},
+bool cmb_reduce_op_from_string(const std::string& name, CMBReduceOp& op) {
+    static const std::pair<const char*, CMBReduceOp> kMap[] = {
+        {"MAX", CMBReduceOp::MAX},   {"MIN", CMBReduceOp::MIN},
+        {"SUM", CMBReduceOp::SUM},   {"MEAN", CMBReduceOp::MEAN},
+        {"VAR", CMBReduceOp::VAR},
     };
     for (const auto& [key, value] : kMap) {
         if (name == key) {
@@ -779,12 +779,12 @@ bool ve_reduce_op_from_string(const std::string& name, VEReduceOp& op) {
     return false;
 }
 
-DMInstruction DMInstruction::ve_reduce(VEReduceOp op, uint8_t l1_src,
+DMInstruction DMInstruction::cmb_reduce(CMBReduceOp op, uint8_t l1_src,
                                        uint8_t l1_acc, uint8_t phase) {
     DMInstruction instr;
-    instr.opcode = DMOpcode::VE_REDUCE;
+    instr.opcode = DMOpcode::CMB_REDUCE;
 
-    VEReduceOperands ops;
+    CMBReduceOperands ops;
     ops.op = op;
     ops.phase = phase;
     ops.l1_src = l1_src;
@@ -792,11 +792,11 @@ DMInstruction DMInstruction::ve_reduce(VEReduceOp op, uint8_t l1_src,
     instr.operands = ops;
 
     std::ostringstream oss;
-    oss << "VE_REDUCE " << to_string(op)
+    oss << "CMB_REDUCE " << to_string(op)
         << ", L1[" << static_cast<int>(l1_src) << "]"
         << " -> acc L1[" << static_cast<int>(l1_acc) << "]";
-    if (phase & VEReducePhase::INIT)     oss << " +INIT";
-    if (phase & VEReducePhase::FINALIZE) oss << " +FINALIZE";
+    if (phase & CMBReducePhase::INIT)     oss << " +INIT";
+    if (phase & CMBReducePhase::FINALIZE) oss << " +FINALIZE";
     instr.label = oss.str();
     return instr;
 }

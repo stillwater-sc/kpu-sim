@@ -232,7 +232,7 @@ Kernel Kernel::create_layernorm(const LayerNormConfig& config, DataType dtype) {
     Size D = config.normalized_dim;
 
     // Faithful 3-pass streaming program (mean, variance, normalize+affine)
-    // built on VE_REDUCE / VE_ELEMENTWISE - see KernelCompiler::compile_layernorm
+    // built on CMB_REDUCE / CMB_ELEMENTWISE - see KernelCompiler::compile_layernorm
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
     Kernel kernel = compiler.compile_layernorm(config, opts);
@@ -279,7 +279,7 @@ Kernel Kernel::create_rmsnorm(const RMSNormConfig& config, DataType dtype) {
     Size D = config.normalized_dim;
 
     // Faithful 2-pass streaming program (mean-of-squares, scale) built on
-    // VE_REDUCE / VE_ELEMENTWISE - see KernelCompiler::compile_rmsnorm
+    // CMB_REDUCE / CMB_ELEMENTWISE - see KernelCompiler::compile_rmsnorm
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
     Kernel kernel = compiler.compile_rmsnorm(config, opts);
@@ -427,7 +427,7 @@ Kernel Kernel::create_elementwise_scalar(ElementwiseOp op,
 Kernel Kernel::create_pool2d(const Pool2DConfig& config, DataType dtype) {
     compiler::KernelCompiler compiler;
 
-    // Faithful streaming program (windowed VE_REDUCE) - see
+    // Faithful streaming program (windowed CMB_REDUCE) - see
     // KernelCompiler::compile_pool2d
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;
@@ -521,7 +521,7 @@ Kernel Kernel::create_softmax(const SoftmaxConfig& config, DataType dtype) {
     compiler::KernelCompiler compiler;
 
     // Faithful 4-pass streaming program (max, exp, sum, normalize) built
-    // on VE_REDUCE / VE_ELEMENTWISE, loop-based so vocab-sized shapes stay
+    // on CMB_REDUCE / CMB_ELEMENTWISE, loop-based so vocab-sized shapes stay
     // compact - see KernelCompiler::compile_softmax
     compiler::CompileOptions opts = compiler::CompileOptions::defaults();
     opts.dtype = dtype;

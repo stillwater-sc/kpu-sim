@@ -72,15 +72,16 @@ inline const char* to_string(Chan c) {
 
 // A tile context (docs/plans/csp-language.md §3.4): transforms bound to a tile as it crosses a
 // boundary, each at the place it runs. A result leaves the fabric through `fabric` (on the
-// accumulator, before the Drain), `str.drain` (the streamer's L1 -> L2 drain) and `bm.egress`
-// (the BlockMover's L2 -> L3 writeback), in that order. `bm.ingress` (L3 -> L2) is an operand's
-// way in.
-enum class Place : std::uint8_t { Fabric, StrDrain, BmEgress, BmIngress };
+// accumulator, before the Drain), `combiner` (the Combiner on the L1 -> L2 result path,
+// docs/01-architecture/combiner.md) and `bm.egress` (the BlockMover's L2 -> L3 writeback), in
+// that order. `bm.ingress` (L3 -> L2) is an operand's way in. `str.drain` is the Combiner's
+// name before #429, accepted as a deprecated alias for one release.
+enum class Place : std::uint8_t { Fabric, Combiner, BmEgress, BmIngress };
 
 inline const char* to_string(Place p) {
     switch (p) {
         case Place::Fabric:    return "fabric";
-        case Place::StrDrain:  return "str.drain";
+        case Place::Combiner:  return "combiner";
         case Place::BmEgress:  return "bm.egress";
         case Place::BmIngress: return "bm.ingress";
     }
@@ -88,8 +89,9 @@ inline const char* to_string(Place p) {
 }
 
 inline bool parse_place(const std::string& s, Place& out) {
-    for (Place p : {Place::Fabric, Place::StrDrain, Place::BmEgress, Place::BmIngress})
+    for (Place p : {Place::Fabric, Place::Combiner, Place::BmEgress, Place::BmIngress})
         if (s == to_string(p)) { out = p; return true; }
+    if (s == "str.drain") { out = Place::Combiner; return true; }   // deprecated (#429)
     return false;
 }
 
@@ -172,7 +174,7 @@ struct Action {
     bool accumulate = false;            // Call: adds to the fabric's accumulator for its output,
                                         // which starts at zero (an output-stationary chain)
     std::vector<Stage> context;         // applied to the tile as this action moves it, in order:
-                                        // Drain (fabric, str.drain), Writeback (bm.egress),
+                                        // Drain (fabric, combiner), Writeback (bm.egress),
                                         // Move (bm.ingress)
     // The L3 slot the action writes (Load, Writeback, Inherit), reads (Move, Store) or frees
     // (Release, Retain): its residency's address. None for an action with no residency.

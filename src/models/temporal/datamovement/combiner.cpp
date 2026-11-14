@@ -1,7 +1,7 @@
-// Vector Engine Implementation
+// Combiner Implementation
 // Inline bias addition and activation processing during L1→L2 transfer
 
-#include <sw/kpu/models/temporal/datamovement/vector_engine.hpp>
+#include <sw/kpu/models/temporal/datamovement/combiner.hpp>
 #include <stdexcept>
 #include <cstring>
 
@@ -11,10 +11,10 @@ namespace sw::kpu {
 // Constructors
 // ============================================================================
 
-VectorEngine::VectorEngine(size_t id)
-    : VectorEngine(id, VectorEngineConfig{}) {}
+Combiner::Combiner(size_t id)
+    : Combiner(id, CombinerConfig{}) {}
 
-VectorEngine::VectorEngine(size_t id, const VectorEngineConfig& config)
+Combiner::Combiner(size_t id, const CombinerConfig& config)
     : id_(id), config_(config), sfu_(config.sfu_config) {
     bias_buffer_.resize(config_.bias_buffer_size);
     input_buffer_.resize(config_.vector_width);
@@ -25,7 +25,7 @@ VectorEngine::VectorEngine(size_t id, const VectorEngineConfig& config)
 // Configuration
 // ============================================================================
 
-void VectorEngine::configure(const VectorEngineConfig& config) {
+void Combiner::configure(const CombinerConfig& config) {
     config_ = config;
     sfu_.configure(config.sfu_config.activation, config.sfu_config.table_size);
     bias_buffer_.resize(config_.bias_buffer_size);
@@ -33,14 +33,14 @@ void VectorEngine::configure(const VectorEngineConfig& config) {
     output_buffer_.resize(config_.vector_width);
 }
 
-void VectorEngine::set_activation(ActivationType activation) {
+void Combiner::set_activation(ActivationType activation) {
     sfu_.configure(activation);
     config_.sfu_config.activation = activation;
 }
 
-void VectorEngine::preload_bias(const float* bias_data, Size count) {
+void Combiner::preload_bias(const float* bias_data, Size count) {
     if (count > config_.bias_buffer_size) {
-        throw std::invalid_argument("VectorEngine: bias vector exceeds buffer size");
+        throw std::invalid_argument("Combiner: bias vector exceeds buffer size");
     }
     std::memcpy(bias_buffer_.data(), bias_data, count * sizeof(float));
     bias_loaded_ = true;
@@ -50,7 +50,7 @@ void VectorEngine::preload_bias(const float* bias_data, Size count) {
 // Operation Queue
 // ============================================================================
 
-void VectorEngine::enqueue_operation(const VEOperation& op) {
+void Combiner::enqueue_operation(const CombinerOperation& op) {
     op_queue_.push(op);
 
     // If idle, start processing immediately
@@ -63,7 +63,7 @@ void VectorEngine::enqueue_operation(const VEOperation& op) {
 // Cycle-Accurate Simulation
 // ============================================================================
 
-bool VectorEngine::update(Cycle cycle, L1ReadFunc l1_read, L2WriteFunc l2_write) {
+bool Combiner::update(Cycle cycle, L1ReadFunc l1_read, L2WriteFunc l2_write) {
     if (!config_.enabled) {
         stats_.cycles_idle++;
         return false;
@@ -114,7 +114,7 @@ bool VectorEngine::update(Cycle cycle, L1ReadFunc l1_read, L2WriteFunc l2_write)
     }
 }
 
-void VectorEngine::start_operation() {
+void Combiner::start_operation() {
     if (op_queue_.empty()) {
         state_ = State::IDLE;
         return;
@@ -136,7 +136,7 @@ void VectorEngine::start_operation() {
     current_row_ = 0;
 }
 
-void VectorEngine::process_row(L1ReadFunc l1_read, L2WriteFunc l2_write) {
+void Combiner::process_row(L1ReadFunc l1_read, L2WriteFunc l2_write) {
     // Calculate addresses for current row
     Address l1_addr = current_op_.l1_base_addr +
                       current_row_ * (current_op_.row_stride ? current_op_.row_stride :
@@ -172,7 +172,7 @@ void VectorEngine::process_row(L1ReadFunc l1_read, L2WriteFunc l2_write) {
     l2_write(current_op_.l2_bank_id, l2_addr, output_buffer_.data(), row_bytes);
 }
 
-void VectorEngine::finish_operation() {
+void Combiner::finish_operation() {
     stats_.operations_completed++;
 
     // Call completion callback if provided
@@ -192,7 +192,7 @@ void VectorEngine::finish_operation() {
 // Immediate Processing (Non-Pipelined)
 // ============================================================================
 
-void VectorEngine::process_row_immediate(const float* input, float* output,
+void Combiner::process_row_immediate(const float* input, float* output,
                                          Size width, Size /* bias_row */) {
     // Copy input to working buffer
     std::vector<float> working(width);
@@ -209,7 +209,7 @@ void VectorEngine::process_row_immediate(const float* input, float* output,
     sfu_.evaluate_vector(working.data(), output, width);
 }
 
-void VectorEngine::process_tile_immediate(const float* input, float* output,
+void Combiner::process_tile_immediate(const float* input, float* output,
                                           Size height, Size width) {
     for (Size row = 0; row < height; ++row) {
         const float* in_row = input + row * width;
@@ -235,7 +235,7 @@ void VectorEngine::process_tile_immediate(const float* input, float* output,
 // State Management
 // ============================================================================
 
-void VectorEngine::reset() {
+void Combiner::reset() {
     state_ = State::IDLE;
     current_row_ = 0;
     op_start_cycle_ = 0;
@@ -256,15 +256,15 @@ void VectorEngine::reset() {
 // Statistics
 // ============================================================================
 
-void VectorEngine::reset_stats() {
-    stats_ = VEStats{};
+void Combiner::reset_stats() {
+    stats_ = CombinerStats{};
 }
 
 // ============================================================================
 // Timing
 // ============================================================================
 
-Cycle VectorEngine::estimate_cycles(Size height, Size width) const {
+Cycle Combiner::estimate_cycles(Size height, Size width) const {
     // Each row takes ceil(width / vector_width) chunks
     // Pipeline adds latency for first result
     Size chunks_per_row = (width + config_.vector_width - 1) / config_.vector_width;

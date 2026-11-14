@@ -35,7 +35,7 @@ Individual operation performance measurement:
 | `matmul_sweep` | Matmul across sizes (64 to 16K) | Cycles, GFLOPS, efficiency |
 | `tile_size_sensitivity` | Vary Ti, Tj, Tk for fixed problem | Cycles, memory traffic |
 | `memory_bandwidth` | DMA, BlockMover, Streamer throughput | GB/s achieved vs peak |
-| `activation_overhead` | Compare matmul vs MLP | VE overhead cycles |
+| `activation_overhead` | Compare matmul vs MLP | Combiner overhead cycles |
 | `graph_overhead` | Single kernel vs graph compilation | Compilation time, instruction count |
 
 ### 7.2 Roofline Analysis

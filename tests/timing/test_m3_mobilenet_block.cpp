@@ -189,7 +189,7 @@ BuildResult build_block(KernelGraph& g, std::unordered_map<std::size_t, NodeData
     nd[cp].filter = wp; set_bn(nd[bp], bnp);
 
     std::size_t nodes = 8;
-    // CSP op count (each fused conv/depthwise = 1 op; run_relu6 issues 2 VE ops,
+    // CSP op count (each fused conv/depthwise = 1 op; run_relu6 issues 2 Combiner ops,
     // MAX then MIN): expand(1) + ReLU6(2) + depthwise(1) + ReLU6(2) + project(1)
     // = 7; + the residual ADD (1) when present.
     std::size_t ops = 7;

@@ -249,10 +249,10 @@ private:
                 result.operations.push_back(ScheduleOperation::load(tile));
                 result.operations.push_back(ScheduleOperation::move(tile));
                 result.operations.push_back(ScheduleOperation::feed(tile));
-                // VE performs SUM reduction
+                // Combiner performs SUM reduction
             }
 
-            // Drain mean to scratch (divide by hidden_size done in VE)
+            // Drain mean to scratch (divide by hidden_size done in Combiner)
             auto mean_tile = make_scratch_tile(ii, 0);
             result.operations.push_back(ScheduleOperation::drain(mean_tile));
             result.operations.push_back(ScheduleOperation::writeback(mean_tile));
@@ -265,7 +265,7 @@ private:
                 result.operations.push_back(ScheduleOperation::load(tile));
                 result.operations.push_back(ScheduleOperation::move(tile));
                 result.operations.push_back(ScheduleOperation::feed(tile));
-                // VE performs: SUB mean, SQUARE, SUM
+                // Combiner performs: SUB mean, SQUARE, SUM
             }
 
             // Drain variance to scratch
@@ -281,7 +281,7 @@ private:
                 result.operations.push_back(ScheduleOperation::load(tile));
                 result.operations.push_back(ScheduleOperation::move(tile));
                 result.operations.push_back(ScheduleOperation::feed(tile));
-                // VE performs: (x - mean) / sqrt(var + eps) * gamma + beta
+                // Combiner performs: (x - mean) / sqrt(var + eps) * gamma + beta
 
                 // Feed gamma and beta for this hidden tile
                 if (config_.affine) {

@@ -269,7 +269,7 @@ case Opcode::RELU: {
     }
     memory_->write(instr.dst_addr, data, size);
 
-    cycles += vector_engine_->activation_cycles(size);
+    cycles += combiner_->activation_cycles(size);
     break;
 }
 ```

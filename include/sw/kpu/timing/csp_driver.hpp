@@ -30,7 +30,7 @@
 //   cf    Call  -> gemm: schedule_matmul_compute; the unfused epilogue (add, an activation):
 //                  schedule_functional_compute, with L0's element functions (values computed
 //                  at completion)
-//   a tile context (csp-language.md step 3): a Drain's stages (fabric, str.drain) and a
+//   a tile context (csp-language.md step 3): a Drain's stages (fabric, combiner) and a
 //                  Writeback's (bm.egress) ride the move -- schedule_drain/schedule_writeback
 //                  with stages, timed on the site's vector unit (movers.vector)
 //   Release     -> schedule_release: the BlockMover retires a loaded residency's entry after the

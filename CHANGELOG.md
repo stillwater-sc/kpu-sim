@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Vector Engine is the Combiner** (#429, the rename; the merge of partials follows). It is
+  the unit on the tile's L1 -> L2 result path that fuses bias and activation into the drain, and
+  its SFU banks come with it.
+  - C++: `VectorEngine`, `VectorEngineConfig`, `VEOperation`, `VEStats` and
+    `BehavioralVectorEngine` are `Combiner`, `CombinerConfig`, `CombinerOperation`,
+    `CombinerStats` and `BehavioralCombiner`; the ISA's `VEOp`, `VEOperands`, `VEReduceOp`,
+    `VEReducePhase` and `VEReduceOperands` are `CMB*`; `ResourceType::VECTOR_ENGINE` is
+    `COMBINER`. The files follow (`combiner.hpp`, `combiner.cpp`, `test_combiner.cpp`).
+  - ISA: `VE_ELEMENTWISE` and `VE_REDUCE` are `CMB_ELEMENTWISE` and `CMB_REDUCE` (same opcode
+    values, so `.kpubin` files are unchanged); `STR_DRAIN_OUTPUT`'s `ve_*` fields are `cmb_*`, and
+    kpuasm's `VE_ENABLE` is `CMB_ENABLE`.
+  - CSP programs: the place `@ str.drain` is `@ combiner`. The deployment's streamer vector unit,
+    `movers.vector.str`, is the device's top-level `combiner` block. kpu-run reports its busy and
+    bound cycles as `combiner`.
+  - **Deprecated, for one release:** the assembler accepts `VE_ELEMENTWISE`, `VE_REDUCE` and
+    `VE_ENABLE`, and they assemble to the same binary. Program JSON with `ve_*` drain fields
+    loads. A CSP program may still write `@ str.drain`, and `kpu-csp-gen --place str.drain`
+    still works. A deployment may still declare `movers.vector.str`, which reads as `combiner`
+    with the same digest; declaring both is refused.
 - **L-CA finds no reuse of its own** (#424). A CSP program's Move always transfers its tile; the
   BlockMover no longer completes it on a copy still in L2. A second copy of a tile lands beside the
   first with its own L2 credit. Reuse is the program's to state (an L2 staging). The dedup remains

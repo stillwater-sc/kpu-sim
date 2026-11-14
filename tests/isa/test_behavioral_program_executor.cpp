@@ -570,11 +570,11 @@ void test_loop_machinery() {
 }
 
 // ============================================================================
-// Test: VE_ELEMENTWISE functional semantics (issue #100, epic E2)
+// Test: CMB_ELEMENTWISE functional semantics (issue #100, epic E2)
 // ============================================================================
 
-void test_ve_elementwise() {
-    std::cout << "\n=== Test: VE_ELEMENTWISE semantics (16x16 tiles) ===\n";
+void test_cmb_elementwise() {
+    std::cout << "\n=== Test: CMB_ELEMENTWISE semantics (16x16 tiles) ===\n";
 
     const Size Ti = 16, Tj = 16;
     const Size elems = Ti * Tj;
@@ -596,17 +596,17 @@ void test_ve_elementwise() {
         std::string name;
     };
     std::vector<Case> cases;
-    cases.push_back({DMInstruction::ve_elementwise(VEOp::ADD, 0, 1, 2),
+    cases.push_back({DMInstruction::cmb_elementwise(CMBOp::ADD, 0, 1, 2),
                      [](float x, float y) { return x + y; }, "ADD"});
-    cases.push_back({DMInstruction::ve_elementwise(VEOp::MUL, 0, 1, 2),
+    cases.push_back({DMInstruction::cmb_elementwise(CMBOp::MUL, 0, 1, 2),
                      [](float x, float y) { return x * y; }, "MUL"});
-    cases.push_back({DMInstruction::ve_elementwise(VEOp::DIV, 0, 1, 2),
+    cases.push_back({DMInstruction::cmb_elementwise(CMBOp::DIV, 0, 1, 2),
                      [](float x, float y) { return x / y; }, "DIV"});
-    cases.push_back({DMInstruction::ve_elementwise_unary(VEOp::EXP, 0, 2),
+    cases.push_back({DMInstruction::cmb_elementwise_unary(CMBOp::EXP, 0, 2),
                      [](float x, float) { return std::exp(x); }, "EXP"});
-    cases.push_back({DMInstruction::ve_elementwise_unary(VEOp::SQRT, 0, 2),
+    cases.push_back({DMInstruction::cmb_elementwise_unary(CMBOp::SQRT, 0, 2),
                      [](float x, float) { return std::sqrt(x); }, "SQRT"});
-    cases.push_back({DMInstruction::ve_elementwise_scalar(VEOp::MUL_S, 2.5f, 0, 2),
+    cases.push_back({DMInstruction::cmb_elementwise_scalar(CMBOp::MUL_S, 2.5f, 0, 2),
                      [](float x, float) { return x * 2.5f; }, "MUL_S 2.5"});
 
     for (auto& tc : cases) {
@@ -615,7 +615,7 @@ void test_ve_elementwise() {
         hw.l1_buffers[1].write(0, b.data(), bytes);
 
         DMProgram program;
-        program.name = "ve_test";
+        program.name = "cmb_test";
         program.Ti = Ti;
         program.Tj = Tj;
         program.Tk = 1;
@@ -635,18 +635,18 @@ void test_ve_elementwise() {
             max_err = std::max(max_err, std::fabs(out[i] - expected));
         }
         check(ran && max_err == 0.0f,
-              "VE " + tc.name + " exact vs host oracle (max err " +
+              "Combiner " + tc.name + " exact vs host oracle (max err " +
               std::to_string(max_err) + ")");
     }
 }
 
 // ============================================================================
-// Test: STR_BROADCAST resident-operand delivery + repeated VE consumption
+// Test: STR_BROADCAST resident-operand delivery + repeated Combiner consumption
 // (issue #102, epic E2)
 // ============================================================================
 
 void test_str_broadcast_resident_operand() {
-    std::cout << "\n=== Test: STR_BROADCAST delivers once, VE consumes many ===\n";
+    std::cout << "\n=== Test: STR_BROADCAST delivers once, Combiner consumes many ===\n";
 
     const Size Ti = 16, Tj = 16;
     const Size elems = Ti * Tj;
@@ -683,7 +683,7 @@ void test_str_broadcast_resident_operand() {
     }
 
     // Three consumer tiles, each a separate program run: stream A into L1[0],
-    // VE ADD against the resident B, read the result. B is NEVER re-delivered.
+    // Combiner ADD against the resident B, read the result. B is NEVER re-delivered.
     for (int tile = 0; tile < 3; ++tile) {
         std::vector<float> a(elems);
         for (Size i = 0; i < elems; ++i) {
@@ -697,7 +697,7 @@ void test_str_broadcast_resident_operand() {
         program.Tj = Tj;
         program.Tk = 1;
         program.instructions.push_back(
-            DMInstruction::ve_elementwise(VEOp::ADD, 0, 1, 2));
+            DMInstruction::cmb_elementwise(CMBOp::ADD, 0, 1, 2));
         program.instructions.push_back(DMInstruction::halt());
 
         BehavioralProgramExecutor executor(hw.context());
@@ -719,12 +719,12 @@ void test_str_broadcast_resident_operand() {
 }
 
 // ============================================================================
-// Test: VE_REDUCE streaming semantics + phase flags + edge cases
+// Test: CMB_REDUCE streaming semantics + phase flags + edge cases
 // (issue #105, epic E3)
 // ============================================================================
 
-void test_ve_reduce() {
-    std::cout << "\n=== Test: VE_REDUCE streaming semantics (3 tiles) ===\n";
+void test_cmb_reduce() {
+    std::cout << "\n=== Test: CMB_REDUCE streaming semantics (3 tiles) ===\n";
 
     const Size Ti = 16, Tj = 16;
     const Size elems = Ti * Tj;
@@ -756,26 +756,26 @@ void test_ve_reduce() {
     const double omean = total_sum / total_count;
     const double ovar = std::max(0.0, total_sumsq / total_count - omean * omean);
 
-    // Run one VE_REDUCE instruction against a persistent accumulator buffer.
+    // Run one CMB_REDUCE instruction against a persistent accumulator buffer.
     // Streaming = one instruction per tile (l1[0]=src, l1[1]=acc); the
     // accumulator persists across program runs because hw owns the buffers.
-    auto run_reduce = [](TestHardware& hw, VEReduceOp op, uint8_t phase,
+    auto run_reduce = [](TestHardware& hw, CMBReduceOp op, uint8_t phase,
                          Size ti, Size tj) {
         DMProgram p; p.name = "reduce"; p.Ti = ti; p.Tj = tj; p.Tk = 1;
-        p.instructions.push_back(DMInstruction::ve_reduce(op, 0, 1, phase));
+        p.instructions.push_back(DMInstruction::cmb_reduce(op, 0, 1, phase));
         p.instructions.push_back(DMInstruction::halt());
         BehavioralProgramExecutor ex(hw.context());
         ex.load_program(p, 0, 0, 0);
         ex.run();
     };
 
-    auto stream_reduce = [&](VEReduceOp op) {
+    auto stream_reduce = [&](CMBReduceOp op) {
         TestHardware hw(16, 4, 256, 8, 128, /*num_l1=*/3, 64);
         for (int k = 0; k < n_tiles; ++k) {
             hw.l1_buffers[0].write(0, tiles[k].data(), bytes);
-            uint8_t phase = VEReducePhase::ACCUMULATE;
-            if (k == 0) phase |= VEReducePhase::INIT;
-            if (k == n_tiles - 1) phase |= VEReducePhase::FINALIZE;  // fuse finalize
+            uint8_t phase = CMBReducePhase::ACCUMULATE;
+            if (k == 0) phase |= CMBReducePhase::INIT;
+            if (k == n_tiles - 1) phase |= CMBReducePhase::FINALIZE;  // fuse finalize
             run_reduce(hw, op, phase, Ti, Tj);
         }
         std::vector<float> acc(3, -1.0f);
@@ -788,59 +788,59 @@ void test_ve_reduce() {
     };
 
     {
-        auto acc = stream_reduce(VEReduceOp::MAX);
-        check(static_cast<double>(acc[0]) == omax, "VE_REDUCE MAX over 3 tiles");
+        auto acc = stream_reduce(CMBReduceOp::MAX);
+        check(static_cast<double>(acc[0]) == omax, "CMB_REDUCE MAX over 3 tiles");
     }
     {
-        auto acc = stream_reduce(VEReduceOp::MIN);
-        check(static_cast<double>(acc[0]) == omin, "VE_REDUCE MIN over 3 tiles");
+        auto acc = stream_reduce(CMBReduceOp::MIN);
+        check(static_cast<double>(acc[0]) == omin, "CMB_REDUCE MIN over 3 tiles");
     }
     {
-        auto acc = stream_reduce(VEReduceOp::SUM);
-        check(approx(acc[0], total_sum), "VE_REDUCE SUM over 3 tiles");
+        auto acc = stream_reduce(CMBReduceOp::SUM);
+        check(approx(acc[0], total_sum), "CMB_REDUCE SUM over 3 tiles");
     }
     {
         // Finalized MEAN layout: [mean, count, sumsq]
-        auto acc = stream_reduce(VEReduceOp::MEAN);
+        auto acc = stream_reduce(CMBReduceOp::MEAN);
         check(approx(acc[0], omean) && acc[1] == static_cast<float>(total_count),
-              "VE_REDUCE MEAN over 3 tiles (mean + count exposed)");
+              "CMB_REDUCE MEAN over 3 tiles (mean + count exposed)");
     }
     {
         // Finalized VAR layout: [var, mean, count]
-        auto acc = stream_reduce(VEReduceOp::VAR);
+        auto acc = stream_reduce(CMBReduceOp::VAR);
         check(approx(acc[0], ovar) && approx(acc[1], omean),
-              "VE_REDUCE VAR over 3 tiles (var + mean exposed)");
+              "CMB_REDUCE VAR over 3 tiles (var + mean exposed)");
     }
 
     // Single-shot: one tile, INIT|ACCUMULATE|FINALIZE fused
     {
         TestHardware hw(16, 4, 256, 8, 128, 3, 64);
         hw.l1_buffers[0].write(0, tiles[0].data(), bytes);
-        run_reduce(hw, VEReduceOp::SUM,
-                   VEReducePhase::INIT | VEReducePhase::ACCUMULATE |
-                   VEReducePhase::FINALIZE, Ti, Tj);
+        run_reduce(hw, CMBReduceOp::SUM,
+                   CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE |
+                   CMBReducePhase::FINALIZE, Ti, Tj);
         std::vector<float> acc(3);
         hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
         double t0 = 0.0; for (Size i = 0; i < elems; ++i) t0 += tiles[0][i];
-        check(approx(acc[0], t0), "VE_REDUCE single-shot SUM (all phases fused)");
+        check(approx(acc[0], t0), "CMB_REDUCE single-shot SUM (all phases fused)");
     }
 
     // Edge: empty reduction (INIT then FINALIZE, no ACCUMULATE) -> NaN
     {
         TestHardware hw(16, 4, 256, 8, 128, 3, 64);
-        run_reduce(hw, VEReduceOp::MEAN, VEReducePhase::INIT, Ti, Tj);
-        run_reduce(hw, VEReduceOp::MEAN, VEReducePhase::FINALIZE, Ti, Tj);
+        run_reduce(hw, CMBReduceOp::MEAN, CMBReducePhase::INIT, Ti, Tj);
+        run_reduce(hw, CMBReduceOp::MEAN, CMBReducePhase::FINALIZE, Ti, Tj);
         std::vector<float> acc(3);
         hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
-        check(std::isnan(acc[0]), "VE_REDUCE MEAN of empty stream -> NaN");
+        check(std::isnan(acc[0]), "CMB_REDUCE MEAN of empty stream -> NaN");
     }
     {
         TestHardware hw(16, 4, 256, 8, 128, 3, 64);
-        run_reduce(hw, VEReduceOp::VAR, VEReducePhase::INIT, Ti, Tj);
-        run_reduce(hw, VEReduceOp::VAR, VEReducePhase::FINALIZE, Ti, Tj);
+        run_reduce(hw, CMBReduceOp::VAR, CMBReducePhase::INIT, Ti, Tj);
+        run_reduce(hw, CMBReduceOp::VAR, CMBReducePhase::FINALIZE, Ti, Tj);
         std::vector<float> acc(3);
         hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
-        check(std::isnan(acc[0]), "VE_REDUCE VAR of empty stream -> NaN");
+        check(std::isnan(acc[0]), "CMB_REDUCE VAR of empty stream -> NaN");
     }
 
     // Edge: single sample -> variance exactly 0
@@ -848,13 +848,13 @@ void test_ve_reduce() {
         TestHardware hw(16, 4, 256, 8, 128, 3, 64);
         float one = 42.5f;
         hw.l1_buffers[0].write(0, &one, static_cast<Size>(sizeof(float)));
-        run_reduce(hw, VEReduceOp::VAR,
-                   VEReducePhase::INIT | VEReducePhase::ACCUMULATE |
-                   VEReducePhase::FINALIZE, 1, 1);
+        run_reduce(hw, CMBReduceOp::VAR,
+                   CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE |
+                   CMBReducePhase::FINALIZE, 1, 1);
         std::vector<float> acc(3);
         hw.l1_buffers[1].read(0, acc.data(), acc_bytes);
         check(acc[0] == 0.0f && acc[1] == 42.5f,
-              "VE_REDUCE VAR of single sample -> var 0, mean = sample");
+              "CMB_REDUCE VAR of single sample -> var 0, mean = sample");
     }
 }
 
@@ -874,9 +874,9 @@ int main() {
     test_reference_matmul();
     test_execution_statistics();
     test_loop_machinery();
-    test_ve_elementwise();
+    test_cmb_elementwise();
     test_str_broadcast_resident_operand();
-    test_ve_reduce();
+    test_cmb_reduce();
 
     std::cout << "\n" << std::string(60, '*') << "\n";
     std::cout << "Results: " << passed << " passed, " << failed << " failed\n";

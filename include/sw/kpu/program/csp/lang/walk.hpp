@@ -435,7 +435,7 @@ private:
 
     // ---- statements ----
     // A result's `via` list, resolved and checked against the target, as the stages of its Drain
-    // (fabric, str.drain) and of its Writeback (bm.egress). An add's vector must be resident in
+    // (fabric, combiner) and of its Writeback (bm.egress). An add's vector must be resident in
     // L3 -- the stage reads it there -- and as long as the tile is wide.
     std::pair<std::vector<csp::Stage>, std::vector<csp::Stage>> result_context(const Stmt& s, const TileCoord& y) {
         std::pair<std::vector<csp::Stage>, std::vector<csp::Stage>> out;

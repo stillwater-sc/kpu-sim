@@ -35,7 +35,7 @@ enum class DFNodeType : uint8_t {
     // Computation
     MATMUL,             // Matrix multiplication on systolic array
     ELEMENTWISE,        // Element-wise operation (add, mul, etc.)
-    ACTIVATION,         // Activation function (via VectorEngine)
+    ACTIVATION,         // Activation function (via Combiner)
     REDUCTION,          // Reduction operation
 
     // Synchronization

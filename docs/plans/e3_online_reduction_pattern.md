@@ -6,7 +6,7 @@
 **Will unlock (once T2-T5 land):** online softmax (E8),
 LayerNorm/RMSNorm/BatchNorm statistics (E9), global pooling (E7),
 flash-attention rescaling (E12) — and the remaining half of `#18`
-(VE_REDUCE numerical semantics) closes with T5.
+(CMB_REDUCE numerical semantics) closes with T5.
 
 ---
 
@@ -85,25 +85,25 @@ metadata; there is no empirical fallback. Both realizations are
 livelock-safe by construction (constant or envelope-checked working set,
 paired emission for the apply pass).
 
-## 2. VE_REDUCE operand encoding (the #18 numerical half, E3's share)
+## 2. CMB_REDUCE operand encoding (the #18 numerical half, E3's share)
 
-Today `VE_REDUCE` carries `std::monostate`; the assembler consumes the op
+Today `CMB_REDUCE` carries `std::monostate`; the assembler consumes the op
 token and discards it. E3-T2 gives it real operands:
 
 ```cpp
-enum class VEReduceOp : uint8_t {
+enum class CMBReduceOp : uint8_t {
     MAX, MIN, SUM,      // scalar accumulator state
     MEAN, VAR           // moment state: [count, sum, sumsq]
 };
 
-struct VEReduceOperands {
-    VEReduceOp op = VEReduceOp::SUM;
+struct CMBReduceOperands {
+    CMBReduceOp op = CMBReduceOp::SUM;
     uint8_t phase = 0x3;    // bit 0: INIT (write the op identity),
                             // bit 1: ACCUMULATE (combine src into state),
                             // bit 2: FINALIZE (state -> stat values)
     uint8_t l1_src = 0;     // input L1 buffer (tile being consumed)
     uint8_t l1_acc = 0;     // accumulator L1 buffer (read-modify-write)
-    // element count rides the SET_TILE_DIM auto state, like VE_ELEMENTWISE
+    // element count rides the SET_TILE_DIM auto state, like CMB_ELEMENTWISE
 };
 ```
 
@@ -147,11 +147,11 @@ Design decisions:
   `INIT|ACCUMULATE`, then N-1 x `ACCUMULATE`, then `FINALIZE` (alone or
   fused with the last ACCUMULATE).
 - **Serializer impact:** the `DMInstruction` variant widens 17 → 18
-  (`VEReduceOperands` at index 17); static_asserts and the write/read
-  branches update accordingly (same drill as VEOperands in #100).
+  (`CMBReduceOperands` at index 17); static_asserts and the write/read
+  branches update accordingly (same drill as CMBOperands in #100).
   Existing `.kpubin` v2 files remain readable (new alternative appended).
-- The assembler's `parse_ve_reduce` parses
-  `VE_REDUCE op, src, acc [, INIT] [, FINALIZE]` (ACCUMULATE implied,
+- The assembler's `parse_cmb_reduce` parses
+  `CMB_REDUCE op, src, acc [, INIT] [, FINALIZE]` (ACCUMULATE implied,
   flags optional); the disassembler mirrors it.
 
 Semantics land in both value-producing executors, exactly as E2 did it:
@@ -192,7 +192,7 @@ is E8/E9 scope, where #139's remaining families get resolved).
 
 | Task | Content |
 |---|---|
-| T2 #105 (ISA/executor closure) | `VEReduceOperands` + assembler/disassembler/serializer round-trip (variant 18, static_asserts); behavioral running-combine semantics for MAX/MIN/SUM/MEAN/VAR incl. phase flags; CSP chained-accumulator validation test (resident-dep ordering) |
+| T2 #105 (ISA/executor closure) | `CMBReduceOperands` + assembler/disassembler/serializer round-trip (variant 18, static_asserts); behavioral running-combine semantics for MAX/MIN/SUM/MEAN/VAR incl. phase flags; CSP chained-accumulator validation test (resident-dep ordering) |
 | T3 #106 (generator) | `OnlineReductionScheduleGenerator` (FULL_REDUCE / ROW_STATS / ROW_NORMALIZE), envelope-derived realization selection, executable COMPUTEs, metadata stamping |
 | T4 #107 (functional + oracle) | Value-producing CSP execution via `FunctionalComputeBinder` for all five ops x forms, verified against independent host oracles (incl. Kahan-reference for SUM on long streams); behavioral ISA path for streamed ACCUMULATE/FINALIZE sequences |
 | T5 #108 (regression) | op x stream-length x envelope matrix (incl. realization boundary cases: row exactly fits / exceeds by one; empty and single-sample VAR/MEAN edge cases), credit conservation + accumulator-residency invariants, characterization on the epic; coverage row flips + #18 closure happen HERE, not before |

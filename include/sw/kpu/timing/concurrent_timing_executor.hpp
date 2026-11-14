@@ -191,12 +191,13 @@ public:
         double macs_per_cycle = 0.0;
         double compute_fill_per_edge = 2.0;     ///< fill + drain = this x the result's longer edge
 
-        // Vector units on the movers (spec movers.vector; docs/plans/csp-language.md step 3): a
+        // Vector units (docs/plans/csp-language.md step 3): the Combiner (spec combiner, timed on
+        // each streamer's L1 -> L2 drain) and the BlockMovers' (spec movers.vector.bm). A
         // tile-context stage costs ceil(elements / (lanes x rate)) cycles on its site. 0 lanes =
         // the site has none, and a stage scheduled there is refused. The fabric's stages run at
         // macs_per_cycle elements per cycle on the compute tile that holds the accumulator.
-        size_t str_ve_lanes = 0;
-        double str_ve_rate = 1.0;
+        size_t combiner_lanes = 0;
+        double combiner_rate = 1.0;
         size_t bm_ve_lanes = 0;
         double bm_ve_rate = 1.0;
 
@@ -405,7 +406,7 @@ public:
     /**
      * @brief A drain with a tile context: `fabric` stages run on the accumulator in the compute
      *        tile before it leaves (charged to that tile), then `drain` stages on the streamer's
-     *        vector unit as it moves L1 -> L2 (str.drain)
+     *        Combiner as it moves L1 -> L2 (`@ combiner`)
      */
     void schedule_drain(const TileDescriptor& tile, std::vector<VectorStage> fabric,
                         std::vector<VectorStage> drain, int streamer_id = -1);
@@ -413,7 +414,7 @@ public:
     /// Tile-context time, by site: busy cycles, and the cycles a vector unit slower than its
     /// move added to it. `fabric` is the epilogue time charged to the compute tiles.
     struct VectorStats {
-        Cycle str_busy = 0, str_bound = 0;
+        Cycle combiner_busy = 0, combiner_bound = 0;   // the Combiner (on each streamer's drain)
         Cycle bm_busy = 0, bm_bound = 0;
         Cycle fabric = 0;
     };
@@ -1282,7 +1283,9 @@ inline Cycle ConcurrentTimingExecutor::stage_cycles(const TileDescriptor& t, con
     if (stages.empty()) return 0;
     if (per_cycle == 0.0)
         throw std::invalid_argument(std::string("ConcurrentTimingExecutor: a tile context on ") + t.tile_id.to_string() +
-                                    " runs on the " + site + ", which have no vector unit");
+                                    " runs on the " + site +
+                                    (std::string(site) == "Combiner" ? ", which the machine does not have"
+                                                                     : ", which have no vector unit"));
     // Negated, so NaN fails too; a rate so small that the cycle count leaves Cycle's range is
     // refused rather than converted (the double -> integer conversion would be undefined).
     if (!(per_cycle > 0.0) || !std::isfinite(per_cycle))
@@ -1301,8 +1304,8 @@ inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile_
     TileDescriptor tile = tile_in;
     tile.fabric_cycles = stage_cycles(tile, fabric, config_.macs_per_cycle > 0.0 ? config_.macs_per_cycle : 1.0,
                                       "compute fabric");
-    tile.ve_cycles = stage_cycles(tile, drain, static_cast<double>(config_.str_ve_lanes) * config_.str_ve_rate,
-                                  "streamers");
+    tile.ve_cycles = stage_cycles(tile, drain, static_cast<double>(config_.combiner_lanes) * config_.combiner_rate,
+                                  "Combiner");
     std::vector<VectorStage> all = std::move(fabric);
     all.insert(all.end(), drain.begin(), drain.end());
     for (const VectorStage& st : all)
@@ -1325,8 +1328,8 @@ inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& t
 
 inline ConcurrentTimingExecutor::VectorStats ConcurrentTimingExecutor::vector_stats() const {
     VectorStats v;
-    for (const auto& st : row_streamers_) { v.str_busy += st->ve_busy_cycles(); v.str_bound += st->ve_bound_cycles(); }
-    for (const auto& st : col_streamers_) { v.str_busy += st->ve_busy_cycles(); v.str_bound += st->ve_bound_cycles(); }
+    for (const auto& st : row_streamers_) { v.combiner_busy += st->ve_busy_cycles(); v.combiner_bound += st->ve_bound_cycles(); }
+    for (const auto& st : col_streamers_) { v.combiner_busy += st->ve_busy_cycles(); v.combiner_bound += st->ve_bound_cycles(); }
     for (const auto& m : block_movers_) { v.bm_busy += m->ve_busy_cycles(); v.bm_bound += m->ve_bound_cycles(); }
     v.fabric = fabric_epilogue_cycles_;
     return v;
@@ -2189,7 +2192,7 @@ inline void ConcurrentTimingExecutor::apply_payload_event(const TimingEvent& eve
             ++drains_landed_[event.tile_id];
             copy_payload(MemoryLevel::COMPUTE, MemoryLevel::L1, event.tile_id, event.component_id);
             copy_payload(MemoryLevel::L1, MemoryLevel::L2, event.tile_id, event.slot_id);
-            apply_stages(MemoryLevel::L2, event.tile_id, drain_stages_);      // fabric + str.drain
+            apply_stages(MemoryLevel::L2, event.tile_id, drain_stages_);      // fabric + combiner
             // The result has moved to L2; free its array-side copies unless a
             // pending compute still holds it resident (issue #165).
             if (functional_payloads_enabled_ &&

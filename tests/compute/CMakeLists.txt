@@ -26,8 +26,8 @@ kpu_add_component_test(sfu_test "compute"
     test_sfu.cpp
 )
 
-# Vector Engine Tests
+# Combiner Tests
 
-kpu_add_component_test(vector_engine_test "compute"
-    test_vector_engine.cpp
+kpu_add_component_test(combiner_test "compute"
+    test_combiner.cpp
 )

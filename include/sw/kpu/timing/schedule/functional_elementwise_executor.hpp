@@ -21,33 +21,33 @@
 namespace sw::kpu::timing::schedule {
 
 /**
- * @brief Apply a VEOp to one element (same IEEE semantics as
- *        BehavioralProgramExecutor::execute_ve_elementwise)
+ * @brief Apply a CMBOp to one element (same IEEE semantics as
+ *        BehavioralProgramExecutor::execute_cmb_elementwise)
  *
  * Binary ops read both operands; unary ops read `a`; scalar-broadcast ops
  * read `a` and `scalar`. Division by zero, sqrt of negatives, and log of
  * non-positives follow IEEE-754 (inf/NaN propagate to the output, matching
  * the behavioral ISA executor so oracles can compare bit-for-bit).
  */
-inline float apply_ve_op(isa::VEOp op, float a, float b, float scalar) {
-    using isa::VEOp;
+inline float apply_cmb_op(isa::CMBOp op, float a, float b, float scalar) {
+    using isa::CMBOp;
     switch (op) {
-        case VEOp::ADD:   return a + b;
-        case VEOp::SUB:   return a - b;
-        case VEOp::MUL:   return a * b;
-        case VEOp::DIV:   return a / b;
-        case VEOp::MAX:   return a > b ? a : b;
-        case VEOp::MIN:   return a < b ? a : b;
-        case VEOp::NEG:   return -a;
-        case VEOp::ABS:   return std::fabs(a);
-        case VEOp::SQRT:  return std::sqrt(a);
-        case VEOp::EXP:   return std::exp(a);
-        case VEOp::LOG:   return std::log(a);
-        case VEOp::ADD_S: return a + scalar;
-        case VEOp::MUL_S: return a * scalar;
-        case VEOp::POW_S: return std::pow(a, scalar);
+        case CMBOp::ADD:   return a + b;
+        case CMBOp::SUB:   return a - b;
+        case CMBOp::MUL:   return a * b;
+        case CMBOp::DIV:   return a / b;
+        case CMBOp::MAX:   return a > b ? a : b;
+        case CMBOp::MIN:   return a < b ? a : b;
+        case CMBOp::NEG:   return -a;
+        case CMBOp::ABS:   return std::fabs(a);
+        case CMBOp::SQRT:  return std::sqrt(a);
+        case CMBOp::EXP:   return std::exp(a);
+        case CMBOp::LOG:   return std::log(a);
+        case CMBOp::ADD_S: return a + scalar;
+        case CMBOp::MUL_S: return a * scalar;
+        case CMBOp::POW_S: return std::pow(a, scalar);
     }
-    throw std::invalid_argument("Unknown VEOp");
+    throw std::invalid_argument("Unknown CMBOp");
 }
 
 /**
@@ -81,7 +81,7 @@ public:
     /**
      * @brief Execute C = op(A[, B]) end-to-end on the CSP executor
      *
-     * @param op      VEOp consistent with the configured form: binary ops for
+     * @param op      CMBOp consistent with the configured form: binary ops for
      *                BINARY/BROADCAST_B, unary and scalar ops for UNARY
      * @param a       A tensor, num_elements values
      * @param b       B tensor: num_elements (BINARY), one tile of
@@ -89,7 +89,7 @@ public:
      *                empty (UNARY)
      * @param scalar  Operand for ADD_S / MUL_S / POW_S
      */
-    Result run(isa::VEOp op, const std::vector<float>& a,
+    Result run(isa::CMBOp op, const std::vector<float>& a,
                const std::vector<float>& b = {}, float scalar = 0.0f) {
         validate_inputs(op, a, b);
 
@@ -134,18 +134,18 @@ private:
     ElementwiseScheduleGenerator::Config generator_config_;
     ConcurrentTimingExecutor::Config executor_config_;
 
-    void validate_inputs(isa::VEOp op, const std::vector<float>& a,
+    void validate_inputs(isa::CMBOp op, const std::vector<float>& a,
                          const std::vector<float>& b) const {
         const auto& cfg = generator_config_;
         if (a.size() != cfg.num_elements) {
             throw std::invalid_argument("A tensor size does not match num_elements");
         }
         const bool binary_op = static_cast<uint8_t>(op) <=
-                               static_cast<uint8_t>(isa::VEOp::MIN);
+                               static_cast<uint8_t>(isa::CMBOp::MIN);
         switch (cfg.form) {
             case Form::BINARY:
                 if (!binary_op) {
-                    throw std::invalid_argument("BINARY form requires a binary VEOp");
+                    throw std::invalid_argument("BINARY form requires a binary CMBOp");
                 }
                 if (b.size() != cfg.num_elements) {
                     throw std::invalid_argument("B tensor size does not match num_elements");
@@ -153,7 +153,7 @@ private:
                 break;
             case Form::BROADCAST_B: {
                 if (!binary_op) {
-                    throw std::invalid_argument("BROADCAST_B form requires a binary VEOp");
+                    throw std::invalid_argument("BROADCAST_B form requires a binary CMBOp");
                 }
                 const Size b_elems = std::min(cfg.tile_elems, cfg.num_elements);
                 if (b.size() != b_elems) {
@@ -165,7 +165,7 @@ private:
             }
             case Form::UNARY:
                 if (binary_op) {
-                    throw std::invalid_argument("UNARY form requires a unary or scalar VEOp");
+                    throw std::invalid_argument("UNARY form requires a unary or scalar CMBOp");
                 }
                 if (!b.empty()) {
                     throw std::invalid_argument("UNARY form takes no B tensor");
@@ -203,7 +203,7 @@ private:
      * {A, B} (binary/broadcast). A partial trailing A tile pairs with the
      * leading elements of a full broadcast B tile.
      */
-    static TilePayload apply_elementwise(isa::VEOp op, float scalar,
+    static TilePayload apply_elementwise(isa::CMBOp op, float scalar,
                                          const std::vector<TilePayload>& inputs) {
         if (inputs.empty()) {
             throw std::invalid_argument("Elementwise compute received no inputs");
@@ -215,7 +215,7 @@ private:
         }
         TilePayload out{a.rows, a.cols, std::vector<float>(a.values.size())};
         for (size_t i = 0; i < a.values.size(); ++i) {
-            out.values[i] = apply_ve_op(op, a.values[i],
+            out.values[i] = apply_cmb_op(op, a.values[i],
                                         b != nullptr ? b->values[i] : 0.0f, scalar);
         }
         return out;

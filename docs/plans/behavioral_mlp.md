@@ -27,7 +27,7 @@ Host Memory (input matrices A, B, weights, bias)
          Compute Fabric                   (matmul: C = A @ B)
                  │
                  ▼
-         Vector Engine                    (bias + activation)
+         Combiner                    (bias + activation)
                  │
                  ▼
             L2 Bank[2]                    (result buffer)
@@ -104,14 +104,14 @@ public:
 
 ---
 
-### Phase 2: BehavioralVectorEngine
+### Phase 2: BehavioralCombiner
 
 **Purpose:** Apply bias addition and activation functions.
 
-**File:** `include/sw/kpu/behavioral/vector_engine.hpp`
+**File:** `include/sw/kpu/behavioral/combiner.hpp`
 
 ```cpp
-class BehavioralVectorEngine {
+class BehavioralCombiner {
 public:
     // Process tile in L2: output[i,j] = activation(input[i,j] + bias[j])
     void apply_bias_activation(
@@ -130,7 +130,7 @@ private:
 };
 ```
 
-**Implementation:** `src/models/behavioral/compute/vector_engine.cpp`
+**Implementation:** `src/models/behavioral/compute/combiner.cpp`
 - Reuse `SFU::evaluate()` for activation functions
 - Bias is row-broadcast: each row gets the same bias vector added
 
@@ -150,7 +150,7 @@ public:
         BehavioralComputeFabric* compute;
         BehavioralDMAEngine* dma;
         BehavioralBlockMover* block_mover;
-        BehavioralVectorEngine* vector_engine;
+        BehavioralCombiner* combiner;
 
         // Resource counts
         uint8_t num_l3_tiles = 4;
@@ -345,10 +345,10 @@ int main() {
     BehavioralComputeFabric compute({});
     BehavioralDMAEngine dma({});
     BehavioralBlockMover block_mover;
-    BehavioralVectorEngine vector_engine;
+    BehavioralCombiner combiner;
 
     BehavioralOrchestrator orchestrator({
-        &memory, &compute, &dma, &block_mover, &vector_engine
+        &memory, &compute, &dma, &block_mover, &combiner
     });
 
     // XOR network with pre-trained weights
@@ -453,7 +453,7 @@ include/sw/kpu/behavioral/
 ├── dma_engine.hpp            # (exists)
 ├── compute_fabric.hpp        # (exists)
 ├── block_mover.hpp           # NEW
-├── vector_engine.hpp         # NEW
+├── combiner.hpp         # NEW
 ├── orchestrator.hpp          # NEW
 └── mlp_executor.hpp          # NEW
 
@@ -465,7 +465,7 @@ src/models/behavioral/
 │   └── block_mover.cpp       # NEW
 ├── compute/
 │   ├── compute_fabric.cpp    # (exists)
-│   └── vector_engine.cpp     # NEW
+│   └── combiner.cpp     # NEW
 ├── orchestrator.cpp          # NEW
 └── mlp_executor.cpp          # NEW
 
@@ -492,7 +492,7 @@ set(BEHAVIORAL_SOURCES
     datamovement/dma_engine.cpp
     datamovement/block_mover.cpp      # NEW
     compute/compute_fabric.cpp
-    compute/vector_engine.cpp         # NEW
+    compute/combiner.cpp         # NEW
     noc/noc.cpp
     orchestrator.cpp                  # NEW
     mlp_executor.cpp                  # NEW
@@ -523,7 +523,7 @@ add_test(NAME behavioral_xor COMMAND xor_behavioral)
 | Phase | Component | Dependencies | Effort |
 |-------|-----------|--------------|--------|
 | 1 | BehavioralBlockMover | BehavioralMemoryModel | Small |
-| 2 | BehavioralVectorEngine | SFU | Small |
+| 2 | BehavioralCombiner | SFU | Small |
 | 3 | BehavioralOrchestrator | Phases 1-2, existing components | Medium |
 | 4 | BehavioralMLPExecutor | Phase 3 | Small |
 | 5 | Examples & Tests | Phase 4 | Small |
@@ -534,7 +534,7 @@ add_test(NAME behavioral_xor COMMAND xor_behavioral)
 
 1. **Unit Tests:**
    - BlockMover: verify copy and transpose
-   - VectorEngine: verify bias+activation for each activation type
+   - Combiner: verify bias+activation for each activation type
    - Orchestrator: verify single matmul produces correct results
 
 2. **Integration Tests:**
@@ -559,7 +559,7 @@ add_test(NAME behavioral_xor COMMAND xor_behavioral)
 
 1. **Skip L1:** Behavioral model operates on L2 data directly. L1's role is temporal stream generation (systolic array feeding) - that's for the temporal model.
 
-2. **Reuse SFU:** The existing `SFU` class provides LUT-based activation evaluation. BehavioralVectorEngine wraps it with bias broadcast.
+2. **Reuse SFU:** The existing `SFU` class provides LUT-based activation evaluation. BehavioralCombiner wraps it with bias broadcast.
 
 3. **Stateless Orchestrator:** Each execution is self-contained. Allocations are reset between calls.
 

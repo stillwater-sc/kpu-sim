@@ -31,7 +31,7 @@ Three example kernels demonstrate different compute patterns:
 |--------|------|------------|-------------|
 | MatMul | `matmul_16x16x16.kpuasm` | 16×16×16 | Single-tile matrix multiplication |
 | Conv2D | `conv2d_im2col.kpuasm` | 36×8×36 | 2D convolution via im2col + matmul |
-| Softmax | `softmax_batch.kpuasm` | 4×16 | Multi-pass softmax with Vector Engine |
+| Softmax | `softmax_batch.kpuasm` | 4×16 | Multi-pass softmax with Combiner |
 
 ## Prerequisites
 

@@ -4,7 +4,7 @@
  * @version 0.3.4
  *
  * Tracks utilization of hardware resources:
- *   - Compute units (systolic array, vector engine)
+ *   - Compute units (systolic array, Combiner)
  *   - Memory controllers
  *   - Data movement units (DMA, BlockMover, Streamer)
  *   - NoC links
@@ -32,7 +32,7 @@ namespace sw::kpu::stats {
  */
 enum class ResourceType : uint8_t {
     SYSTOLIC_ARRAY = 0,
-    VECTOR_ENGINE = 1,
+    COMBINER = 1,
     MEMORY_CONTROLLER = 2,
     DMA_ENGINE = 3,
     BLOCK_MOVER = 4,
@@ -47,7 +47,7 @@ enum class ResourceType : uint8_t {
 constexpr const char* to_string(ResourceType type) {
     switch (type) {
         case ResourceType::SYSTOLIC_ARRAY: return "systolic_array";
-        case ResourceType::VECTOR_ENGINE: return "vector_engine";
+        case ResourceType::COMBINER: return "combiner";
         case ResourceType::MEMORY_CONTROLLER: return "memory_controller";
         case ResourceType::DMA_ENGINE: return "dma_engine";
         case ResourceType::BLOCK_MOVER: return "block_mover";

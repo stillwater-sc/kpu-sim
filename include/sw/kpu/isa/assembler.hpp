@@ -214,8 +214,8 @@ private:
     DMInstruction parse_str_drain_output();
     DMInstruction parse_str_broadcast_row();
     DMInstruction parse_str_broadcast_col();
-    DMInstruction parse_ve_elementwise();
-    DMInstruction parse_ve_reduce();
+    DMInstruction parse_cmb_elementwise();
+    DMInstruction parse_cmb_reduce();
     DMInstruction parse_barrier();
     DMInstruction parse_wait_dma();
     DMInstruction parse_wait_bm();

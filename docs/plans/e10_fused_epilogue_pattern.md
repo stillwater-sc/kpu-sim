@@ -29,7 +29,7 @@ Z = A @ B                      (the GEMM/conv accumulator)
 Y = act(Z + bias[col])         (the fused epilogue)
 ```
 
-For the KPU this is a Vector Engine tail on the systolic-array output: bias is a
+For the KPU this is a Combiner tail on the systolic-array output: bias is a
 per-output-column (channel) broadcast operand (P5), activation is elementwise.
 
 ## 2. What already exists (the fusion is functional)
@@ -63,7 +63,7 @@ generator/activation-breadth work beyond the M2 gate.** Rationale:
   `{NONE, RELU}`; ResNet uses ReLU. Richer activations (GELU/SiLU/sigmoid/…,
   needed by transformers/MLPs) are an **E10 follow-on**, not an M2 blocker.
 - **Dedicated tiled-epilogue generators (#47) are an optimization.** A schedule
-  generator that emits the epilogue as an explicit fused DRAIN-path VE pass
+  generator that emits the epilogue as an explicit fused DRAIN-path Combiner pass
   (vs. folding it into the compute) is the epic's generator task; it changes
   *how* the fuse is expressed, not *whether* M2's values are correct. Deferred.
 
@@ -92,7 +92,7 @@ elementwise against a host oracle `Y = act(A@B + bias)`:
 |---|---|---|
 | T1 (this) | Formalize the fused-epilogue pattern; decide M2 scope | design |
 | T2 (ISA/executor) | **Already done** — `MatMulComputeSpec` bias+activation | done |
-| T3 (generator) | Dedicated tiled fused-epilogue / DRAIN-path VE generator (#47) | **follow-on** |
+| T3 (generator) | Dedicated tiled fused-epilogue / DRAIN-path Combiner generator (#47) | **follow-on** |
 | T4 (functional) | **Already done** — M1 (#137) + E6-T4 (#122) oracle checks | done |
 | T5 (regression) | The bias × activation × shape/envelope matrix of §4 | **M2 gate** |
 

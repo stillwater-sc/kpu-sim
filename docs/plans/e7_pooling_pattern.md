@@ -35,7 +35,7 @@ compute kernel and no new movement machinery for M2.** Concretely:
 
 - **Windowed pooling (max/avg)** = a **per-channel im2col** producing
   `Xwin[c] = [N*Hout*Wout, Kh*Kw]`, reduced along the `Kh*Kw` axis by
-  `VE_REDUCE` (`MAX` for max-pool, `MEAN` for avg-pool). This is the E6 im2col
+  `CMB_REDUCE` (`MAX` for max-pool, `MEAN` for avg-pool). This is the E6 im2col
   patchify (Section 3) specialized to a **single channel** (`K = Kh*Kw`, not
   `Cin*Kh*Kw`) followed by an E3 reduce, instead of a GEMM.
 - **Global average pool** = a **full per-channel spatial reduction**
@@ -44,7 +44,7 @@ compute kernel and no new movement machinery for M2.** Concretely:
 
 Rationale (mirrors the conv2d im2col decision):
 
-- **Both primitives already exist.** The `VE_REDUCE` op set is `{MAX, MIN, SUM,
+- **Both primitives already exist.** The `CMB_REDUCE` op set is `{MAX, MIN, SUM,
   MEAN, VAR}` (E3), so max-pool = `MAX`, avg-pool = `MEAN`, gap = `MEAN` over the
   whole plane — **no new reduction kernel**. The im2col patchify
   (`conv2d_im2col.hpp`) already materializes window rows.
@@ -66,7 +66,7 @@ Rationale (mirrors the conv2d im2col decision):
   (count-excludes-padding for partial border windows) and the oracle pins it.
 - **gap** is `MEAN` over exactly `H*W` valid elements — no padding.
 
-The reduce itself is `VE_REDUCE`; the pooling-specific parts are the **window
+The reduce itself is `CMB_REDUCE`; the pooling-specific parts are the **window
 patchify** (per-channel, `-inf` vs `0` fill) and the **avg count**.
 
 ## 4. Reuse map
@@ -74,14 +74,14 @@ patchify** (per-channel, `-inf` vs `0` fill) and the **avg count**.
 | Need | Reused from | New in E7 |
 |---|---|---|
 | Window row materialization | E6 `conv2d_im2col.hpp` im2col patchify | per-channel `K=Kh*Kw`, `-inf` fill for max |
-| Max / mean reduce value plane | E3 `VE_REDUCE {MAX, MEAN}` + `FunctionalReductionExecutor` | pooling reduce binding |
+| Max / mean reduce value plane | E3 `CMB_REDUCE {MAX, MEAN}` + `FunctionalReductionExecutor` | pooling reduce binding |
 | Global average pool | E3 `FULL_REDUCE` (MEAN) per channel | per-channel driver |
 | Executable reduce COMPUTE before DRAIN | conv2d-T3 / batchnorm-T3 COMPUTE-emission | pooling generator emission (avoids #139 from the start) |
 | Host oracle | `ref_pool2d` (compute_harness.hpp) MAX/AVG/ADAPTIVE_AVG | — |
 
 ## 5. Value path — no new kernel
 
-The pooling COMPUTE is a `FunctionalComputeSpec` (or the E3 `VE_REDUCE` reduce
+The pooling COMPUTE is a `FunctionalComputeSpec` (or the E3 `CMB_REDUCE` reduce
 spec) whose operation reduces the window-row input tile to one output element per
 output position (`MAX`/`MEAN`). Like batchnorm (E9), pooling is a **Vector-Engine
 op, not a systolic-array (matmul) op** — it uses the functional/reduction value
@@ -92,7 +92,7 @@ pooling never has the #139 DRAIN-without-COMPUTE defect.
 ## 6. Scope for M2; deferred
 
 - **In:** max-pool, avg-pool (windowed, strided, padded), global average pool —
-  via im2col-window + `VE_REDUCE` and E3 full-reduce.
+  via im2col-window + `CMB_REDUCE` and E3 full-reduce.
 - **Deferred (E7 follow-on, off the M2 path):** the **direct sliding-window /
   halo (P2)** realization (perf; the `Kh*Kw` im2col re-reads become on-chip halo
   overlap), shared with conv's direct path — built once when perf demands it.
@@ -112,8 +112,8 @@ envelope and T5 asserts the refusal boundary.
 
 | Task | Content |
 |---|---|
-| T2 (ISA/executor closure) | Confirm `VE_REDUCE {MAX, MEAN}` + the functional/reduction value path cover pooling (they do); add the per-channel window-patchify helper (`-inf` fill for max, count for avg) + a `pool2d_reference` oracle wrapper; no new executor kernel |
-| T3 (generator) | A `PoolingScheduleGenerator`: per-channel window im2col + executable `VE_REDUCE` COMPUTE (max/avg) before each drain; a global-average-pool mode (E3 full-reduce); envelope stamping. Executable from the start (no #139) |
+| T2 (ISA/executor closure) | Confirm `CMB_REDUCE {MAX, MEAN}` + the functional/reduction value path cover pooling (they do); add the per-channel window-patchify helper (`-inf` fill for max, count for avg) + a `pool2d_reference` oracle wrapper; no new executor kernel |
+| T3 (generator) | A `PoolingScheduleGenerator`: per-channel window im2col + executable `CMB_REDUCE` COMPUTE (max/avg) before each drain; a global-average-pool mode (E3 full-reduce); envelope stamping. Executable from the start (no #139) |
 | T4 (functional + oracle) | Value-producing max/avg/gap on the CSP executor vs `ref_pool2d` across window/stride/pad/global; a `pooling_simulator` tile-log artifact |
 | T5 (regression) | shape × (pool-type) × envelope matrix, credit/stall invariants, refusal boundary, characterization |
 

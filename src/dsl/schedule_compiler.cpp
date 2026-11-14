@@ -287,7 +287,7 @@ void CompileContext::emit_op(const ScheduleOp& op) {
             case ElementwiseOp::RELU: op_name = "RELU"; break;
             default: op_name = "EWISE"; break;
         }
-        instr.label = "VE_ELEMENTWISE(" + op_name + ")";
+        instr.label = "CMB_ELEMENTWISE(" + op_name + ")";
         emit(instr);
         break;
     }
@@ -295,9 +295,9 @@ void CompileContext::emit_op(const ScheduleOp& op) {
     case ScheduleOpKind::COMPUTE_REDUCE: {
         DMInstruction instr;
         instr.opcode = DMOpcode::NOP;
-        instr.label = (op.reduce_op == ReductionOp::MAX) ? "VE_REDUCE(MAX)" :
-                      (op.reduce_op == ReductionOp::SUM) ? "VE_REDUCE(SUM)" :
-                                                            "VE_REDUCE(MIN)";
+        instr.label = (op.reduce_op == ReductionOp::MAX) ? "CMB_REDUCE(MAX)" :
+                      (op.reduce_op == ReductionOp::SUM) ? "CMB_REDUCE(SUM)" :
+                                                            "CMB_REDUCE(MIN)";
         emit(instr);
         break;
     }

@@ -5,7 +5,7 @@
 **Date:** 2026-07-12
 **Unlocks:** bias application, residual add, SwiGLU gating, RoPE tables,
 BatchNorm scale/shift — the elementwise substrate of milestone M2 (ResNet)
-and the numerical half of #18 for VE_ELEMENTWISE.
+and the numerical half of #18 for CMB_ELEMENTWISE.
 
 ---
 
@@ -70,14 +70,14 @@ TagCAM ref-counts are seeded correctly at MOVE time rather than
 accumulated by duplicate moves. This preserves credit conservation:
 1 credit per entry, released at ref 0 after k feeds.
 
-## 2. VE_ELEMENTWISE operand encoding (the #18 numerical half, E2's share)
+## 2. CMB_ELEMENTWISE operand encoding (the #18 numerical half, E2's share)
 
-Today `VE_ELEMENTWISE` carries `std::monostate` — a structural marker
+Today `CMB_ELEMENTWISE` carries `std::monostate` — a structural marker
 (#142). E2-T2 gives it real operands:
 
 ```cpp
-struct VEOperands {
-    VEOp op;              // ADD, SUB, MUL, DIV, MAX, MIN,
+struct CMBOperands {
+    CMBOp op;              // ADD, SUB, MUL, DIV, MAX, MIN,
                           // NEG, ABS, SQRT, EXP, LOG,      (unary)
                           // ADD_S, MUL_S, POW_S            (scalar-broadcast)
     uint8_t num_inputs;   // 1 (unary), 2 (binary)
@@ -93,10 +93,10 @@ Semantics land in **both value-producing executors**:
   application over the addressed L1 buffers (reusing the typed kernels in
   `quantization/kernels.hpp` for dtype coverage).
 - CSP tier: elementwise computes ride `FunctionalComputeSpec` (already
-  functional); the VE encoding is what lets *ISA programs* (the #142
+  functional); the Combiner encoding is what lets *ISA programs* (the #142
   kernel-factory output) execute rather than only hand-built specs.
 
-`VE_REDUCE` encoding is deliberately **out of E2's scope** — running
+`CMB_REDUCE` encoding is deliberately **out of E2's scope** — running
 max/sum/mean/var reduction state is E3's core design (#104) and shares
 the struct layout but not the semantics.
 
@@ -104,7 +104,7 @@ the struct layout but not the semantics.
 
 | Task | Content |
 |---|---|
-| T2 #100 (ISA/executor closure) | `VEOperands` + assembler/disassembler/serializer round-trip; behavioral executor semantics for unary/binary/scalar forms; CSP broadcast ref-count seeding (MOVE with consumer count); `STR_BROADCAST_*` timing in both executors |
+| T2 #100 (ISA/executor closure) | `CMBOperands` + assembler/disassembler/serializer round-trip; behavioral executor semantics for unary/binary/scalar forms; CSP broadcast ref-count seeding (MOVE with consumer count); `STR_BROADCAST_*` timing in both executors |
 | T3 #101 (generator) | `ElementwiseScheduleGenerator` (paired two-stream emission, envelope 3-tile working set) + broadcast emission helper (1:1:k discipline) usable by the norm/epilogue generators; resolves #139 for the elementwise family by emitting COMPUTE with both-operand deps |
 | T4 #102 (functional + oracle) | End-to-end CSP execution of `C = op(A, B)` and bias-broadcast cases with elementwise host-oracle comparison (the #66 payload machinery); ISA-program path validated via BehavioralProgramExecutor |
 | T5 #103 (regression) | Execution matrix (op × shape × envelope, incl. constrained envelopes + partitioned credits), stall/credit invariants, coverage-matrix row updates (elementwise + broadcast → functional/regression done; #18 elementwise half closed) |
@@ -119,7 +119,7 @@ the struct layout but not the semantics.
   partition exhausted), the other must not consume unbounded buffers —
   bounded by paired emission + the envelope bound; asserted under
   constrained envelopes in T5.
-- `VEOperands` widens the `DMInstruction` variant — serializer format
+- `CMBOperands` widens the `DMInstruction` variant — serializer format
   version bump required (`.kpubin` compatibility note in T2).
 
 ## 5. Coverage-matrix effect (on epic completion)

@@ -5,7 +5,7 @@ set(DATAMOVEMENT_COMPONENT_SOURCES
     dma_engine.cpp
     block_mover.cpp
     streamer.cpp
-    vector_engine.cpp
+    combiner.cpp
     l3_interconnect.cpp
     stateful_block_mover.cpp
     cycle_accurate_dma_engine.cpp
@@ -28,7 +28,7 @@ target_include_directories(kpu_datamovement_components
 target_link_libraries(kpu_datamovement_components
     PUBLIC
         kpu_memory_components  # DATAMOVEMENT components depend on memory components (includes AddressDecoder)
-        kpu_compute_components # VectorEngine depends on SFU from compute components
+        kpu_compute_components # Combiner depends on SFU from compute components
         kpu_trace             # For cycle-accurate tracing
         kpu_noc               # NoC for L3-to-L3 transfers
         kpu_behavioral        # Factories reference behavioral implementations

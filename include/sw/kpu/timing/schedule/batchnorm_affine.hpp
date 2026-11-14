@@ -13,7 +13,7 @@
 //   shift[c] = beta[c] - mean[c] * scale[c]
 //   =>  y[n,c,h,w] = x[n,c,h,w] * scale[c] + shift[c]
 //
-// So BN inference is a per-channel broadcast-affine — a Vector Engine op on the
+// So BN inference is a per-channel broadcast-affine — a Combiner op on the
 // existing FunctionalComputeSpec value path, no new compute kernel. This header
 // provides the host-side fold (the T3 generator loads scale/shift instead of the
 // four raw params, halving resident params to 2C+1) and a direct BN reference

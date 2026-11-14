@@ -47,7 +47,7 @@ KPU_C_API KPUKernelHandle kpu_kernel_create_matmul(KPUSize M, KPUSize N, KPUSize
  * - bias is N (optional)
  * - C is M x N (output)
  *
- * The Vector Engine applies bias and activation inline during
+ * The Combiner applies bias and activation inline during
  * the output drain phase, avoiding extra memory passes.
  *
  * @param M Rows of A and C

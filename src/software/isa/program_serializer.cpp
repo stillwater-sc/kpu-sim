@@ -218,11 +218,11 @@ void ProgramSerializer::write_instruction(std::vector<uint8_t>& buffer, const DM
             write_value(buffer, arg.width);
             write_value(buffer, arg.fabric_size);
             write_value(buffer, static_cast<uint8_t>(arg.buffer));
-            // VE fields
-            write_value(buffer, static_cast<uint8_t>(arg.ve_enabled ? 1 : 0));
-            write_value(buffer, static_cast<uint8_t>(arg.ve_activation));
-            write_value(buffer, static_cast<uint8_t>(arg.ve_bias_enabled ? 1 : 0));
-            write_value(buffer, arg.ve_bias_addr);
+            // Combiner fields
+            write_value(buffer, static_cast<uint8_t>(arg.cmb_enabled ? 1 : 0));
+            write_value(buffer, static_cast<uint8_t>(arg.cmb_activation));
+            write_value(buffer, static_cast<uint8_t>(arg.cmb_bias_enabled ? 1 : 0));
+            write_value(buffer, arg.cmb_bias_addr);
         } else if constexpr (std::is_same_v<T, SyncOperands>) {
             write_value(buffer, arg.wait_mask);
             write_value(buffer, arg.signal_id);
@@ -239,14 +239,14 @@ void ProgramSerializer::write_instruction(std::vector<uint8_t>& buffer, const DM
             write_value(buffer, arg.stride_m);
             write_value(buffer, arg.stride_n);
             write_value(buffer, arg.stride_k);
-        } else if constexpr (std::is_same_v<T, VEOperands>) {
+        } else if constexpr (std::is_same_v<T, CMBOperands>) {
             write_value(buffer, static_cast<uint8_t>(arg.op));
             write_value(buffer, arg.num_inputs);
             write_value(buffer, arg.scalar);
             write_value(buffer, arg.l1_src_a);
             write_value(buffer, arg.l1_src_b);
             write_value(buffer, arg.l1_dst);
-        } else if constexpr (std::is_same_v<T, VEReduceOperands>) {
+        } else if constexpr (std::is_same_v<T, CMBReduceOperands>) {
             write_value(buffer, static_cast<uint8_t>(arg.op));
             write_value(buffer, arg.phase);
             write_value(buffer, arg.l1_src);
@@ -354,11 +354,11 @@ size_t ProgramSerializer::read_instruction(const std::vector<uint8_t>& data, siz
             ops.width = read_value<Size>(data, offset);
             ops.fabric_size = read_value<Size>(data, offset);
             ops.buffer = static_cast<BufferSlot>(read_value<uint8_t>(data, offset));
-            // VE fields
-            ops.ve_enabled = read_value<uint8_t>(data, offset) != 0;
-            ops.ve_activation = static_cast<ActivationType>(read_value<uint8_t>(data, offset));
-            ops.ve_bias_enabled = read_value<uint8_t>(data, offset) != 0;
-            ops.ve_bias_addr = read_value<Address>(data, offset);
+            // Combiner fields
+            ops.cmb_enabled = read_value<uint8_t>(data, offset) != 0;
+            ops.cmb_activation = static_cast<ActivationType>(read_value<uint8_t>(data, offset));
+            ops.cmb_bias_enabled = read_value<uint8_t>(data, offset) != 0;
+            ops.cmb_bias_addr = read_value<Address>(data, offset);
             instr.operands = ops;
             break;
         }
@@ -390,9 +390,9 @@ size_t ProgramSerializer::read_instruction(const std::vector<uint8_t>& data, siz
             instr.operands = ops;
             break;
         }
-        case 16: { // VEOperands (issue #100)
-            VEOperands ops;
-            ops.op = static_cast<VEOp>(read_value<uint8_t>(data, offset));
+        case 16: { // CMBOperands (issue #100)
+            CMBOperands ops;
+            ops.op = static_cast<CMBOp>(read_value<uint8_t>(data, offset));
             ops.num_inputs = read_value<uint8_t>(data, offset);
             ops.scalar = read_value<float>(data, offset);
             ops.l1_src_a = read_value<uint8_t>(data, offset);
@@ -401,9 +401,9 @@ size_t ProgramSerializer::read_instruction(const std::vector<uint8_t>& data, siz
             instr.operands = ops;
             break;
         }
-        case 17: { // VEReduceOperands (issue #105, format v3)
-            VEReduceOperands ops;
-            ops.op = static_cast<VEReduceOp>(read_value<uint8_t>(data, offset));
+        case 17: { // CMBReduceOperands (issue #105, format v3)
+            CMBReduceOperands ops;
+            ops.op = static_cast<CMBReduceOp>(read_value<uint8_t>(data, offset));
             ops.phase = read_value<uint8_t>(data, offset);
             ops.l1_src = read_value<uint8_t>(data, offset);
             ops.l1_acc = read_value<uint8_t>(data, offset);
@@ -418,19 +418,19 @@ size_t ProgramSerializer::read_instruction(const std::vector<uint8_t>& data, siz
 }
 
 // Guard against variant drift: the serialized operand-type tag is the
-// variant index, so VEOperands must stay at 16 and VEReduceOperands at 17
+// variant index, so CMBOperands must stay at 16 and CMBReduceOperands at 17
 // unless the format version is bumped again
 static_assert(std::variant_size_v<decltype(DMInstruction::operands)> == 18,
               "DMInstruction operand variant changed - update the serializer "
               "cases and bump DMPROGRAM_VERSION");
 static_assert(std::is_same_v<
                   std::variant_alternative_t<16, decltype(DMInstruction::operands)>,
-                  VEOperands>,
-              "VEOperands moved in the operand variant - update case 16");
+                  CMBOperands>,
+              "CMBOperands moved in the operand variant - update case 16");
 static_assert(std::is_same_v<
                   std::variant_alternative_t<17, decltype(DMInstruction::operands)>,
-                  VEReduceOperands>,
-              "VEReduceOperands moved in the operand variant - update case 17");
+                  CMBReduceOperands>,
+              "CMBReduceOperands moved in the operand variant - update case 17");
 
 // ============================================================================
 // Memory Map Serialization
@@ -687,10 +687,10 @@ static json instruction_to_json(const DMInstruction& instr) {
                 {"width", arg.width},
                 {"fabric_size", arg.fabric_size},
                 {"buffer", static_cast<int>(arg.buffer)},
-                {"ve_enabled", arg.ve_enabled},
-                {"ve_activation", static_cast<int>(arg.ve_activation)},
-                {"ve_bias_enabled", arg.ve_bias_enabled},
-                {"ve_bias_addr", arg.ve_bias_addr}
+                {"cmb_enabled", arg.cmb_enabled},
+                {"cmb_activation", static_cast<int>(arg.cmb_activation)},
+                {"cmb_bias_enabled", arg.cmb_bias_enabled},
+                {"cmb_bias_addr", arg.cmb_bias_addr}
             };
         } else if constexpr (std::is_same_v<T, SyncOperands>) {
             j["operands"] = json{
@@ -773,10 +773,16 @@ static DMInstruction instruction_from_json(const json& j) {
             o.width = ops.at("width").get<Size>();
             o.fabric_size = ops.at("fabric_size").get<Size>();
             o.buffer = static_cast<BufferSlot>(ops.at("buffer").get<int>());
-            o.ve_enabled = ops.at("ve_enabled").get<bool>();
-            o.ve_activation = static_cast<ActivationType>(ops.at("ve_activation").get<int>());
-            o.ve_bias_enabled = ops.at("ve_bias_enabled").get<bool>();
-            o.ve_bias_addr = ops.at("ve_bias_addr").get<Address>();
+            // The Combiner fields (#429). Programs written before the rename spell them
+            // ve_*: read either, deprecated for one release.
+            const auto cmb = [&ops](const char* key) -> const json& {
+                const std::string k(key);
+                return ops.contains(k) ? ops.at(k) : ops.at("ve_" + k.substr(4));
+            };
+            o.cmb_enabled = cmb("cmb_enabled").get<bool>();
+            o.cmb_activation = static_cast<ActivationType>(cmb("cmb_activation").get<int>());
+            o.cmb_bias_enabled = cmb("cmb_bias_enabled").get<bool>();
+            o.cmb_bias_addr = cmb("cmb_bias_addr").get<Address>();
             instr.operands = o;
         } else if (type == "Sync") {
             SyncOperands o;

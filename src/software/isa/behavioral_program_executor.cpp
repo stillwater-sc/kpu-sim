@@ -221,7 +221,7 @@ void BehavioralProgramExecutor::dispatch(const DMInstruction& instr, [[maybe_unu
         break;
 
     // Broadcast: deliver a resident operand L2 -> L1 exactly once, for
-    // consumption by any number of subsequent VE/compute ops (the ISA-level
+    // consumption by any number of subsequent Combiner/compute ops (the ISA-level
     // counterpart of the CSP 1:1:k seeded delivery, issues #100/#102).
     // Unlike a feed, a broadcast never participates in the A/B feed pairing
     // and never fires a compute. Legacy monostate markers remain no-ops.
@@ -232,19 +232,19 @@ void BehavioralProgramExecutor::dispatch(const DMInstruction& instr, [[maybe_unu
         }
         break;
 
-    case DMOpcode::VE_ELEMENTWISE:
-        // Functional when carrying VEOperands (issue #100); legacy
+    case DMOpcode::CMB_ELEMENTWISE:
+        // Functional when carrying CMBOperands (issue #100); legacy
         // monostate markers remain no-ops
-        if (std::holds_alternative<VEOperands>(instr.operands)) {
-            execute_ve_elementwise(std::get<VEOperands>(instr.operands));
+        if (std::holds_alternative<CMBOperands>(instr.operands)) {
+            execute_cmb_elementwise(std::get<CMBOperands>(instr.operands));
         }
         break;
 
-    case DMOpcode::VE_REDUCE:
-        // Functional when carrying VEReduceOperands (issue #105); legacy
+    case DMOpcode::CMB_REDUCE:
+        // Functional when carrying CMBReduceOperands (issue #105); legacy
         // monostate markers remain no-ops
-        if (std::holds_alternative<VEReduceOperands>(instr.operands)) {
-            execute_ve_reduce(std::get<VEReduceOperands>(instr.operands));
+        if (std::holds_alternative<CMBReduceOperands>(instr.operands)) {
+            execute_cmb_reduce(std::get<CMBReduceOperands>(instr.operands));
         }
         break;
 
@@ -500,7 +500,7 @@ void BehavioralProgramExecutor::dispatch_str_feed_cols(const StreamerOperands& o
 
 void BehavioralProgramExecutor::dispatch_str_broadcast(const StreamerOperands& ops) {
     // L2 bank -> L1 buffer, resident-operand delivery: copied once, then
-    // read in place by any number of VE/compute ops. Does NOT set the
+    // read in place by any number of Combiner/compute ops. Does NOT set the
     // a_fed_/b_fed_ pairing flags - a broadcast can never fire a compute.
     uint8_t l2_id = ops.l2_bank_id;
     Size bytes = ops.height * ops.width * 4;  // float32
@@ -552,7 +552,7 @@ void BehavioralProgramExecutor::dispatch_barrier() {
 // Compute: C += A × B on L1 tile data
 // ============================================================================
 
-void BehavioralProgramExecutor::execute_ve_elementwise(const VEOperands& ops) {
+void BehavioralProgramExecutor::execute_cmb_elementwise(const CMBOperands& ops) {
     if (!program_) return;
     Size elems = program_->Ti * program_->Tj;
     if (elems == 0) return;
@@ -581,20 +581,20 @@ void BehavioralProgramExecutor::execute_ve_elementwise(const VEOperands& ops) {
         const float y = ops.num_inputs == 2 ? b[i] : ops.scalar;
         float r = 0.0f;
         switch (ops.op) {
-            case VEOp::ADD:   r = x + y; break;
-            case VEOp::SUB:   r = x - y; break;
-            case VEOp::MUL:   r = x * y; break;
-            case VEOp::DIV:   r = x / y; break;
-            case VEOp::MAX:   r = x > y ? x : y; break;
-            case VEOp::MIN:   r = x < y ? x : y; break;
-            case VEOp::NEG:   r = -x; break;
-            case VEOp::ABS:   r = std::fabs(x); break;
-            case VEOp::SQRT:  r = std::sqrt(x); break;
-            case VEOp::EXP:   r = std::exp(x); break;
-            case VEOp::LOG:   r = std::log(x); break;
-            case VEOp::ADD_S: r = x + ops.scalar; break;
-            case VEOp::MUL_S: r = x * ops.scalar; break;
-            case VEOp::POW_S: r = std::pow(x, ops.scalar); break;
+            case CMBOp::ADD:   r = x + y; break;
+            case CMBOp::SUB:   r = x - y; break;
+            case CMBOp::MUL:   r = x * y; break;
+            case CMBOp::DIV:   r = x / y; break;
+            case CMBOp::MAX:   r = x > y ? x : y; break;
+            case CMBOp::MIN:   r = x < y ? x : y; break;
+            case CMBOp::NEG:   r = -x; break;
+            case CMBOp::ABS:   r = std::fabs(x); break;
+            case CMBOp::SQRT:  r = std::sqrt(x); break;
+            case CMBOp::EXP:   r = std::exp(x); break;
+            case CMBOp::LOG:   r = std::log(x); break;
+            case CMBOp::ADD_S: r = x + ops.scalar; break;
+            case CMBOp::MUL_S: r = x * ops.scalar; break;
+            case CMBOp::POW_S: r = std::pow(x, ops.scalar); break;
         }
         out[i] = r;
     }
@@ -602,7 +602,7 @@ void BehavioralProgramExecutor::execute_ve_elementwise(const VEOperands& ops) {
     hw_.l1_buffers[ops.l1_dst].write(0, out.data(), bytes);
 }
 
-void BehavioralProgramExecutor::execute_ve_reduce(const VEReduceOperands& ops) {
+void BehavioralProgramExecutor::execute_cmb_reduce(const CMBReduceOperands& ops) {
     if (!program_) return;
     if (ops.l1_acc >= hw_.l1_buffers.size()) return;
 
@@ -613,17 +613,17 @@ void BehavioralProgramExecutor::execute_ve_reduce(const VEReduceOperands& ops) {
     float state[kAccLanes];
     hw_.l1_buffers[ops.l1_acc].read(0, state, kAccLanes * sizeof(float));
 
-    const bool do_init  = ops.phase & VEReducePhase::INIT;
-    const bool do_accum = ops.phase & VEReducePhase::ACCUMULATE;
-    const bool do_final = ops.phase & VEReducePhase::FINALIZE;
+    const bool do_init  = ops.phase & CMBReducePhase::INIT;
+    const bool do_accum = ops.phase & CMBReducePhase::ACCUMULATE;
+    const bool do_final = ops.phase & CMBReducePhase::FINALIZE;
 
     if (do_init) {
         switch (ops.op) {
-            case VEReduceOp::MAX: state[0] = -std::numeric_limits<float>::infinity(); break;
-            case VEReduceOp::MIN: state[0] =  std::numeric_limits<float>::infinity(); break;
-            case VEReduceOp::SUM: state[0] = 0.0f; break;
-            case VEReduceOp::MEAN:
-            case VEReduceOp::VAR: state[0] = 0.0f; state[1] = 0.0f; state[2] = 0.0f; break;
+            case CMBReduceOp::MAX: state[0] = -std::numeric_limits<float>::infinity(); break;
+            case CMBReduceOp::MIN: state[0] =  std::numeric_limits<float>::infinity(); break;
+            case CMBReduceOp::SUM: state[0] = 0.0f; break;
+            case CMBReduceOp::MEAN:
+            case CMBReduceOp::VAR: state[0] = 0.0f; state[1] = 0.0f; state[2] = 0.0f; break;
         }
     }
 
@@ -634,19 +634,19 @@ void BehavioralProgramExecutor::execute_ve_reduce(const VEReduceOperands& ops) {
             hw_.l1_buffers[ops.l1_src].read(0, src.data(), elems * sizeof(float));
             // Local reduce over the tile, then combine into the running state
             switch (ops.op) {
-                case VEReduceOp::MAX:
+                case CMBReduceOp::MAX:
                     for (Size i = 0; i < elems; ++i)
                         if (src[i] > state[0]) state[0] = src[i];
                     break;
-                case VEReduceOp::MIN:
+                case CMBReduceOp::MIN:
                     for (Size i = 0; i < elems; ++i)
                         if (src[i] < state[0]) state[0] = src[i];
                     break;
-                case VEReduceOp::SUM:
+                case CMBReduceOp::SUM:
                     for (Size i = 0; i < elems; ++i) state[0] += src[i];
                     break;
-                case VEReduceOp::MEAN:
-                case VEReduceOp::VAR: {
+                case CMBReduceOp::MEAN:
+                case CMBReduceOp::VAR: {
                     double sum = 0.0, sumsq = 0.0;  // double local accum, fp32 state
                     for (Size i = 0; i < elems; ++i) {
                         sum += src[i];
@@ -664,19 +664,19 @@ void BehavioralProgramExecutor::execute_ve_reduce(const VEReduceOperands& ops) {
     if (do_final) {
         const float nan = std::numeric_limits<float>::quiet_NaN();
         switch (ops.op) {
-            case VEReduceOp::MAX:
-            case VEReduceOp::MIN:
-            case VEReduceOp::SUM:
+            case CMBReduceOp::MAX:
+            case CMBReduceOp::MIN:
+            case CMBReduceOp::SUM:
                 // state[0] is already the stat
                 break;
-            case VEReduceOp::MEAN: {
+            case CMBReduceOp::MEAN: {
                 const float count = state[0], sum = state[1], sumsq = state[2];
                 const float mean = count > 0.0f ? sum / count : nan;
                 // Finalized layout: [mean, count, sumsq]
                 state[0] = mean; state[1] = count; state[2] = sumsq;
                 break;
             }
-            case VEReduceOp::VAR: {
+            case CMBReduceOp::VAR: {
                 const float count = state[0], sum = state[1], sumsq = state[2];
                 float mean = nan, var = nan;
                 if (count > 0.0f) {

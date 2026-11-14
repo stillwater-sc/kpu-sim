@@ -68,7 +68,7 @@ struct Tensor {
 };
 
 // ============================================================================
-// Elementwise and Reduction Operations (for VE)
+// Elementwise and Reduction Operations (for Combiner)
 // ============================================================================
 
 enum class ElementwiseOp : uint8_t {
@@ -106,12 +106,12 @@ enum class ScheduleOpKind : uint8_t {
 
     // Compute
     COMPUTE_MATMUL,     // systolic C += A x B
-    COMPUTE_ELEMENTWISE,// VE elementwise op
-    COMPUTE_REDUCE,     // VE reduction op
+    COMPUTE_ELEMENTWISE,// Combiner elementwise op
+    COMPUTE_REDUCE,     // Combiner reduction op
 
     // Drain
     DRAIN,              // accumulator -> L2
-    DRAIN_FUSED,        // drain + activation via VE
+    DRAIN_FUSED,        // drain + activation via Combiner
     DRAIN_TO_SCRATCH,   // drain to L2 scratch region
 
     // Synchronization

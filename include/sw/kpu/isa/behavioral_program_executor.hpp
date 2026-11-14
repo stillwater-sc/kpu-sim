@@ -160,12 +160,12 @@ private:
     void fire_compute();
 
     /**
-     * @brief Apply a Vector Engine elementwise operation over L1 buffers
+     * @brief Apply a Combiner elementwise operation over L1 buffers
      *        (issue #100): out = op(a[, b or scalar]) elementwise, over
      *        the program's Ti x Tj tile
      */
-    void execute_ve_elementwise(const VEOperands& ops);
-    void execute_ve_reduce(const VEReduceOperands& ops);
+    void execute_cmb_elementwise(const CMBOperands& ops);
+    void execute_cmb_reduce(const CMBReduceOperands& ops);
 
     /**
      * @brief Resolve external memory address for a tile

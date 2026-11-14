@@ -211,8 +211,9 @@ differences:
    elements from DRAM and pack them into a contiguous L3 tile. This is the
    `load_gather()` operation.
 
-2. **Fused drain with Vector Engine.** After accumulation, the output tile passes
-   through the Vector Engine during the drain phase. The VE adds the bias vector and
+2. **Fused drain with the Combiner** (the Vector Engine before #429; see
+   [combiner.md](../01-architecture/combiner.md)). After accumulation, the output tile passes
+   through the Combiner during the drain phase. The Combiner adds the bias vector and
    applies ReLU activation in a single pass, without writing the unbiased result to
    L2 and re-reading it.
 
@@ -226,21 +227,21 @@ for ti in 0..M/Ti:
       move(A), move(B)
       stream_rows(A), stream_cols(B)
     end
-    drain_fused(C[ti,tj], bias, RELU)        ← STR+VE: drain with fusion
+    drain_fused(C[ti,tj], bias, RELU)        ← STR+CMB: drain with fusion
     writeback(C[ti,tj])
     store(C[ti,tj])
   end
 end
 ```
 
-### Softmax: Multi-Pass Vector Engine
+### Softmax: Multi-Pass Combiner
 
 ```
 y[b,i] = exp(x[b,i] - max_b) / Σ exp(x[b,i] - max_b)
 ```
 
 Softmax is fundamentally different from matmul. It uses no systolic array. All
-compute is done by the Vector Engine (VE), which performs elementwise and reduction
+compute is done by the Combiner, which performs elementwise and reduction
 operations on data streaming through L1. The schedule makes three passes over the
 data:
 
@@ -249,7 +250,7 @@ data:
 load(X[tb])                    ← DMA: batch chunk to L3
 move(X[tb])                    ← BM: L3 → L2
 stream_rows(X)                 ← STR: L2 → L1
-compute_reduce(MAX)            ← VE: running max across D
+compute_reduce(MAX)            ← Combiner: running max across D
 drain_to_scratch(max_buf)      ← STR: max values → L2 scratch
 ```
 
@@ -257,19 +258,19 @@ drain_to_scratch(max_buf)      ← STR: max values → L2 scratch
 ```
 broadcast(max_buf)             ← STR: broadcast max to all positions
 stream_rows(X)                 ← STR: re-stream input from L2 (no DRAM re-fetch)
-compute_elementwise(SUB)       ← VE: x - max
-compute_elementwise(EXP)       ← VE: exp(x - max)
+compute_elementwise(SUB)       ← Combiner: x - max
+compute_elementwise(EXP)       ← Combiner: exp(x - max)
 drain()                        ← STR: exp values → L2
 ```
 
 **Pass 3 — Sum and divide:**
 ```
 stream_rows(exp_buf)           ← STR: stream exp values
-compute_reduce(SUM)            ← VE: running sum
+compute_reduce(SUM)            ← Combiner: running sum
 drain_to_scratch(sum_buf)      ← STR: sum → L2 scratch
 broadcast(sum_buf)             ← STR: broadcast sum
 stream_rows(exp_buf)           ← STR: re-stream exp values
-compute_elementwise(DIV)       ← VE: exp / sum
+compute_elementwise(DIV)       ← Combiner: exp / sum
 drain()                        ← STR: final output → L2
 writeback(Y), store(Y)
 ```
@@ -281,7 +282,7 @@ writeback(Y), store(Y)
   per batch chunk.
 
 - **Reduction and broadcast.** `compute_reduce(MAX)` produces a scalar per row.
-  `broadcast()` replicates that scalar across all D positions. These are VE
+  `broadcast()` replicates that scalar across all D positions. These are Combiner
   operations, not systolic array operations.
 
 - **Multiple passes over L2 data.** The Streamer re-reads L2 data for each pass.
@@ -300,8 +301,8 @@ The DSL implementation added these to `DMOpcode`:
 |------------|---------|---------|
 | `DMA_LOAD_GATHER` | Conv2D | Strided gather for im2col |
 | `DMA_STORE_SCATTER` | Conv2D | Strided scatter for NCHW output |
-| `VE_ELEMENTWISE` | Softmax | SUB, EXP, DIV via Vector Engine |
-| `VE_REDUCE` | Softmax | MAX, SUM reduction via Vector Engine |
+| `CMB_ELEMENTWISE` | Softmax | SUB, EXP, DIV via Combiner |
+| `CMB_REDUCE` | Softmax | MAX, SUM reduction via Combiner |
 | `L2_SCRATCH_WRITE` | Softmax | Write to L2 scratch region |
 | `L2_SCRATCH_READ` | Softmax | Read from L2 scratch region |
 
@@ -373,7 +374,7 @@ Every schedule, regardless of kernel, obeys the same dataflow contract:
 
 4. **Compute is reactive.** The schedule never says "compute now." It says "stream
    A rows and B columns." When both arrive at L1, the systolic array fires
-   automatically. When the VE receives data and an opcode, it executes automatically.
+   automatically. When the Combiner receives data and an opcode, it executes automatically.
    The schedule's job ends at L1.
 
 5. **No buffer is a cache.** L3 is not a cache. L2 is not a cache. There is no

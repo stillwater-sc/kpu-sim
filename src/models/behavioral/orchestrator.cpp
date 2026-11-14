@@ -19,7 +19,7 @@ BehavioralOrchestrator::BehavioralOrchestrator(const Config& config)
     : config_(config)
     , stats_{}
     , block_mover_()
-    , vector_engine_()
+    , combiner_()
 {
     // Create memory model with appropriate configuration
     MemoryModelConfig mem_config;
@@ -245,7 +245,7 @@ void BehavioralOrchestrator::execute_mlp_layer(
         const float* bias_ptr = (host_bias != 0) ? memory_->get_ptr<float>(host_bias) : nullptr;
 
         // Apply bias + activation
-        vector_engine_.process_inplace(output_ptr, batch, out_dim, bias_ptr, activation);
+        combiner_.process_inplace(output_ptr, batch, out_dim, bias_ptr, activation);
 
         if (host_bias != 0) {
             stats_.bias_applications++;
