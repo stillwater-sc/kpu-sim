@@ -190,9 +190,11 @@ struct CspLevelOutcome {
     timing::ConcurrentTimingExecutor::VectorStats ve;
     bool livelock = false;
     std::vector<std::string> unmodelled;    // spec fields the level keeps a default for
-    std::size_t staged_feeds = 0;           // Feeds of an L2-staged copy (L-CA: run as Move + Feed)
-    // L-CA: each residency's L3 slot as executed, (tile, slot) in claim order (placement step 6).
+    std::size_t staged_feeds = 0;           // Feeds of an L2-staged copy
+    // L-CA: each residency's L3 slot as executed, (tile, slot) in claim order (placement step 6),
+    // and each staged copy's L2 slot (#399).
     std::vector<std::pair<TileCoord, std::uint32_t>> l3_placement;
+    std::vector<std::pair<TileCoord, std::uint32_t>> l2_placement;
 };
 
 struct CspRunRequest {
@@ -396,10 +398,7 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.ve = r.ve;
         o.staged_feeds = r.staged_feeds;
         o.l3_placement = r.l3_placement;
-        if (ast.l2 > 0)
-            o.unmodelled.push_back("L2 staging: unmapped at L-CA until placement step 6 -- each staged Feed moves its "
-                                   "tile out of L3 again (the values are the same; the timing is the unstaged "
-                                   "program's)");
+        o.l2_placement = r.l2_placement;
     }
     return o;
 }

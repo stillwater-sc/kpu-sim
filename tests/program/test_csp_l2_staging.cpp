@@ -270,7 +270,7 @@ TEST_CASE("L2 staging: what the language refuses, by line", "[program][csp][lang
          "csp line 7: call relu writes A[0, 0], which can be staged in L2");
 }
 
-TEST_CASE("L2 staging: every level computes the oracle; L-CA re-Moves from L3", "[program][csp][run][l2]") {
+TEST_CASE("L2 staging: every level computes the oracle", "[program][csp][run][l2]") {
     const auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
     for (bool staged : {true, false}) {
         CAPTURE(staged);
@@ -286,9 +286,7 @@ TEST_CASE("L2 staging: every level computes the oracle; L-CA re-Moves from L3", 
             CHECK(o.values.operand("C").values == r.reference->operand("C").values);
         }
         CHECK(r.levels[2].staged_feeds == (staged ? 64u : 0u));
-        bool noted = false;
-        for (const auto& u : r.levels[2].unmodelled) noted = noted || u.find("L2 staging") != std::string::npos;
-        CHECK(noted == staged);
+        for (const auto& u : r.levels[2].unmodelled) CHECK(u.find("L2 staging") == std::string::npos);   // mapped (#399)
     }
     // L-T1: the block mover moves A once per row, so it is busy for less.
     auto bm = [&](bool staged) {

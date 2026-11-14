@@ -365,6 +365,15 @@ public:
     void schedule_release(const TileDescriptor& tile, int mover_id = -1);
 
     /**
+     * @brief Retire a staged copy from L2 (a CSP program's L2Release; #399)
+     *
+     * The staging Move put the copy in its placed L2 slot and staged Feeds (l2_held) read it
+     * without consuming it. The release retires the entry, returning its L2 credit and the slot,
+     * once every Feed of the tile scheduled before it has completed.
+     */
+    void schedule_l2_release(const TileDescriptor& tile);
+
+    /**
      * @brief Seed an L3 entry with a tile's bytes, as if a load had delivered it -- a CSP
      *        program's Inherit (docs/plans/kpu-run-csp-programs.md step 4d)
      * @param tile Tile descriptor (l3_held: the program's Release retires it, or it is retained)
@@ -751,6 +760,9 @@ private:
     // a boolean "ever fed" flag lets a reused tile start a later compute early.
     std::unordered_map<TileID, size_t, TileIDHash> scheduled_feed_counts_;
     std::unordered_map<TileID, size_t, TileIDHash> completed_feed_counts_;
+    // L2Releases not yet retired: the tile, and the Feeds of it scheduled before the release.
+    std::vector<std::pair<TileID, size_t>> pending_l2_releases_;
+    void retire_l2_releases();
     // An accumulation chain (a CSP program's MatMulAccum calls on one result, ended by its
     // DRAIN): calls scheduled and done, and DRAINs scheduled that wait for it. Nothing about
     // the chain assumes the program was scheduled up front (csp-language.md steps 1c.2, 3).
@@ -1172,6 +1184,27 @@ inline void ConcurrentTimingExecutor::schedule_release(const TileDescriptor& til
     block_movers_[mover_for(tile, mover_id)]->schedule_release(tile);
 }
 
+inline void ConcurrentTimingExecutor::schedule_l2_release(const TileDescriptor& tile) {
+    pending_l2_releases_.emplace_back(tile.tile_id, scheduled_feed_counts_[tile.tile_id]);
+}
+
+inline void ConcurrentTimingExecutor::retire_l2_releases() {
+    for (auto it = pending_l2_releases_.begin(); it != pending_l2_releases_.end();) {
+        const auto& [tile, feeds] = *it;
+        const auto done = completed_feed_counts_.find(tile);
+        const auto entry = l2_tag_cam_.match(tile);
+        // Its Feeds have completed, and the staged copy has arrived (a staging with no Feed
+        // still waits for its Move).
+        if ((done == completed_feed_counts_.end() ? 0 : done->second) < feeds || !entry) { ++it; continue; }
+        TimingEvent e(EventType::CREDIT_RELEASED, current_cycle_, 0, tile, "L2:release");
+        e.slot_id = entry->slot_id;
+        if (l2_tag_cam_.invalidate(tile)) l2_credits_.release(static_cast<size_t>(tile.matrix));
+        apply_payload_event(e);
+        events_.push_back(e);
+        it = pending_l2_releases_.erase(it);
+    }
+}
+
 inline void ConcurrentTimingExecutor::seed_l3(const TileDescriptor& tile_in, TilePayload payload) {
     const TileDescriptor tile = homed(tile_in);
     if (!payload.valid()) throw std::invalid_argument("seed_l3: payload dimensions do not match value count");
@@ -1208,7 +1241,7 @@ inline std::size_t ConcurrentTimingExecutor::backlog() const {
              m->release_queue_depth();
     for (const auto& st : row_streamers_) n += st->feed_queue_depth() + st->drain_queue_depth();
     for (const auto& st : col_streamers_) n += st->feed_queue_depth() + st->drain_queue_depth();
-    return n;
+    return n + pending_l2_releases_.size();
 }
 
 inline void ConcurrentTimingExecutor::schedule_feed(const TileDescriptor& tile_in, int streamer_id) {
@@ -1770,6 +1803,9 @@ inline bool ConcurrentTimingExecutor::step() {
         events_.insert(events_.end(), str_events.begin(), str_events.end());
     }
 
+    // 6. Retire the staged L2 copies whose Feeds have completed (#399).
+    retire_l2_releases();
+
     // Advance clock
     ++current_cycle_;
 
@@ -1781,6 +1817,7 @@ inline bool ConcurrentTimingExecutor::is_complete() const {
 
     // Check pending computes (started or waiting on dependencies)
     if (!pending_computes_.empty()) return false;
+    if (!pending_l2_releases_.empty()) return false;
 
     // Check MCs (should be idle when DMA is complete)
     for (const auto& mc : memory_controllers_) {
@@ -1875,6 +1912,7 @@ inline void ConcurrentTimingExecutor::reset() {
     fed_shape_.clear();
     scheduled_feed_counts_.clear();
     completed_feed_counts_.clear();
+    pending_l2_releases_.clear();
     chains_.clear();
     moves_scheduled_.clear();
     moves_arrived_.clear();

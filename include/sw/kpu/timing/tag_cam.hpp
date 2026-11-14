@@ -289,6 +289,7 @@ public:
         claims_.clear();
         turns_.clear();
         claim_log_.clear();
+        placed_slots_ = 0;
     }
 
     // ---- Placement (docs/plans/l3-placement-at-lb.md step 6) ----------------------------------
@@ -334,6 +335,18 @@ public:
         --turns_[slot];
         if (!claim_log_.empty() && claim_log_.back().first == slot && claim_log_.back().second == tile_id)
             claim_log_.pop_back();
+    }
+
+    /// Slots [0, n) are the program's to place (an L2's staging slots, #399): a transfer the
+    /// program does not place takes a slot from the rest (transient_slot). n < capacity.
+    void set_placed_slots(uint32_t n) { placed_slots_ = n; }
+    [[nodiscard]] uint32_t placed_slots() const { return placed_slots_; }
+
+    /// The next slot, round-robin, for a transfer the program does not place: outside the
+    /// program's placed slots, so an unplaced copy never carries a placed slot's number.
+    [[nodiscard]] uint32_t transient_slot(uint32_t& next) const {
+        const uint32_t span = static_cast<uint32_t>(capacity_) - placed_slots_;
+        return placed_slots_ + (next++ % span);
     }
 
     /// Every claim, in the order taken: each slot's tiles, in the order they held it.
@@ -408,6 +421,7 @@ private:
     std::unordered_map<uint32_t, TileID> claims_;                ///< slot -> the tile placed in it
     std::unordered_map<uint32_t, uint32_t> turns_;               ///< slot -> the claims it has taken
     std::vector<std::pair<uint32_t, TileID>> claim_log_;         ///< (slot, tile), in claim order
+    uint32_t placed_slots_ = 0;                                  ///< slots [0, n) the program places
 };
 
 } // namespace sw::kpu::timing

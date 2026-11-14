@@ -152,6 +152,14 @@ struct TileDescriptor {
     int32_t l3_slot = -1;
     uint32_t l3_slot_turn = 0;
 
+    // L2 staging (#399): a staging Move carries the L2 slot the program placed the staged copy
+    // in, and its turn there, as a Load carries its L3 slot. The Move waits for that slot and the
+    // copy lives there until the program's L2Release retires it. A staged Feed is `l2_held`: it
+    // reads the staged copy and leaves it in L2. -1 / false: unstaged, as before.
+    int32_t l2_slot = -1;
+    uint32_t l2_slot_turn = 0;
+    bool l2_held = false;
+
     // L3 residency decided by a CSP program (docs/plans/csp-language.md step 1c.2): the program
     // releases this LOAD's L3 entry with an explicit Release (schedule_release), so the entry
     // holds one reference that Moves out of L3 do not consume. false = the legacy schedule path:

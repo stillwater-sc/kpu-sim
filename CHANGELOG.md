@@ -17,7 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`test_csp_lca_place`). `CspLevelOutcome::l3_placement` reports them.
   - L-CA now holds a program to its own `l3`, not the machine's whole L3, so its timing changes.
     The streamed test program goes from 3429 to 2783 cycles.
-  - Not yet: L2 staging at L-CA (each staged Feed still moves from L3) and L3 bank timing (#417).
+  - Not yet: L3 bank timing (#417).
+
+- **L-CA executes L2 staging** (#399, L2 part). A staging Move takes the L2 slot the program
+  placed the copy in, at its turn; staged Feeds read the copy without consuming it; the
+  L2Release retires it once its Feeds have completed. Unstaged copies take slots outside the
+  program's. Each staged copy is moved once (`CspLevelOutcome::l2_placement`), and L-CA's L2
+  slots hold the same tiles, in the same order, as the walker's and L-T1's. The
+  "L2 staging: unmapped" note is gone.
 
 - **Typed values: number systems from Universal, int8 × int8 → int32 at every level and in `.dflow`** (#394,
   `docs/plans/typed-value-path.md`).

@@ -238,3 +238,116 @@ TEST_CASE("L-CA: a slot reused early serializes on it", "[csp][placement][lca]")
                 (unsigned long long)free.r.cycles, (unsigned long long)free.stats.dma_credit_stalls,
                 (unsigned long long)pinned.r.cycles, (unsigned long long)pinned.stats.dma_credit_stalls);
 }
+
+// ---- L2 staging (#399's L2 part) -------------------------------------------------------------
+
+namespace {
+
+// Row panels of A outer; staged, A's panel is copied into L2 once for the loop over B's panels
+// (test_csp_l2_staging.cpp's program).
+std::string staged_matmul(bool staged) {
+    std::string s = std::string("csp 1.0\nprogram mm machine flat(l3 = 9") + (staged ? ", l2 = 4" : "") + ") {\n"
+                    "  tensor A[64,64] tile 16x16 in;\n  tensor B[64,64] tile 16x16 in;\n  tensor C[64,64] tile 16x16 out;\n"
+                    "  for i in 0..4 {\n"
+                    "    resident A[i, :];\n";
+    if (staged) s += "    stage A[i, :] in l2 {\n";
+    s += "    for j in 0..4 {\n"
+         "      resident B[:, j];\n"
+         "      acc C[i, j] in fabric {\n"
+         "        for k in 0..4 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }\n"
+         "      }\n"
+         "      store C[i, j] late;\n"
+         "      release B[:, j];\n"
+         "    }\n";
+    if (staged) s += "    }\n";
+    s += "    release A[i, :];\n  }\n}\n";
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("L-CA executes the walker's L2 staging, the same slots as L-T1", "[csp][placement][lca][l2]") {
+    const std::string text = staged_matmul(true);
+    const CspProgram p = lang::compile(lang::parse(text));
+    BySlot w;
+    for (const Staging& st : p.stagings) w[st.place.slot].push_back(st.tile.to_string());
+    const auto t1 = run(ExecutionLevel::BlockSequential, text);
+    std::map<std::uint32_t, std::vector<const TransactionalInterpreter::L2Slot*>> v;
+    for (const auto& sl : t1.l2_slots) v[sl.place.slot].push_back(&sl);
+    BySlot lt1_l2;
+    for (auto& [slot, ss] : v) {
+        std::stable_sort(ss.begin(), ss.end(), [](auto* a, auto* b) { return a->t0 < b->t0; });
+        for (auto* sl : ss) lt1_l2[slot].push_back(sl->tile.to_string());
+    }
+    const auto ca = run(ExecutionLevel::CycleAccurate, text);
+    REQUIRE(ca.l2_placement.size() == p.stagings.size());
+    BySlot lca_l2;
+    for (const auto& [tile, slot] : ca.l2_placement) lca_l2[slot].push_back(tile.to_string());
+    CHECK(show(lt1_l2) == show(w));
+    CHECK(show(lca_l2) == show(w));
+    // The L3 placement is still the walker's.
+    CHECK(lca(ca) == walker(p));
+}
+
+TEST_CASE("L-CA: a staged copy is moved once and holds its L2 slot until its L2Release", "[csp][placement][lca][l2]") {
+    using sw::kpu::timing::EventType;
+    const Direct staged = direct(staged_matmul(true));
+    const Direct plain = direct(staged_matmul(false));
+    auto moves = [](const Direct& d) {
+        std::size_t n = 0;
+        for (const auto& e : d.events) n += e.type == EventType::TILE_ARRIVED_L2;
+        return n;
+    };
+    // Unstaged, the program moves each call's A and B tiles (64 + 64); staged, A's 16 tiles move
+    // once.
+    CHECK(moves(plain) == 128);
+    CHECK(moves(staged) == 80);
+    CHECK(staged.r.staged_feeds == 64);
+    // From the events: each placed L2 slot (0-3) holds one staged copy at a time, from its
+    // Move's arrival to its L2Release; every staged Feed reads its copy's slot; an unstaged
+    // copy (a B tile, a drained C) never takes a placed slot.
+    std::map<std::uint32_t, std::string> held;
+    std::map<std::string, std::uint32_t> slot_of;
+    std::size_t released = 0, fed = 0;
+    for (const auto& e : staged.events) {
+        const std::string t = e.tile_id.to_string();
+        const bool is_a = e.tile_id.matrix == sw::kpu::isa::MatrixID::A;
+        CAPTURE(e.cycle, t, e.slot_id);
+        if (e.type == EventType::TILE_ARRIVED_L2 || e.type == EventType::TILE_DRAINED) {
+            CHECK((e.slot_id < 4) == is_a);
+            if (is_a) {
+                CHECK_FALSE(held.count(e.slot_id));
+                held[e.slot_id] = t;
+                slot_of[t] = e.slot_id;
+            }
+        } else if (e.type == EventType::STR_FEED_START && is_a) {
+            REQUIRE(slot_of.count(t));
+            CHECK(e.slot_id == slot_of.at(t));
+            CHECK(held.count(e.slot_id));
+            ++fed;
+        } else if (e.type == EventType::CREDIT_RELEASED && e.component_name == "L2:release") {
+            REQUIRE(held.count(e.slot_id));
+            CHECK(held.at(e.slot_id) == t);
+            held.erase(e.slot_id);
+            ++released;
+        }
+    }
+    CHECK(released == 16);
+    CHECK(fed == 64);
+    CHECK(held.empty());
+    // Staged, the mover transfers each A tile once and each B tile per call: 16 + 64.
+    auto transfers = [](const Direct& d) {
+        std::size_t n = 0;
+        for (const auto& e : d.events) n += e.type == EventType::BM_MOVE_COMPLETE;
+        return n;
+    };
+    CHECK(transfers(staged) == 80);
+    // Measured, not asserted: unstaged, the executor's dedup (process_dedup_moves) completes 48 of
+    // A's Moves on the copy still in L2, without a transfer -- reuse the program did not decide --
+    // so on this program staging leaves L-CA's timing as it was.
+    std::printf("L-CA L2 staging: unstaged makespan %llu (bm busy %.0f, dma busy %.0f, cf busy %llu), "
+                "staged %llu (bm busy %.0f, dma busy %.0f, cf busy %llu)\n",
+                (unsigned long long)plain.r.cycles, plain.stats.bm_busy_cycles, plain.stats.dma_busy_cycles,
+                (unsigned long long)plain.r.cf_busy, (unsigned long long)staged.r.cycles,
+                staged.stats.bm_busy_cycles, staged.stats.dma_busy_cycles, (unsigned long long)staged.r.cf_busy);
+}

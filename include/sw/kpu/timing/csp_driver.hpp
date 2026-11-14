@@ -45,11 +45,13 @@
 //                  walker's. The Load, Writeback or Inherit that opens a residency takes that
 //                  slot's credit -- it waits until the tile placed there before has left L3 --
 //                  and the entry lives in that slot. No L-CA process picks an L3 slot of its own.
-//   L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3) is UNMAPPED here until
-//   the executor's L2 joins placement (l3-placement-at-lb.md step 6), decided 2026-10-16: the
-//   staging Move is skipped, each staged Feed is a Move from the tile's L3 slot (which the
-//   language keeps live for the block) and a Feed, and an L2Release is nothing. The values are
-//   the same; the timing is the unstaged program's. staged_feeds() counts them.
+//   L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3; #399): the staging Move
+//                  takes the L2 slot the program placed the copy in, at its turn in that slot
+//                  (as a Load takes its L3 slot), and the copy lives there. A staged Feed reads
+//                  it and leaves it (l2_held). The L2Release -> schedule_l2_release: the entry
+//                  is retired, its L2 credit and slot returned, once the tile's Feeds before it
+//                  have completed. The program's slots are the L2 CAM's first `l2`; an unstaged
+//                  copy takes one of the rest.
 //
 // This step runs matmul and the linear operator: operands A, B and C, vector operands (a
 // bias), gemm with alpha 1, and the epilogue fused or not. Any other operand -- a vector, or a
@@ -102,7 +104,9 @@ public:
         Cycle cf_busy = 0;                  // compute-tile busy cycles, epilogue included
         ConcurrentTimingExecutor::VectorStats ve;   // tile-context time by site
         std::size_t peak_held = 0;          // most actions the driver and executor held at once
-        std::size_t staged_feeds = 0;       // staged Feeds run as Move + Feed (L2 staging unmapped)
+        std::size_t staged_feeds = 0;       // Feeds that read an L2-staged copy
+        // Each staged copy's L2 slot as L-CA executed it: (tile, slot), in claim order (#399).
+        std::vector<std::pair<program::TileCoord, std::uint32_t>> l2_placement;
         // Each residency's L3 slot as L-CA executed it: (tile, slot), in the order the slots were
         // claimed -- each slot's tiles in the order they held it (l3-placement-at-lb.md step 6).
         std::vector<std::pair<program::TileCoord, std::uint32_t>> l3_placement;
@@ -120,7 +124,7 @@ public:
             if (op.kind != program::TileOpKind::Feed && op.kind != program::TileOpKind::Drain &&
                 op.kind != program::TileOpKind::AccInit && !program::is_l3(op.kind))
                 check_call(op);
-        check_machine(p.channel(program::csp::Chan::L3).capacity);
+        check_machine(p.channel(program::csp::Chan::L3).capacity, p.l2_slots);
     }
 
     // The structured form: actions pulled from the program's stream; `inputs` supplies the
@@ -143,11 +147,12 @@ public:
                 throw std::invalid_argument("CspDriver: the inputs' '" + name + "' is " + v.type +
                                             "; the program declares " + d.type);
         }
-        check_machine(s.capacity());
+        check_machine(s.capacity(), s.l2_slots());
     }
 
     Result run() {
         exec_.reset();
+        exec_.l2_tag_cam().set_placed_slots(static_cast<std::uint32_t>(l2_));   // the program's L2 slots
         // DRAM holds every input tile; the program's loads read them.
         for (const auto& name : inputs_.operand_order()) {
             if (name == "C") continue;
@@ -168,6 +173,8 @@ public:
         coord_.clear();
         open_.clear();
         slot_turns_.clear();
+        l2_turns_.clear();
+        staged_.clear();
 
         Result r;
         const Cycle max = exec_.config().max_cycles;
@@ -211,6 +218,8 @@ public:
         r.staged_feeds = staged_feeds_;
         for (const auto& [slot, tile] : exec_.l3_tile_tag_cam(0).claim_log())
             r.l3_placement.emplace_back(coord_.at(tile), slot);
+        for (const auto& [slot, tile] : exec_.l2_tag_cam().claim_log())
+            r.l2_placement.emplace_back(coord_.at(tile), slot);
         for (std::size_t t = 0; t < exec_.config().num_compute_tiles; ++t) r.cf_busy += exec_.compute_tile_busy_cycles(t);
         r.ve = exec_.vector_stats();
         // Every operand as DRAM holds it -- inputs included, so a level that wrote an input is
@@ -257,6 +266,9 @@ private:
     std::map<TileID, program::TileCoord> coord_;    // each executor tile's program tile
     std::set<TileID> open_;                         // tiles with an open residency (placement)
     std::map<std::uint32_t, std::uint32_t> slot_turns_;   // L3 slot -> residencies opened in it
+    std::size_t l2_ = 0;                                  // the program's L2 slots (`l2 = N`)
+    std::map<std::uint32_t, std::uint32_t> l2_turns_;     // L2 slot -> stagings opened in it
+    std::set<TileID> staged_;                             // tiles with an open staging
     std::map<std::string, std::size_t> tagged_tk_;   // an operand other than A, B, C -> its tk tag
     std::uint64_t dram_bytes_ = 0;
     std::uint64_t seq_ = 0;                          // program order of the actions handed over
@@ -265,7 +277,14 @@ private:
     std::map<std::string, TileID> inits_;            // accumulator -> its init's fed tile, until its first Call
     std::set<TileID> stored_;                        // C tiles a Store has written to DRAM
 
-    void check_machine(std::size_t l3) {
+    void check_machine(std::size_t l3, std::size_t l2) {
+        // The program's L2 slots are the L2 CAM's first `l2`; unstaged copies need the rest.
+        l2_ = l2;
+        if (l2 >= exec_.l2_tag_cam().capacity())
+            throw std::invalid_argument("CspDriver: the program stages into " + std::to_string(l2) +
+                                        " L2 slots; the machine's L2 holds " +
+                                        std::to_string(exec_.l2_tag_cam().capacity()) +
+                                        " (one at least is left for unstaged copies)");
         // csp_level_supported admits an operand other than A, B and C only as a vector or as an
         // accumulator's init; both are tagged.
         for (const auto& name : inputs_.operand_order()) {
@@ -349,22 +368,28 @@ private:
                 dram_bytes_ += d.size_bytes;
                 break;
             case Action::Kind::Move:
-                if (a.l2) break;                // the staging copy: each staged Feed moves its own
                 d.l3_held = loaded_.count(d.tile_id) != 0;
+                if (a.l2) {                     // a staging: the copy into the program's L2 slot
+                    if (!staged_.insert(d.tile_id).second)
+                        throw std::invalid_argument("CspDriver: " + a.tile.to_string() +
+                                                    " is staged in L2 twice at once");
+                    d.l2_slot = static_cast<std::int32_t>(a.l2->slot);
+                    d.l2_slot_turn = l2_turns_[a.l2->slot]++;
+                }
                 exec_.schedule_move(d, d.tile_id.matrix == isa::MatrixID::B && d.tile_id.tk == 0);
                 break;
             case Action::Kind::Feed:
-                if (a.l2) {                     // unmapped staging: out of L3 again, then fed
-                    TileDescriptor m = d;
-                    m.l3_held = loaded_.count(m.tile_id) != 0;
-                    exec_.schedule_move(m, m.tile_id.matrix == isa::MatrixID::B && m.tile_id.tk == 0);
-                    d.program_seq = ++seq_;
+                if (a.l2) {                     // reads the staged copy, which stays in L2
+                    d.l2_held = true;
                     ++staged_feeds_;
                 }
                 if (a.seeds) inits_[a.seeds->to_string()] = d.tile_id;   // an accumulator's init stream
                 exec_.schedule_feed(d);
                 break;
-            case Action::Kind::L2Release: break;
+            case Action::Kind::L2Release:
+                staged_.erase(d.tile_id);
+                exec_.schedule_l2_release(d);
+                break;
             case Action::Kind::Drain: {
                 if (a.context.empty()) { exec_.schedule_drain(d); break; }
                 std::vector<VectorStage> fabric, drain;

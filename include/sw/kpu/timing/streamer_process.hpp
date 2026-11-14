@@ -273,8 +273,10 @@ private:
         if (in_flight_->is_complete(current_cycle)) {
             if (in_flight_is_feed_) {
                 // Feed complete: tile consumed from L2, fed to compute
-                // Only release L2 credit if tile was fully removed (ref_count reached 0)
-                bool credit_released = l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
+                // Only release L2 credit if tile was fully removed (ref_count reached 0). A
+                // staged copy is not the Feed's to consume: its L2Release retires it (#399).
+                bool credit_released = !in_flight_->tile.l2_held &&
+                                       l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
                     l2_credits_.release(
                         static_cast<size_t>(in_flight_->tile.tile_id.matrix));
@@ -505,11 +507,8 @@ private:
     /**
      * @brief Allocate an L2 bank slot (round-robin)
      */
-    uint32_t allocate_l2_slot() {
-        uint32_t slot = next_l2_slot_;
-        next_l2_slot_ = (next_l2_slot_ + 1) % static_cast<uint32_t>(l2_tag_cam_.capacity());
-        return slot;
-    }
+    // A slot outside the program's placed L2 slots (#399): an unstaged copy is transient.
+    uint32_t allocate_l2_slot() { return l2_tag_cam_.transient_slot(next_l2_slot_); }
 };
 
 } // namespace sw::kpu::timing

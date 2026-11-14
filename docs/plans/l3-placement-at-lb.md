@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-11
 **Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-5 merged (#364-#368, 5b after).
-Step 6 (#399) is split: its L3 slots are in review; its L2 staging follows; its banks are #417
+Step 6 (#399): its L3 slots merged (#418); its L2 staging is in review; its banks are #417
 **Raised by:** the architect, 2026-10-11, reviewing `docs/plans/domain-flow-debugger.md` (#363):
 > The L-B behavioral model has to model L3 placement otherwise the CSP sequencing doesn't do
 > anything. The tile placement in L3 is a key component of the behavior of the machine, in the
@@ -322,6 +322,21 @@ Each step is one PR, reviewed and merged before the next. The suite stays green 
      still, though its Loads stall on credit longer (1845 cycles against 1792). At L-T1 the
      pinned program is the slower one.
    - Banks are #417. The L2 staging part is next.
+   *As built, L2 staging (2026-11-13, #399):*
+   - `TileDescriptor::l2_slot`, `l2_slot_turn` and `l2_held`. A staging Move carries the program's
+     L2 slot and its turn there; the BlockMover takes it as a Load takes its L3 slot (the L2
+     `TagCAM`'s claims), once the tile's earlier copy has left L2, and never dedups it onto
+     another copy. A staged Feed is `l2_held`: it reads the copy and leaves it.
+   - The L2Release is `schedule_l2_release`: the executor retires the copy, returning its L2
+     credit and slot, once the tile's Feeds scheduled before it have completed (L-T1's "zero
+     time after the copy's last Feed"). The event is `CREDIT_RELEASED` from `L2:release`.
+   - The program's slots are the L2 CAM's first `l2`; an unstaged copy (a B tile, a drained C)
+     takes a transient slot from the rest (`TagCAM::transient_slot`). The driver refuses a
+     program whose `l2` leaves none.
+   - Measured: on `test_csp_l2_staging`'s matmul the staged program moves 80 tiles against the
+     unstaged 128, yet both run 4400 cycles: unstaged, the executor's dedup
+     (`process_dedup_moves`) already completes 48 of A's Moves on the copy still in L2, without a
+     transfer. That reuse is the executor's, not the program's.
 7. **Retain and inherit carry slots** (§3.6): the orchestrator and `KpuDevice`.
    - Tests: `test_orchestrator`, `test_csp_inherit_retain`.
 
