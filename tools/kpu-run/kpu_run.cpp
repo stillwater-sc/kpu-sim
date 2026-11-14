@@ -24,6 +24,9 @@
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/record/domain_flow_record.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>
+#include <sw/kpu/program/csp/tile_commands.hpp>
+#include <sw/kpu/program/csp/lang/compile.hpp>
+#include <sw/kpu/version.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
 #include <cmath>
@@ -78,6 +81,9 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             carries its overlay: every action's legs in L-T1 cycles, each
                             final tile's proximity to L-B, and (with a declared fabric) each
                             accumulator's gemm chain as a systolic stream
+  --tile-commands <file.json>  the program as the KPU RTL's tile command stream (kpu-tile-cmds
+                            version 1, #397): LOAD / STORE / EXEC with their sync and chain bits,
+                            for one output-stationary int8 tile, with the inputs and L-B's results
   --timeline <file.json>    the L-T1 run as Chrome-trace intervals, one per leg
   --step                    single-step (L-B: one action per step; L-T1: one record)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
@@ -122,7 +128,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                                                    "--trace-limit", "--no-compare", "--emit-l0-result",
                                                    "--emit-l0", "--emit-l0-kernel",
                                                    "--tflow", "--step", "--step-limit", "--timeline",
-                                                   "--dflow", "--dflow-limit", "--dflow-values", "--dflow-values-cap"};
+                                                   "--dflow", "--dflow-limit", "--dflow-values", "--dflow-values-cap",
+                                                   "--tile-commands"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -133,12 +140,13 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             return 2;
         }
     std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path, trace_path, kernel_path, dflow_path,
-        dflow_values;
+        dflow_values, tile_cmds_path;
     if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err) ||
         !arg_required(a, "--timeline", timeline_path, err) || !arg_required(a, "--emit-l0", trace_path, err) ||
         !arg_required(a, "--emit-l0-kernel", kernel_path, err) || !arg_required(a, "--dflow", dflow_path, err) ||
-        !arg_required(a, "--dflow-values", dflow_values, err)) {
+        !arg_required(a, "--dflow-values", dflow_values, err) ||
+        !arg_required(a, "--tile-commands", tile_cmds_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -339,6 +347,25 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             }
         }
         if (!write_dflow_bundle(run_id, reference.values ? &*reference.values : nullptr, lt1, lt1_id)) return 2;
+    }
+    // --tile-commands: the program as the RTL's tile command stream (#397), with the inputs and
+    // L-B's results in it, for the RTL's runtime to execute.
+    if (!tile_cmds_path.empty()) {
+        try {
+            const csp::CspProgram p = csp::lang::compile(*ast);
+            csp::TileTarget t;
+            if (!p.source.operand_order().empty()) t.dim = static_cast<std::uint32_t>(p.source.operand(p.source.operand_order()[0]).tile_rows);
+            const auto s = csp::lower_tile_commands(p, t, &inputs, reference.values ? &*reference.values : nullptr);
+            std::ofstream out(tile_cmds_path);
+            out << csp::to_json(s, "kpu-sim " + std::string(sw::kpu::VERSION_FULL));
+            if (!out) throw std::runtime_error("cannot write " + tile_cmds_path);
+            std::cout << "wrote  " << tile_cmds_path << "  (kpu-tile-cmds version " << csp::tilecmd::kVersion << ": "
+                      << s.commands.size() << " commands, " << s.l3_init.size() << " input tiles, " << s.results.size()
+                      << " result tiles" << (reference.values ? ", with L-B's values" : "") << ")\n";
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: --tile-commands: " << e.what() << "\n";
+            return 2;
+        }
     }
     CspRunResult res;
     res.validation = validation;

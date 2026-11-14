@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One program on both sides: a CSP program as the KPU RTL's tile command stream** (#397,
+  `docs/plans/tile-command-stream.md`).
+  - `kpu-run --tile-commands out.json` lowers a program to `kpu-tile-cmds` version 1: the RTL's
+    LOAD / STORE / EXEC commands with their `sync` credits and `chain` bits, in the RTL's field
+    order, plus the inputs the host puts in L3 and L-B's results. The RTL's runtime executes it
+    (generator#49).
+  - Version 1 is one output-stationary int8 tile. A gemm call is LOAD A, LOAD B (corner-turned)
+    and COMPUTE; a DRAIN and its WRITEBACK are one STORE from the accumulator. L3 addresses are
+    the walker's slots. Anything else is refused by name.
+  - The 4×4 matmul lowers to the same five commands kpugen's own matmul issuer produces.
+  - `tools/trace/tile_cmds_run.py` runs a stream as the tile's controller does: it enforces the
+    slot protocol and checks the results against L-B's. Its self-test breaks each rule.
 - **`.dflow` 6.1: the RTL's accumulator → L3 store and its word-addressed L3** (#398,
   `docs/plans/shared-tile-flow-record.md`).
   - A version-6 manifest may carry `"minor": 1`. Minor revisions keep the `layers` and

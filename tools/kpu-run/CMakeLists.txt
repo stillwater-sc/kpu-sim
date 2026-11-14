@@ -596,6 +596,24 @@ if(KPU_BUILD_TESTS)
             dflow_rtl_sample_addressed dflow_check_rtl_sample_addressed
             PROPERTIES LABELS "program;domainflow;csp")
     endif()
+    # One program on both sides (#397): kpu-run lowers a CSP program to the RTL's tile command
+    # stream, with the inputs and L-B's results, and the reference executor runs it: the slot
+    # protocol holds and the results are L-B's.
+    if(KPU_PYTHON3)
+        add_test(NAME kpu_run_tile_commands
+            COMMAND kpu-run --program ${CMAKE_SOURCE_DIR}/tests/program/tilecmd/matmul_int8_8_t4.csp
+                    --level behavioral --tile-commands ${CMAKE_CURRENT_BINARY_DIR}/mm8_tile_cmds.json)
+        set_tests_properties(kpu_run_tile_commands PROPERTIES FIXTURES_SETUP tile_cmds_mm8)
+        add_test(NAME tile_cmds_run_mm8
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/tile_cmds_run.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/mm8_tile_cmds.json)
+        add_test(NAME tile_cmds_run_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tile_cmds_run.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/mm8_tile_cmds.json)
+        set_tests_properties(tile_cmds_run_mm8 tile_cmds_run_selftest PROPERTIES FIXTURES_REQUIRED tile_cmds_mm8)
+        set_tests_properties(kpu_run_tile_commands tile_cmds_run_mm8 tile_cmds_run_selftest PROPERTIES
+            LABELS "program;csp;tilecmd")
+    endif()
     # Residency across operators (step 4d): the first operator of a chain retains its result
     # (no stores), the second inherits it (no loads of it), each at every level.
     add_test(NAME kpu_run_csp_retain
