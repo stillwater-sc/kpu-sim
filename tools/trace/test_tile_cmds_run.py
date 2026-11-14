@@ -77,6 +77,14 @@ class Run(unittest.TestCase):
                  self.doc["l3"]["bytes"])
         self.fails("outside its")
 
+    def test_a_store_wider_than_an_accumulator_row(self):
+        st = self.find(tr.STORE)
+        self.set(st, "row_bytes", 4 * self.doc["tile"]["dim"] + 4)
+        self.doc["l3"]["bytes"] += 4096                  # room enough that only the width is wrong
+        for x in self.doc["results"]:
+            x["bytes"] = None
+        self.fails("an accumulator row is")
+
     def test_a_negative_result_address(self):
         self.doc["results"][0]["addr"] = -64
         self.fails("outside its")

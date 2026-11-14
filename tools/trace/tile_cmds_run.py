@@ -131,6 +131,10 @@ def run(doc):
             if not c["local_addr"] & ACC_BIT or c["activation"] != 0:
                 raise Wrong(f"{tag}: version 1 stores an accumulator slot, with no activation")
             base = c["local_addr"] & ~ACC_BIT
+            # A row is at most the accumulator's dim int32s: a wider slice would take fewer bytes
+            # than it spans, and Python would shrink L3 (every later address would shift).
+            if not 0 < c["row_bytes"] <= dim * 4:
+                raise Wrong(f"{tag} stores {c['row_bytes']}-byte rows; an accumulator row is {dim * 4} bytes")
             for r in range(c["len"]):
                 a = c["dram_addr"] + r * c["stride"]
                 where = span(tag, a, c["row_bytes"], len(l3))
