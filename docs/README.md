@@ -20,6 +20,7 @@ High-level architecture and specifications that define what the KPU is.
 | [kpu-execution-model.md](01-architecture/kpu-execution-model.md) | Credit-based dataflow execution model |
 | [kpu-specification.md](01-architecture/kpu-specification.md) | Complete KPU specification |
 | [kpu-architecture.md](01-architecture/kpu-architecture.md) | Overall architecture overview |
+| [combiner.md](01-architecture/combiner.md) | The Combiner: the tile's result-path unit between L1 and L2 (merges partials; fused bias, activation, scaling, block-format conversion). New, not yet modelled (#427) |
 | [soc-architecture.md](01-architecture/soc-architecture.md) | SoC-level architecture |
 | [product-architecture.md](01-architecture/product-architecture.md) | Product positioning |
 | [spatial-computing.md](01-architecture/spatial-computing.md) | Spatial computing concepts |
