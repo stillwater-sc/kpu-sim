@@ -136,6 +136,26 @@ TEST_CASE("TagCAM: a placed slot holds one tile until its entry leaves", "[csp][
     CHECK(cam.claim_log().size() == 1);
 }
 
+TEST_CASE("TagCAM: a second copy of a tile holds its own credit (#424)", "[csp][lca][tag_cam]") {
+    using sw::kpu::timing::TagCAM;
+    using sw::kpu::timing::TileID;
+    TagCAM cam(8);
+    TileID x;
+    x.ti = 3;
+    REQUIRE(cam.insert_copy(x, 4, 0));          // the first Move's copy
+    REQUIRE(cam.insert_copy(x, 5, 1));          // a second Move of x while the first is still in L2
+    CHECK(cam.ref_count(x) == 2);
+    CHECK(cam.invalidate(x));                   // one copy read: its credit returns
+    CHECK(cam.lookup(x));                       // the other copy is still there
+    CHECK(cam.invalidate(x));                   // the last copy read: its credit too
+    CHECK_FALSE(cam.lookup(x));
+    // A reference (a broadcast's k consumers of one copy) is not a copy: one credit.
+    REQUIRE(cam.insert(x, 4, 2, 3));
+    CHECK_FALSE(cam.invalidate(x));
+    CHECK_FALSE(cam.invalidate(x));
+    CHECK(cam.invalidate(x));
+}
+
 TEST_CASE("L-CA executes the walker's placement, the same slots as L-T1 and L-B", "[csp][placement][lca]") {
     for (const char* opts : {"", ", place = lowest", ", banks = 4, place = bank-spread"}) {
         for (const char* init : {"none", "bias-row"}) {
@@ -346,9 +366,12 @@ TEST_CASE("L-CA: a staged copy is moved once and holds its L2 slot until its L2R
         return n;
     };
     CHECK(transfers(staged) == 80);
-    // Measured, not asserted: unstaged, the executor's dedup (process_dedup_moves) completes 48 of
-    // A's Moves on the copy still in L2, without a transfer -- reuse the program did not decide --
-    // so on this program staging leaves L-CA's timing as it was.
+    // Unstaged, every Move transfers (#424): the reuse is the program's to state, and the mover
+    // finds none of its own. So staging is what saves L-CA the 48 transfers, as at L-T1, and the
+    // staged program is the faster one.
+    CHECK(transfers(plain) == 128);
+    CHECK(staged.r.cycles < plain.r.cycles);
+    CHECK(staged.stats.bm_busy_cycles < plain.stats.bm_busy_cycles);
     std::printf("L-CA L2 staging: unstaged makespan %llu (bm busy %.0f, dma busy %.0f, cf busy %llu), "
                 "staged %llu (bm busy %.0f, dma busy %.0f, cf busy %llu)\n",
                 (unsigned long long)plain.r.cycles, plain.stats.bm_busy_cycles, plain.stats.dma_busy_cycles,

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **L-CA finds no reuse of its own** (#424). A CSP program's Move always transfers its tile; the
+  BlockMover no longer completes it on a copy still in L2. A second copy of a tile lands beside the
+  first with its own L2 credit. Reuse is the program's to state (an L2 staging). The dedup remains
+  for the legacy schedule path.
+  - L-CA's timing changes where programs relied on the implicit reuse: the 128³ matmul's
+    whole-program run goes from 9985 to 15760 cycles; the L2-staging test's unstaged program from
+    4400 to 5328, while the staged one stays at 4400, so staging now pays at L-CA as at L-T1.
+
 ### Added
 
 - **The KPU RTL generator's machine as a kpu-sim deployment** (#396).

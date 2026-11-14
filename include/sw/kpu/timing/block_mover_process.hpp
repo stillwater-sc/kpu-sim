@@ -454,10 +454,15 @@ private:
                 // Move complete: tile arrived at L2. The ref count is seeded
                 // with the tile's consumer count (broadcast 1:1:k, #100);
                 // the ordinary pipeline has consumer_count = 1.
-                l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id,
-                                   current_cycle,
-                                   static_cast<uint32_t>(
-                                       in_flight_->tile.consumer_count));
+                if (in_flight_->tile.ordered && in_flight_->tile.l2_slot < 0)
+                    // A CSP Move lands its own copy, with its own credit, even when an earlier
+                    // copy of the tile is still in L2 (#424).
+                    l2_tag_cam_.insert_copy(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
+                else
+                    l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id,
+                                       current_cycle,
+                                       static_cast<uint32_t>(
+                                           in_flight_->tile.consumer_count));
                 // Only release L3 credit if tile was fully removed (ref_count reached 0). A
                 // program-held entry is not the Move's to consume: its Release retires it.
                 bool credit_released = !in_flight_->tile.l3_held &&
@@ -607,6 +612,12 @@ private:
      *
      * The L3 side is still consumed per move: each dedup decrements the
      * L3 ref_count and releases the L3 credit when it reaches 0.
+     *
+     * Legacy schedules only. A CSP program's Move (`ordered`) is never
+     * deduplicated (#424): reuse must be the program's, stated in its data
+     * movement (an L2 staging), never found by the mover. Its Move transfers,
+     * and a second copy of a tile still in L2 lands beside the first with
+     * its own credit (TagCAM::insert_copy).
      */
     void process_dedup_moves(Cycle current_cycle, std::vector<TimingEvent>& events) {
         size_t i = 0;
@@ -614,6 +625,9 @@ private:
             const auto& tile = move_queue_.at(i);
             if (!released_before(tile)) { ++i; continue; }
             if (tile.l2_slot >= 0) { ++i; continue; }   // a staging Move: a copy in its own slot
+            // A CSP program's Move always transfers (#424): reuse is the program's to state (an
+            // L2 staging), never the mover's to find. The dedup serves the legacy schedules.
+            if (tile.ordered) { ++i; continue; }
             if (behind_staging(i)) { ++i; continue; }    // its arrival must not count before the staging's
             auto l2_entry = l2_tag_cam_.match(tile.tile_id);
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
