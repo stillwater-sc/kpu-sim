@@ -128,6 +128,14 @@ class Convert(unittest.TestCase):
         m["memory_type"], m["memory_controllers"] = "ddr5", 3     # 4 x16 channels over 3 controllers
         self.refused("cannot share evenly")
 
+    def test_non_power_of_two_dram_counts_are_refused(self):
+        m = self.doc["architecture"]["memory"]
+        for bus, controllers, gbps in ((96, 3, 76.8), (48, 1, 38.4)):     # 3 controllers; 3 channels
+            with self.subTest(bus=bus, controllers=controllers):
+                m["memory_type"], m["memory_bus_bits"], m["memory_controllers"] = "ddr5", bus, controllers
+                m["memory_bandwidth_gbps"] = gbps
+                self.refused("power-of-two controller and channel counts")
+
     def test_an_unknown_dram_is_refused(self):
         self.doc["architecture"]["memory"]["memory_type"] = "sdr"
         self.refused("memory_type 'sdr'")

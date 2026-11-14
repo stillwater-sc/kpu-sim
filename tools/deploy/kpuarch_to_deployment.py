@@ -275,6 +275,11 @@ def convert(doc, tiles="one"):
                        f"{memory['memory_bandwidth_gbps']}, memory_size_gb {memory['memory_size_gb']}: "
                        f"{channels} x16 channels on {controllers} controller(s), and kpu-sim's LPDDR controller "
                        "drives 1 or 2; memory.dram is not carried (kpu-sim's built-in memory timing stands in)")
+    elif controllers & (controllers - 1) or (channels // controllers) & (channels // controllers - 1):
+        # kpu-sim's DRAM address map takes power-of-two controller and channel counts
+        # (DeploymentSpec dram_problem): a deployment that breaks them would not be read.
+        raise Refused(f"memory: {controllers} controllers of {channels // controllers} x16 channels; kpu-sim's DRAM "
+                      "address map needs power-of-two controller and channel counts")
     else:
         carried += [f"memory.memory_type {tech} -> memory.dram.technology",
                     f"memory.memory_bus_bits {bus} -> {channels // controllers} x16 channels per controller",
