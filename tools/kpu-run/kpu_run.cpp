@@ -358,6 +358,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             const auto s = csp::lower_tile_commands(p, t, &inputs, reference.values ? &*reference.values : nullptr);
             std::ofstream out(tile_cmds_path);
             out << csp::to_json(s, "kpu-sim " + std::string(sw::kpu::VERSION_FULL));
+            out.close();                                // flushes: a failed tail write is a failure
             if (!out) throw std::runtime_error("cannot write " + tile_cmds_path);
             std::cout << "wrote  " << tile_cmds_path << "  (kpu-tile-cmds version " << csp::tilecmd::kVersion << ": "
                       << s.commands.size() << " commands, " << s.l3_init.size() << " input tiles, " << s.results.size()

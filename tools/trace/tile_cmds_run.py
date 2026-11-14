@@ -46,6 +46,14 @@ class Wrong(Exception):
     pass
 
 
+def span(where, start, length, size):
+    # An access [start, start + length) must lie inside L3: no negative start or length (Python's
+    # negative slicing would read the wrong bytes), no end past it.
+    if not isinstance(start, int) or not isinstance(length, int) or start < 0 or length < 0 or start + length > size:
+        raise Wrong(f"{where} accesses L3 bytes [{start}, {start}+{length}) outside its {size}")
+    return slice(start, start + length)
+
+
 def run(doc):
     if doc.get("format") != "kpu-tile-cmds" or doc.get("version") != 1:
         raise ValueError(f"not a kpu-tile-cmds version-1 stream ({doc.get('format')!r}, {doc.get('version')!r})")
@@ -57,9 +65,7 @@ def run(doc):
         if x["bytes"] is None:
             raise ValueError(f"{x['tile']}: the stream carries no input values")
         b = bytes.fromhex(x["bytes"])
-        if x["addr"] + len(b) > len(l3):
-            raise Wrong(f"l3_init {x['tile']} at {x['addr']} runs past L3 ({len(l3)} bytes)")
-        l3[x["addr"]:x["addr"] + len(b)] = b
+        l3[span(f"l3_init {x['tile']}", x["addr"], len(b), len(l3))] = b
     spad = {}                                   # scratchpad row -> dim signed bytes
     acc = {}                                    # accumulator row -> dim int32
     state = {"l2": {}, "acc": {}}               # tag -> FREE / OWNED / READY
@@ -96,9 +102,7 @@ def run(doc):
             rows = []
             for r in range(c["len"]):
                 a = c["dram_addr"] + r * c["stride"]
-                if a + c["row_bytes"] > len(l3):
-                    raise Wrong(f"{tag} reads L3 bytes [{a}, {a + c['row_bytes']}) past its {len(l3)}")
-                rows.append(list(struct.unpack(f"<{c['row_bytes']}b", l3[a:a + c["row_bytes"]])))
+                rows.append(list(struct.unpack(f"<{c['row_bytes']}b", l3[span(tag, a, c["row_bytes"], len(l3))])))
             if c["opcode"] == TRANSPOSE:
                 rows = [list(col) for col in zip(*rows)]
             elif c["opcode"] != MEMCPY:
@@ -129,12 +133,11 @@ def run(doc):
             base = c["local_addr"] & ~ACC_BIT
             for r in range(c["len"]):
                 a = c["dram_addr"] + r * c["stride"]
-                if a + c["row_bytes"] > len(l3):
-                    raise Wrong(f"{tag} writes L3 bytes [{a}, {a + c['row_bytes']}) past its {len(l3)}")
+                where = span(tag, a, c["row_bytes"], len(l3))
                 v = acc.get(base + r)
                 if v is None:
                     raise Wrong(f"{tag} stores accumulator row {base + r}, which no COMPUTE wrote")
-                l3[a:a + c["row_bytes"]] = struct.pack(f"<{dim}i", *v)[:c["row_bytes"]]
+                l3[where] = struct.pack(f"<{dim}i", *v)[:c["row_bytes"]]
         else:
             raise Wrong(f"{tag}: type {c['type']} opcode {c['opcode']} is not version 1's")
         # Completion.
@@ -147,7 +150,7 @@ def run(doc):
         raise Wrong(f"slots still held at the end: {held}")
     bad = []
     for x in doc["results"]:
-        got = bytes(l3[x["addr"]:x["addr"] + x["row_bytes"] * dim]).hex()
+        got = bytes(l3[span(f"result {x['tile']}", x["addr"], x["row_bytes"] * dim, len(l3))]).hex()
         if x["bytes"] is not None and got != x["bytes"]:
             bad.append(x["tile"])
     if bad:

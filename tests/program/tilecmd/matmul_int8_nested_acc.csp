@@ -1,0 +1,17 @@
+csp 1.0
+// Two accumulators held at once: C[0,0] stays open while C[0,1] is computed and stored (#397).
+program nest machine flat(l3 = 5) {
+  tensor A[4,4] int8 tile 4x4 in;
+  tensor B[4,8] int8 tile 4x4 in;
+  tensor C[4,8] int32 tile 4x4 out;
+  resident A[0, 0], B[0, :];
+  acc C[0, 0] in fabric {
+    acc C[0, 1] in fabric {
+      call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];
+      call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];
+    }
+    store C[0, 1];
+  }
+  store C[0, 0];
+  release A[0, 0], B[0, :];
+}

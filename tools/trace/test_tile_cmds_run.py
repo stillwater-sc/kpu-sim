@@ -69,7 +69,17 @@ class Run(unittest.TestCase):
 
     def test_an_address_outside_l3(self):
         self.set(self.find(tr.LOAD), "dram_addr", self.doc["l3"]["bytes"])
-        self.fails("past its")
+        self.fails("outside its")
+
+    def test_a_negative_address(self):
+        # Negative slicing would read the input's bytes and let the results match.
+        self.set(self.find(tr.LOAD), "dram_addr", self.doc["commands"][self.find(tr.LOAD)][F["dram_addr"]] -
+                 self.doc["l3"]["bytes"])
+        self.fails("outside its")
+
+    def test_a_negative_result_address(self):
+        self.doc["results"][0]["addr"] = -64
+        self.fails("outside its")
 
     def test_a_wrong_expected_value(self):
         x = self.doc["results"][0]

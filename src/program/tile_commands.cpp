@@ -141,6 +141,7 @@ TileCommandStream lower_tile_commands(const CspProgram& p, const TileTarget& t, 
     std::map<std::string, std::size_t> held;                       // tile -> its open residency
     std::map<std::string, std::uint32_t> acc_of;                   // output -> its accumulator slot
     std::map<std::string, std::uint32_t> drained;                  // output drained, its STORE still to come
+    std::set<std::uint32_t> acc_busy;                              // accumulator slots held until their STORE
     std::uint32_t pair = 0, next_acc = 0;
     const std::uint32_t dim = t.dim;
     for (std::size_t i = 0; i < A.size(); ++i) {
@@ -171,11 +172,32 @@ TileCommandStream lower_tile_commands(const CspProgram& p, const TileTarget& t, 
                     refuse("action " + std::to_string(i) + " is " + to_string(op.kind) + "; version 1 lowers gemm "
                            "(alpha 1)");
                 const TileCoord &x = op.inputs.at(0), &w = op.inputs.at(1), &y = op.outputs.at(0);
+                // The tile computes int8 x int8 -> int32: its STORE writes int32 rows.
+                if (src.operand(x.operand).type != kInt8 || src.operand(w.operand).type != kInt8 ||
+                    src.operand(y.operand).type != kInt32)
+                    refuse("action " + std::to_string(i) + " computes " + src.operand(x.operand).type + " x " +
+                           src.operand(w.operand).type + " -> " + src.operand(y.operand).type +
+                           "; the tile computes int8 x int8 -> int32");
                 for (const TileCoord* in : {&x, &w})
                     if (!held.count(in->to_string()))
                         refuse("action " + std::to_string(i) + " reads " + in->to_string() + ", which is not resident in L3");
                 const auto [first, last] = ends.at(i);
-                if (first) acc_of[y.to_string()] = next_acc++ % t.acc_slots;
+                if (first) {
+                    // A free accumulator slot, held until its STORE releases it. The tile has
+                    // acc_slots of them: a program holding more accumulators at once is refused.
+                    std::optional<std::uint32_t> slot;
+                    for (std::uint32_t k = 0; k < t.acc_slots && !slot; ++k) {
+                        const std::uint32_t cand = (next_acc + k) % t.acc_slots;
+                        if (!acc_busy.count(cand)) slot = cand;
+                    }
+                    if (!slot)
+                        refuse("action " + std::to_string(i) + " opens accumulator " + y.to_string() + " while " +
+                               std::to_string(t.acc_slots) + " are held (the tile has " + std::to_string(t.acc_slots) +
+                               " accumulator slots); store one first");
+                    acc_of[y.to_string()] = *slot;
+                    acc_busy.insert(*slot);
+                    next_acc = *slot + 1;
+                }
                 const std::uint32_t acc = acc_of.at(y.to_string());
                 const std::uint32_t pr = pair++ % t.buffers;
                 TileCommand la;                                    // A into pair slot pr: take the pair
@@ -224,6 +246,7 @@ TileCommandStream lower_tile_commands(const CspProgram& p, const TileTarget& t, 
                 st.row_bytes = static_cast<std::uint16_t>(dim * 4);
                 st.sync = sync(d->second, 0, kWait | kRelease);
                 emit(st, i, a.tile);
+                acc_busy.erase(d->second);                         // the STORE releases the slot
                 drained.erase(d);
                 held[key] = a.residency;
                 break;

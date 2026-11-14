@@ -49,12 +49,14 @@ array's `dim × dim`. The target is the RTL's defaults: `dim` (from the program'
 | `STORE` | none: the host reads the results after (`results`) |
 | `RELEASE` | none |
 
-- The pair slot *p* cycles call by call; an output's accumulator slot cycles reduction by
-  reduction.
+- The pair slot *p* cycles call by call.
+- An accumulator takes a free accumulator slot at its reduction's first step and holds it until
+  its STORE. A program that holds more accumulators at once than the tile has slots is refused.
 - L3 is the RTL's flat memory. A residency lives at its walker slot × a pitch of `dim·dim·4`
   bytes, so the stream's L3 addresses are the program's placement (#399).
 - **Refused, by name:**
-  - another element type, or a tile not the array's size;
+  - another element type, a gemm other than int8 × int8 → int32, or a tile not the array's size;
+  - more accumulators held at once than `acc_slots`;
   - an L3 slot holding two residencies: the host fills L3 once, so a program must give every
     residency its own slot;
   - L2 staging, a tile context, an accumulator init, a loaded result (accumulate onto C);

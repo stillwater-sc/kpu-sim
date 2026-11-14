@@ -143,3 +143,31 @@ TEST_CASE("tile commands: what version 1 does not lower is refused by name", "[p
                        "  store C[0, 0];\n}\n"),
                ContainsSubstring("fills L3 once"));
 }
+
+TEST_CASE("tile commands: an accumulator slot is held until its STORE", "[program][tilecmd]") {
+    using namespace tilecmd;
+    const std::string text = read("tests/program/tilecmd/matmul_int8_nested_acc.csp");
+    const lang::Program ast = lang::parse(text);
+    const TileProgram in = driver::csp_inputs(ast);
+    const CspProgram p = lang::compile(ast);
+    // Two accumulators open at once take slots 0 and 1, never the same one.
+    const auto s = lower_tile_commands(p, TileTarget{}, &in);
+    std::vector<std::uint32_t> acquired, stored;
+    for (const auto& c : s.commands) {
+        if (c.type == kExec && c.opcode == kCompute && (c.sync & kAcquire)) acquired.push_back((c.sync >> 4) & 0xF);
+        if (c.type == kStore) stored.push_back(c.sync & 0xF);
+    }
+    CHECK(acquired == std::vector<std::uint32_t>{0, 1});
+    CHECK(stored == std::vector<std::uint32_t>{1, 0});     // C[0,1] is stored first, from slot 1
+    // A tile with one accumulator slot cannot hold both: refused, not a stream that reuses it.
+    TileTarget one;
+    one.acc_slots = 1;
+    CHECK_THROWS_WITH(lower_tile_commands(p, one, &in), ContainsSubstring("store one first"));
+}
+
+TEST_CASE("tile commands: the gemm's operand types are checked at the call", "[program][tilecmd]") {
+    // C declared int8: the tile's STORE writes int32 rows, so the call is refused.
+    std::string text = read("tests/program/tilecmd/matmul_int8_4.csp");
+    text.replace(text.find("tensor C[4,4] int32"), 19, "tensor C[4,4] int8 ");
+    CHECK_THAT(refusal(text), ContainsSubstring("computes int8 x int8 -> int8"));
+}

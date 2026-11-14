@@ -601,7 +601,7 @@ if(KPU_BUILD_TESTS)
     # protocol holds and the results are L-B's.
     if(KPU_PYTHON3)
         add_test(NAME kpu_run_tile_commands
-            COMMAND kpu-run --program ${CMAKE_SOURCE_DIR}/tests/program/tilecmd/matmul_int8_8_t4.csp
+            COMMAND run --program ${CMAKE_SOURCE_DIR}/tests/program/tilecmd/matmul_int8_8_t4.csp
                     --level behavioral --tile-commands ${CMAKE_CURRENT_BINARY_DIR}/mm8_tile_cmds.json)
         set_tests_properties(kpu_run_tile_commands PROPERTIES FIXTURES_SETUP tile_cmds_mm8)
         add_test(NAME tile_cmds_run_mm8
@@ -611,7 +611,17 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tile_cmds_run.py
                     ${CMAKE_CURRENT_BINARY_DIR}/mm8_tile_cmds.json)
         set_tests_properties(tile_cmds_run_mm8 tile_cmds_run_selftest PROPERTIES FIXTURES_REQUIRED tile_cmds_mm8)
-        set_tests_properties(kpu_run_tile_commands tile_cmds_run_mm8 tile_cmds_run_selftest PROPERTIES
+        # Two accumulators held at once: each its own slot, held until its STORE.
+        add_test(NAME kpu_run_tile_commands_nested
+            COMMAND run --program ${CMAKE_SOURCE_DIR}/tests/program/tilecmd/matmul_int8_nested_acc.csp
+                    --level behavioral --tile-commands ${CMAKE_CURRENT_BINARY_DIR}/nested_tile_cmds.json)
+        set_tests_properties(kpu_run_tile_commands_nested PROPERTIES FIXTURES_SETUP tile_cmds_nested)
+        add_test(NAME tile_cmds_run_nested
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/tile_cmds_run.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/nested_tile_cmds.json)
+        set_tests_properties(tile_cmds_run_nested PROPERTIES FIXTURES_REQUIRED tile_cmds_nested)
+        set_tests_properties(kpu_run_tile_commands tile_cmds_run_mm8 tile_cmds_run_selftest
+            kpu_run_tile_commands_nested tile_cmds_run_nested PROPERTIES
             LABELS "program;csp;tilecmd")
     endif()
     # Residency across operators (step 4d): the first operator of a chain retains its result
