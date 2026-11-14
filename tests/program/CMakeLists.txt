@@ -83,6 +83,16 @@ set_tests_properties(test_csp_lt1_place PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# L-CA executes placement: a credit is a slot (docs/plans/l3-placement-at-lb.md step 6, #399)
+kpu_add_component_test(test_csp_lca_place "program"
+    test_csp_lca_place.cpp
+)
+
+set_tests_properties(test_csp_lca_place PROPERTIES
+    LABELS "program;csp;lca;placement;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # L-T1 times the fabric as a systolic pipeline (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2)
 kpu_add_component_test(test_fabric_pipeline "program"
     test_fabric_pipeline.cpp

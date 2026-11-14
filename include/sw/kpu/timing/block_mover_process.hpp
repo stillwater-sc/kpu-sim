@@ -443,6 +443,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
+                    events.back().slot_id = in_flight_->slot_id;
                 }
                 in_flight_target_ = nullptr;
                 in_flight_ticket_ = 0;
@@ -790,12 +791,23 @@ private:
         std::optional<TagCAMEntry> found_entry;
         size_t found_index = 0;
         Cycle oldest_enqueue = std::numeric_limits<Cycle>::max();
+        bool slot_blocked = false;         // an L2-ready Writeback waits for its L3 slot
+        size_t slot_blocked_index = 0;
 
         for (size_t i = 0; i < writeback_queue_.size(); ++i) {
             const auto& tile = writeback_queue_.at(i);
             if (writeback_guard_ && writeback_guard_(tile)) continue;   // its own drain has not landed
             auto l2_entry = l2_tag_cam_.match(tile.tile_id);
             if (l2_entry.has_value()) {
+                // A placed Writeback that opens a residency waits for its own L3 slot. Skip it
+                // here, so a later Writeback whose slot is ready (and whose L2 credit a blocked
+                // Move may need) is not held behind it.
+                if (!tile.l3_held && tile.l3_slot >= 0 &&
+                    !l3_tag_cam_.slot_ready(static_cast<uint32_t>(tile.l3_slot), tile.l3_slot_turn)) {
+                    if (!slot_blocked) slot_blocked_index = i;
+                    slot_blocked = true;
+                    continue;
+                }
                 if (config_.priority_aging) {
                     // Priority aging: prefer oldest tile
                     if (tile.enqueue_cycle < oldest_enqueue) {
@@ -810,6 +822,19 @@ private:
                     break;
                 }
             }
+        }
+
+        // Every L2-ready Writeback waits for its own L3 slot: a credit stall.
+        if (!found_entry.has_value() && slot_blocked) {
+            events.push_back(TimingEvent(
+                EventType::BM_STALL_CREDIT,
+                current_cycle,
+                config_.mover_id,
+                writeback_queue_.at(slot_blocked_index).tile_id,
+                name()
+            ));
+            stall_cycles_credit_++;
+            return false;
         }
 
         // No tile in queue is ready in L2
@@ -829,6 +854,8 @@ private:
         // Check if L3 credit available (writebacks carry C tiles, which have
         // their own partition when the pool is partitioned, per #89). A writeback into a
         // program-held entry writes its slot in place: the residency already holds the credit.
+        // A placed writeback that opens a residency (l3-placement-at-lb.md step 6) takes its own
+        // slot's credit: the scan above chose one whose slot is ready.
         const bool in_place = writeback_queue_.at(found_index).l3_held;
         if (!in_place && !l3_credits_.acquire(
                 static_cast<size_t>(writeback_queue_.at(found_index).tile_id.matrix))) {
@@ -851,7 +878,13 @@ private:
         Cycle transfer_cycles = std::max(move, wb_tile.ve_cycles);
         ve_busy_cycles_ += wb_tile.ve_cycles;
         if (wb_tile.ve_cycles > move) ve_bound_cycles_ += wb_tile.ve_cycles - move;
-        uint32_t l3_slot = found_entry->slot_id;  // Reuse slot info for tracking
+        // The L3 slot it lands in: the program's placement, claimed with the credit (an in-place
+        // writeback's residency holds it already). Unplaced, the L2 slot's number stands in.
+        uint32_t l3_slot = found_entry->slot_id;
+        if (wb_tile.l3_slot >= 0) {
+            l3_slot = static_cast<uint32_t>(wb_tile.l3_slot);
+            if (!in_place) l3_tag_cam_.claim_slot(l3_slot, wb_tile.tile_id, wb_tile.l3_slot_turn);   // ready
+        }
 
         in_flight_ = InFlightTransfer(
             wb_tile,

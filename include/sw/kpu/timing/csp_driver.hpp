@@ -41,6 +41,10 @@
 //                  like a Load's (step 4d: the operator before left it resident)
 //   Retain      -> nothing: the entry keeps its credit past the program's end. The result reads
 //                  a retained tile from L3, since DRAM need not have it.
+//   Placement (l3-placement-at-lb.md step 6): every action carries its residency's L3 slot, the
+//                  walker's. The Load, Writeback or Inherit that opens a residency takes that
+//                  slot's credit -- it waits until the tile placed there before has left L3 --
+//                  and the entry lives in that slot. No L-CA process picks an L3 slot of its own.
 //   L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3) is UNMAPPED here until
 //   the executor's L2 joins placement (l3-placement-at-lb.md step 6), decided 2026-10-16: the
 //   staging Move is skipped, each staged Feed is a Move from the tile's L3 slot (which the
@@ -99,6 +103,9 @@ public:
         ConcurrentTimingExecutor::VectorStats ve;   // tile-context time by site
         std::size_t peak_held = 0;          // most actions the driver and executor held at once
         std::size_t staged_feeds = 0;       // staged Feeds run as Move + Feed (L2 staging unmapped)
+        // Each residency's L3 slot as L-CA executed it: (tile, slot), in the order the slots were
+        // claimed -- each slot's tiles in the order they held it (l3-placement-at-lb.md step 6).
+        std::vector<std::pair<program::TileCoord, std::uint32_t>> l3_placement;
         program::TileProgram values;        // the source program's operands, as DRAM holds them
     };
 
@@ -158,6 +165,9 @@ public:
         retained_.clear();
         inits_.clear();
         stored_.clear();
+        coord_.clear();
+        open_.clear();
+        slot_turns_.clear();
 
         Result r;
         const Cycle max = exec_.config().max_cycles;
@@ -199,6 +209,8 @@ public:
         }
         r.dram_bytes = dram_bytes_;
         r.staged_feeds = staged_feeds_;
+        for (const auto& [slot, tile] : exec_.l3_tile_tag_cam(0).claim_log())
+            r.l3_placement.emplace_back(coord_.at(tile), slot);
         for (std::size_t t = 0; t < exec_.config().num_compute_tiles; ++t) r.cf_busy += exec_.compute_tile_busy_cycles(t);
         r.ve = exec_.vector_stats();
         // Every operand as DRAM holds it -- inputs included, so a level that wrote an input is
@@ -242,6 +254,9 @@ private:
     std::size_t next_ = 0;                      // the trace's next action
     std::deque<TileDescriptor> loads_;          // the dma process's Loads not yet handed over
     std::set<TileID> loaded_;                   // tiles whose open residency a Load opened
+    std::map<TileID, program::TileCoord> coord_;    // each executor tile's program tile
+    std::set<TileID> open_;                         // tiles with an open residency (placement)
+    std::map<std::uint32_t, std::uint32_t> slot_turns_;   // L3 slot -> residencies opened in it
     std::map<std::string, std::size_t> tagged_tk_;   // an operand other than A, B, C -> its tk tag
     std::uint64_t dram_bytes_ = 0;
     std::uint64_t seq_ = 0;                          // program order of the actions handed over
@@ -309,6 +324,19 @@ private:
         }
         TileDescriptor d = descriptor(a.tile);
         d.program_seq = ++seq_;
+        coord_.emplace(d.tile_id, a.tile);
+        // The walker's L3 placement (l3-placement-at-lb.md step 6): the Load, Writeback or Inherit
+        // that opens the residency takes this slot's credit, and the entry lives there.
+        if (a.place) d.l3_slot = static_cast<std::int32_t>(a.place->slot);
+        // The action that opens a residency takes the slot at its turn: after every residency
+        // the program placed there before it (a Load that runs ahead waits for its turn).
+        const bool opens = a.place && (a.kind == Action::Kind::Load || a.kind == Action::Kind::Inherit ||
+                                       (a.kind == Action::Kind::Writeback && !open_.count(d.tile_id)));
+        if (opens) {
+            d.l3_slot_turn = slot_turns_[a.place->slot]++;
+            open_.insert(d.tile_id);
+        }
+        if (a.kind == Action::Kind::Release) open_.erase(d.tile_id);
         switch (a.kind) {
             case Action::Kind::Load:
                 // An inout C: DRAM holds this run's input until a Store writes the tile (the

@@ -1,7 +1,8 @@
 # L3 Placement Is Behavior: L-B Models Where Every Tile Lives
 
 **Date:** 2026-10-11
-**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-4 and 5a merged (#364-#368); step 5b (`.tflow` binds slots) in review
+**Status:** Approved 2026-10-11 (Q1-Q6 as recommended, §7). Steps 1-5 merged (#364-#368, 5b after).
+Step 6 (#399) is split: its L3 slots are in review; its L2 staging follows; its banks are #417
 **Raised by:** the architect, 2026-10-11, reviewing `docs/plans/domain-flow-debugger.md` (#363):
 > The L-B behavioral model has to model L3 placement otherwise the CSP sequencing doesn't do
 > anything. The tile placement in L3 is a key component of the behavior of the machine, in the
@@ -305,6 +306,22 @@ Each step is one PR, reviewed and merged before the next. The suite stays green 
      until banks change the timing, with the programs updated to match.
    - Tests (`test_csp_driver`, `test_csp_spec_oracle`): placement equals L-B's; bank conflicts
      measured.
+   *As built, L3 slots (2026-11-13, #399):*
+   - `TileDescriptor::l3_slot` and `l3_slot_turn`. The driver sets the slot from `Action::place`,
+     and gives each opening action (Load, Inherit, a Writeback that opens a residency) its turn:
+     how many residencies the program placed in that slot before it.
+   - The L3 `TagCAM` holds the per-slot credits: `claim_slot(slot, tile, turn)` succeeds only when
+     the slot is free and it is that residency's turn. The claim ends when the tile's entry leaves
+     the CAM, so every path that retires an entry (Release, a written residency's ejection) frees
+     its slot. The count credit pool is still taken alongside, so its accounting is unchanged.
+   - The turn is needed. Without it, a Load that runs ahead took a slot the program gives an
+     earlier Writeback first. The tiles per slot were right; their order was not.
+   - Measured: L-CA used to take credits from the machine's whole L3 (kpu_s1: 128 tiles), not the
+     program's `l3`. On the streamed program (l3 = 5) the makespan went from 3429 to 2783 cycles:
+     fewer Loads in flight share the DMA's bandwidth. Pinned to two slots it is 2544, faster
+     still, though its Loads stall on credit longer (1845 cycles against 1792). At L-T1 the
+     pinned program is the slower one.
+   - Banks are #417. The L2 staging part is next.
 7. **Retain and inherit carry slots** (§3.6): the orchestrator and `KpuDevice`.
    - Tests: `test_orchestrator`, `test_csp_inherit_retain`.
 
