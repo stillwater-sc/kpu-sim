@@ -70,7 +70,7 @@ The progression works as follows:
 | Document | Purpose |
 |----------|---------|
 | `docs/01-architecture/kpu-execution-model.md` | **Credit-based dataflow model (MUST READ)** |
-| `docs/01-architecture/combiner.md` | The Combiner: the tile's result-path unit between L1 and L2. The KPU tile has no separate accumulator and no DMA (#427) |
+| `docs/01-architecture/combiner.md` | The Combiner: the tile's result-path unit between L1 and L2. The KPU tile has no separate accumulator and no DMA. It is the Vector Engine, renamed (#427, #429) |
 | `docs/02-simulation/fidelity-framework.md` | Full multi-fidelity design (READ THIS) |
 | `include/sw/kpu/fidelity/simulation_fidelity.hpp` | Fidelity enums and types |
 | `include/sw/kpu/fidelity/component_config.hpp` | Per-component configuration |

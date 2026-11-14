@@ -266,8 +266,10 @@ Each stage's transfer rate, bus width, and clock frequency are tuned to match th
 
 The unit at the fusion insertion point is the **Combiner**, on the result path between L1
 and L2. It merges intermediate partials and fuses bias, activation, scaling and
-block-format conversion as results are written to L2. The KPU tile has no separate
-accumulator. See [The Combiner](combiner.md) (new, 2026-11-14; modelling tracked in #427).
+block-format conversion as results are written to L2. It is the Vector Engine renamed and
+extended with the merge, and the SFU banks below are part of it. The KPU tile has no
+separate accumulator. See [The Combiner](combiner.md) (new, 2026-11-14; tracked in #427
+and #429).
 
 **Architecture Advantage**
 - Results emerge from array in rows/columns/diagonals

@@ -2,8 +2,14 @@
 
 The **Combiner** is the KPU tile's unit on the result path, between L1 and L2. It is a new
 concept, added on 2026-11-14 for the KPU RTL generator (branes-ai/embodied-ai-soc-generator#68).
-kpu-sim does not model it yet (#427), and neither does systars. It replaces the separate
-accumulator memory that kpu-sim's cycle-accurate plans and the RTL have today.
+
+**The Combiner is kpu-sim's Vector Engine, renamed and extended.** The Vector Engine already
+sits on this path (it processes results during the L1 → L2 transfer) and fuses bias and
+activation for output-stationary schedules. What it lacked is the merge of partials that the
+weight- and input-stationary schedules need, which the TPU line of designs keeps in a
+separate accumulator memory. That merge is cheap on the same path, so the Combiner takes it
+on and the accumulator goes away. The rename and the new merge are tracked in #429; the rest
+of the modelling in #427. systars does not have it yet either.
 
 ```text
 fabric → L1 (result side) → Combiner → L2 → BlockMover → L3 → memory controller DMA → DRAM
@@ -21,7 +27,12 @@ result memory. For each result vector that leaves the fabric through L1, it can:
   - bias;
   - activation functions;
   - scaling up or down (requantization, with rounding and saturation);
-  - block-format conversion (compression).
+  - block-format conversion (compression). The first block formats are the OCP Microscaling
+    (MX) formats, an open specification: blocks of 32 elements sharing one 8-bit
+    power-of-two scale (MXFP8, MXFP6, MXFP4, MXINT8).
+
+  The activation functions run on the **SFU banks**, which are part of the Combiner: they
+  are how the Vector Engine fused activations, and they come with it.
 - **Write the result into L2.** If a result must spill, the BlockMover moves it through L3 to
   the memory controllers' DMA and DRAM.
 
@@ -40,8 +51,9 @@ fused operations cost no extra pass over memory.
 
 | kpu-sim today | In the Combiner model |
 |---|---|
-| Push-based fusion, [KPU architecture](kpu-architecture.md) §2.7: fused operations inserted on the egress path, with SFU banks alongside it | The Combiner is the named unit at that insertion point. Open: whether the SFU banks are part of it or sit beside it. |
-| The fused epilogue: `MatMulComputeSpec { bias, activation }` applied in `execute_matmul` (`docs/plans/e10_fused_epilogue_pattern.md`), and the Vector Engine's fused drain (`docs/06-compiler/schedule-dsl.md`) | The Combiner's bias and activation. Scaling and block-format conversion join them. Open: whether the Vector Engine's other operations (softmax's elementwise ops and reductions) belong to the Combiner. |
+| Push-based fusion, [KPU architecture](kpu-architecture.md) §2.7: fused operations inserted on the egress path, with SFU banks alongside it | The Combiner is the named unit at that insertion point, and the SFU banks are part of it. |
+| The Vector Engine (`VectorEngine` at L-T1/L-CA, `BehavioralVectorEngine` at L-B, the `VE_*` instructions and `VE_ENABLE` on `STR_DRAIN_OUTPUT`) and its fused drain (`docs/06-compiler/schedule-dsl.md`) | **The Combiner**, renamed (#429). It keeps its operations, the softmax's elementwise ops and reductions among them, and gains the merge of partials, scaling and block-format conversion. |
+| The fused epilogue: `MatMulComputeSpec { bias, activation }` applied in `execute_matmul` (`docs/plans/e10_fused_epilogue_pattern.md`) | The Combiner's bias and activation, applied as the result is written to L2. |
 | The accumulator as its own banked memory with slot credits (#401, #383, #387) | Gone. Partials and results occupy L2 slots, and the Combiner's merges are L2 traffic. |
 | The `systolic` block of a deployment: accumulator slots, banks, rows, latency (#396) | The Combiner's configuration. The accumulator fields retire when the RTL drops them (branes-ai/embodied-ai-soc-generator#67). |
 | `kpu-tile-cmds` (#397): a LOAD into the accumulator for a bias, COMPUTE accumulate or overwrite | A COMPUTE names its Combiner operation: merge or overwrite, bias, scale, activation, format. |
