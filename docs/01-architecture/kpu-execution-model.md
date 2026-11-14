@@ -246,7 +246,7 @@ struct BufferAvailableToken {
 | `BM_PUSH` | BlockMover pushing tile L3→L2 | Downstream |
 | `STR_FEED` | Streamer feeding tile L2→L1 | Downstream |
 | `COMPUTE` | Systolic array active | Internal |
-| `DRAIN` | Result draining from accumulator | Downstream |
+| `DRAIN` | Result draining from the fabric through the [Combiner](combiner.md) into L2 (today's models still drain from an accumulator, #427) | Downstream |
 
 ### WRONG Event Types (Do Not Use)
 

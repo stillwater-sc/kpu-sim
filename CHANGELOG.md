@@ -19,6 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Docs: the Combiner** (#427, 2026-11-14). A new concept for the KPU tile, defined for the
+  KPU RTL generator (branes-ai/embodied-ai-soc-generator#68) and not modelled in kpu-sim
+  yet. The Combiner sits on the result path between L1 and L2. It merges intermediate
+  partials (the WS/IS reduction across K blocks), fuses bias, activation, scaling and
+  block-format conversion as results are written to L2, and replaces the separate
+  accumulator memory: the KPU tile has none. Results spill through the BlockMover and L3 to
+  the memory controllers' DMA; the tile has no DMA. `docs/01-architecture/combiner.md`
+  maps it onto kpu-sim's push-based fusion (§2.7), the fused epilogue and Vector Engine,
+  and the accumulator in #401's cycle-accurate plan. It is linked from the architecture
+  overview, the execution model's `DRAIN` event and `CLAUDE.md`.
+  - Decided: the Combiner is the Vector Engine, renamed and given the merge of partials
+    (#429), with the `CMB_` instruction prefix; the SFU banks are part of it; the first block
+    formats are OCP Microscaling (MX), MXINT8 first, then MXFP8.
 - **The KPU RTL generator's machine as a kpu-sim deployment** (#396).
   - `tools/deploy/kpuarch_to_deployment.py` converts the generator's expanded KPUArchitecture
     (`kpugen expand`) to a DeploymentSpec. It carries each field, says which kpu-sim default
