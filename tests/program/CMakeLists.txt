@@ -73,6 +73,16 @@ set_tests_properties(test_domain_flow_record PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# One program on both sides: a CSP program as the KPU RTL's tile command stream (#397)
+kpu_add_component_test(test_tile_commands "program"
+    test_tile_commands.cpp
+)
+
+set_tests_properties(test_tile_commands PROPERTIES
+    LABELS "program;csp;tilecmd;v0.9"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # L-T1 executes placement: a credit is a slot (docs/plans/l3-placement-at-lb.md step 5)
 kpu_add_component_test(test_csp_lt1_place "program"
     test_csp_lt1_place.cpp

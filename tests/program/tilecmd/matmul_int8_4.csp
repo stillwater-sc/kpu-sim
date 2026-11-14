@@ -1,0 +1,13 @@
+csp 1.0
+// One 4x4 int8 output-stationary matmul: the smallest program the RTL's tile runs (#397).
+program mm4 machine flat(l3 = 3) {
+  tensor A[4,4] int8 tile 4x4 in;
+  tensor B[4,4] int8 tile 4x4 in;
+  tensor C[4,4] int32 tile 4x4 out;
+  resident A[0, 0], B[0, 0];
+  acc C[0, 0] in fabric {
+    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];
+  }
+  store C[0, 0];
+  release A[0, 0], B[0, 0];
+}

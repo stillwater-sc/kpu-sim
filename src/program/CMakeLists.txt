@@ -51,6 +51,7 @@ add_library(kpu_program
     memory_flow_record.cpp
     domain_flow_record.cpp
     numeric.cpp                     # number systems and the typed MAC, on Universal (#394)
+    tile_commands.cpp               # a CSP program as the RTL tile command stream (#397)
     ${KPU_LOADABLE_GEN_HDR}
 )
 add_dependencies(kpu_program kpu_loadable_schema)
