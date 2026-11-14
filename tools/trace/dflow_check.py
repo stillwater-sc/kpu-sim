@@ -220,7 +220,8 @@ TRANSACTION = {EV_DMA: {(DRAM, L3): 0, (L3, DRAM): 1},           # LOAD, STORE
                EV_DRAIN: {(ACC, L2): 5,                           # DRAIN
                           (ACC, L3): 3}}                          # 6.1: the RTL's store, acc -> l3: WRITEBACK
 PROGRESS = {EV_BM_ROW: EV_BM, EV_STR_ROW: EV_STREAM, EV_DRAIN_ROW: EV_DRAIN}
-DATA_EDGES = {(DRAM, L3), (L3, L2), (L2, L1), (L1, ACC), (ACC, L2), (L2, L3), (L3, DRAM), (ACC, L3)}
+DATA_EDGES = {(DRAM, L3), (L3, L2), (L2, L1), (L1, ACC), (ACC, L2), (L2, L3), (L3, DRAM)}
+DATA_EDGES_61 = DATA_EDGES | {(ACC, L3)}           # 6.1: the RTL's acc -> l3 store
 # Version 6's minor revisions: 1 adds the acc -> l3 DRAIN and the word-addressed L3 (#398).
 MINORS = (0, 1)
 DRAIN_KIND, WRITEBACK_KIND = 5, 3
@@ -1246,7 +1247,7 @@ def check_v6(m, T, bad):
             bad("E4", f"event {e} is a CREDIT freeing l3; a word-addressed L3 has no credits")
             continue
         edge = (src, dst) if k == EV_TOKEN else (dst, src)
-        if edge not in DATA_EDGES:
+        if edge not in (DATA_EDGES_61 if minor >= 1 else DATA_EDGES):
             what = "downstream along" if k == EV_TOKEN else "upstream against"
             bad("E4", f"event {e} ({EVENT_KINDS[k]}) from {LAYERS[src] if src < len(LAYERS) else src} to "
                       f"{LAYERS[dst] if dst < len(LAYERS) else dst} does not go {what} a data edge")

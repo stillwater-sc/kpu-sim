@@ -140,6 +140,12 @@ class RtlSample(Checks):
         self.set_ev("dst_addr", d, 0)
         self.assertFails("E1", "needs version 6.1")
 
+    def test_e4_a_six_zero_record_has_no_acc_to_l3_token(self):
+        t = self.event("TOKEN")
+        self.set_ev("src", t, LAYER["acc"])
+        self.set_ev("dst", t, LAYER["l3"])
+        self.assertFails("E4", "does not go downstream along a data edge")
+
     def test_g1_unknown_interleave(self):
         self.b.manifest["geometry"]["l2"]["interleave"] = "xor-hash"
         self.b.save_manifest()
