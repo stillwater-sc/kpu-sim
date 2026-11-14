@@ -1005,6 +1005,7 @@ public:
 
     const TileProgram& operands() const { return walker_.operands(); }
     std::size_t capacity() const { return walker_.capacity(); }
+    std::size_t l2_slots() const { return walker_.l2_slots(); }   // the machine clause's `l2 = N`
 
     // The next action, or nullopt when the program has ended.
     std::optional<Emission> next() {

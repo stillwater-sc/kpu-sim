@@ -153,6 +153,10 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
     if (static_cast<std::size_t>(ast.l3) > device->l3.capacity_tiles)
         return "the program was written for an L3 of " + std::to_string(ast.l3) + " tiles; the machine's holds " +
                std::to_string(device->l3.capacity_tiles);
+    // The program's L2 slots are the L2 CAM's first `l2`; unstaged copies need one at least (#399).
+    if (ast.l2 > 0 && static_cast<std::size_t>(ast.l2) >= cfg->config.l2_bank_count)
+        return "the program stages into " + std::to_string(ast.l2) + " L2 slots; the machine's L2 holds " +
+               std::to_string(cfg->config.l2_bank_count) + " (one at least is left for unstaged copies)";
     return std::nullopt;
 }
 
@@ -190,9 +194,11 @@ struct CspLevelOutcome {
     timing::ConcurrentTimingExecutor::VectorStats ve;
     bool livelock = false;
     std::vector<std::string> unmodelled;    // spec fields the level keeps a default for
-    std::size_t staged_feeds = 0;           // Feeds of an L2-staged copy (L-CA: run as Move + Feed)
-    // L-CA: each residency's L3 slot as executed, (tile, slot) in claim order (placement step 6).
+    std::size_t staged_feeds = 0;           // Feeds of an L2-staged copy
+    // L-CA: each residency's L3 slot as executed, (tile, slot) in claim order (placement step 6),
+    // and each staged copy's L2 slot (#399).
     std::vector<std::pair<TileCoord, std::uint32_t>> l3_placement;
+    std::vector<std::pair<TileCoord, std::uint32_t>> l2_placement;
 };
 
 struct CspRunRequest {
@@ -396,10 +402,7 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.ve = r.ve;
         o.staged_feeds = r.staged_feeds;
         o.l3_placement = r.l3_placement;
-        if (ast.l2 > 0)
-            o.unmodelled.push_back("L2 staging: unmapped at L-CA until placement step 6 -- each staged Feed moves its "
-                                   "tile out of L3 again (the values are the same; the timing is the unstaged "
-                                   "program's)");
+        o.l2_placement = r.l2_placement;
     }
     return o;
 }

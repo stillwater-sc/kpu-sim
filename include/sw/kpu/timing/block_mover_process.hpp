@@ -127,6 +127,7 @@ public:
         t.l3_epoch = releases_issued_[t.tile_id];   // the tile's Releases issued before it
         t.after_writebacks = writebacks_issued_[t.tile_id];
         ++moves_issued_[t.tile_id];
+        if (t.l2_slot >= 0) ++staged_queued_;
         move_queue_.enqueue(t);
         transpose_flags_.push_back(transpose);
     }
@@ -259,6 +260,7 @@ public:
 
     void reset() override {
         move_queue_.reset();
+        staged_queued_ = 0;
         writeback_queue_.reset();
         eject_queue_.clear();
         release_queue_.clear();
@@ -342,6 +344,7 @@ private:
     TagCAM& l2_tag_cam_;
 
     WorkQueue<TileDescriptor> move_queue_;
+    size_t staged_queued_ = 0;              // staging Moves in move_queue_ (#399)
     WorkQueue<TileDescriptor> writeback_queue_;
     std::vector<bool> transpose_flags_;  // Parallel to move_queue
     std::optional<InFlightTransfer> in_flight_;
@@ -610,6 +613,8 @@ private:
         while (i < move_queue_.size()) {
             const auto& tile = move_queue_.at(i);
             if (!released_before(tile)) { ++i; continue; }
+            if (tile.l2_slot >= 0) { ++i; continue; }   // a staging Move: a copy in its own slot
+            if (behind_staging(i)) { ++i; continue; }    // its arrival must not count before the staging's
             auto l2_entry = l2_tag_cam_.match(tile.tile_id);
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
             // Dedup only when the tile is present on BOTH sides: resident in
@@ -676,11 +681,24 @@ private:
         std::optional<TagCAMEntry> found_entry;
         size_t found_index = 0;
         Cycle oldest_enqueue = std::numeric_limits<Cycle>::max();
+        bool slot_blocked = false;          // an L3-ready staging Move waits for its L2 slot
+        size_t slot_blocked_index = 0;
 
         for (size_t i = 0; i < move_queue_.size(); ++i) {
             const auto& tile = move_queue_.at(i);
             if (!released_before(tile)) continue;    // the copy in L3 is an earlier residency's
+            if (behind_staging(i)) continue;          // after the tile's staging Move, in program order
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
+            // A staging Move (#399) takes the L2 slot the program placed the copy in, at its
+            // turn, once the tile's earlier copy has left L2. Skipped while it waits, so a later
+            // Move is not held behind it.
+            if (l3_entry.has_value() && tile.l2_slot >= 0 &&
+                (l2_tag_cam_.lookup(tile.tile_id) ||
+                 !l2_tag_cam_.slot_ready(static_cast<uint32_t>(tile.l2_slot), tile.l2_slot_turn))) {
+                if (!slot_blocked) slot_blocked_index = i;
+                slot_blocked = true;
+                continue;
+            }
             if (l3_entry.has_value()) {
                 if (config_.priority_aging) {
                     // Priority aging: prefer oldest tile (lowest enqueue_cycle)
@@ -696,6 +714,19 @@ private:
                     break;
                 }
             }
+        }
+
+        // Every L3-ready Move is a staging Move waiting for its L2 slot: a credit stall.
+        if (!found_entry.has_value() && slot_blocked) {
+            events.push_back(TimingEvent(
+                EventType::BM_STALL_CREDIT,
+                current_cycle,
+                config_.mover_id,
+                move_queue_.at(slot_blocked_index).tile_id,
+                name()
+            ));
+            stall_cycles_credit_++;
+            return false;
         }
 
         // No tile in queue is ready in L3
@@ -736,6 +767,7 @@ private:
 
         // Start the move - remove from queue at found position
         TileDescriptor move_tile = move_queue_.remove_at(found_index);
+        if (move_tile.l2_slot >= 0) --staged_queued_;
 
         // Also remove corresponding transpose flag if any
         if (found_index < transpose_flags_.size()) {
@@ -744,7 +776,15 @@ private:
         }
 
         Cycle transfer_cycles = compute_transfer_cycles(move_tile.size_bytes);
-        uint32_t l2_slot = allocate_l2_slot();
+        // A staging Move's copy lives in the program's L2 slot, claimed with the credit (the scan
+        // chose one whose slot is ready); an unstaged copy takes a transient slot.
+        uint32_t l2_slot = 0;
+        if (move_tile.l2_slot >= 0) {
+            l2_slot = static_cast<uint32_t>(move_tile.l2_slot);
+            l2_tag_cam_.claim_slot(l2_slot, move_tile.tile_id, move_tile.l2_slot_turn);
+        } else {
+            l2_slot = allocate_l2_slot();
+        }
 
         in_flight_ = InFlightTransfer(
             move_tile,
@@ -772,6 +812,7 @@ private:
             move_tile.tile_id,
             name()
         ));
+        events.back().slot_id = l2_slot;
 
         return true;
     }
@@ -958,11 +999,24 @@ private:
     /**
      * @brief Allocate an L2 bank slot (round-robin)
      */
-    uint32_t allocate_l2_slot() {
-        uint32_t slot = next_l2_slot_;
-        next_l2_slot_ = (next_l2_slot_ + 1) % static_cast<uint32_t>(l2_tag_cam_.capacity());
-        return slot;
+    // Where a staging is involved, a tile's Moves keep their program order (#399): a Move waits
+    // behind an earlier queued Move of its tile when either of them is a staging Move. Arriving
+    // first, an unstaged Move would open the staged Feeds' gate (after_moves) before the staged
+    // copy is in its slot; a later staging would hold L2 while the earlier one waits for it to
+    // leave; and a staging that overtook an unstaged Move would leave its copy to that Move's
+    // Feed. With no staging Move queued (staged_queued_), nothing is scanned.
+    [[nodiscard]] bool behind_staging(size_t i) const {
+        if (staged_queued_ == 0) return false;
+        const TileDescriptor& t = move_queue_.at(i);
+        for (size_t j = 0; j < i; ++j) {
+            const TileDescriptor& e = move_queue_.at(j);
+            if (e.tile_id == t.tile_id && (e.l2_slot >= 0 || t.l2_slot >= 0)) return true;
+        }
+        return false;
     }
+
+    // A slot outside the program's placed L2 slots (#399): an unstaged copy is transient.
+    uint32_t allocate_l2_slot() { return l2_tag_cam_.transient_slot(next_l2_slot_); }
 };
 
 } // namespace sw::kpu::timing
