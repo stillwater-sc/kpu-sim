@@ -387,7 +387,10 @@ private:
                 exec_.schedule_feed(d);
                 break;
             case Action::Kind::L2Release:
+                // It closes the staging the program opened last in this slot.
                 staged_.erase(d.tile_id);
+                d.l2_slot = static_cast<std::int32_t>(a.l2->slot);
+                d.l2_slot_turn = l2_turns_.at(a.l2->slot) - 1;
                 exec_.schedule_l2_release(d);
                 break;
             case Action::Kind::Drain: {

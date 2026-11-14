@@ -310,6 +310,12 @@ public:
         return slot_free(slot) && (t == turns_.end() ? 0u : t->second) == turn;
     }
 
+    /// How many residencies have claimed slot @p slot so far (the next claim's turn).
+    [[nodiscard]] uint32_t slot_turns(uint32_t slot) const {
+        const auto t = turns_.find(slot);
+        return t == turns_.end() ? 0u : t->second;
+    }
+
     /// The tile holding slot @p slot, if any.
     [[nodiscard]] std::optional<TileID> slot_owner(uint32_t slot) const {
         const auto c = claims_.find(slot);

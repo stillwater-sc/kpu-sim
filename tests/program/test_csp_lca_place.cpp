@@ -351,3 +351,89 @@ TEST_CASE("L-CA: a staged copy is moved once and holds its L2 slot until its L2R
                 (unsigned long long)plain.r.cf_busy, (unsigned long long)staged.r.cycles,
                 staged.stats.bm_busy_cycles, staged.stats.dma_busy_cycles, (unsigned long long)staged.r.cf_busy);
 }
+
+// ---- L2 staging on the executor: orderings a program may produce (#419 review) -------------
+
+namespace {
+
+struct StagingRig {
+    sw::kpu::timing::ConcurrentTimingExecutor exec;
+    sw::kpu::timing::TileDescriptor a;          // one A tile, resident in L3
+
+    StagingRig() : exec(sw::kpu::timing::csp_config_from(s1().device(0))->config) {
+        using namespace sw::kpu::timing;
+        exec.reset();
+        exec.l2_tag_cam().set_placed_slots(4);
+        a.tile_id.matrix = sw::kpu::isa::MatrixID::A;
+        a.ordered = true;
+        a.height = a.width = 16;
+        a.element_size = 4;
+        a.size_bytes = 16 * 16 * 4;
+        a.matrix_base_address = a.dram_address = 0x100000;
+        TilePayload p;
+        p.rows = p.cols = 16;
+        p.values.assign(256, 1.0f);
+        exec.seed_l3(a, p);
+        a.l3_held = true;
+    }
+    sw::kpu::timing::TileDescriptor staged(std::uint32_t slot, std::uint32_t turn) const {
+        auto d = a;
+        d.l2_slot = static_cast<std::int32_t>(slot);
+        d.l2_slot_turn = turn;
+        return d;
+    }
+    std::vector<sw::kpu::timing::TimingEvent> run() {
+        for (int c = 0; c < 200000 && !exec.is_complete(); ++c) exec.step();
+        REQUIRE(exec.is_complete());
+        return exec.events();
+    }
+};
+
+}  // namespace
+
+TEST_CASE("L-CA L2: an ordinary Move after a staging Move does not open the staged Feed early", "[csp][lca][l2]") {
+    using sw::kpu::timing::EventType;
+    StagingRig g;
+    // M1 (ordinary), F1, M2 (staged, slot 0), F2 (staged), M3 (ordinary), F3, the L2Release.
+    g.exec.schedule_move(g.a);
+    g.exec.schedule_feed(g.a);
+    g.exec.schedule_move(g.staged(0, 0));
+    auto f2 = g.a;
+    f2.l2_held = true;
+    g.exec.schedule_feed(f2);
+    g.exec.schedule_move(g.a);
+    g.exec.schedule_feed(g.a);
+    g.exec.schedule_l2_release(g.staged(0, 0));
+    const auto events = g.run();
+    std::vector<std::uint32_t> feeds;           // each Feed's L2 slot, in start order
+    for (const auto& e : events)
+        if (e.type == EventType::STR_FEED_START) feeds.push_back(e.slot_id);
+    REQUIRE(feeds.size() == 3);
+    CHECK(feeds[0] >= 4);                       // F1: M1's transient copy
+    CHECK(feeds[1] == 0);                       // F2: the staged copy, in its placed slot
+}
+
+TEST_CASE("L-CA L2: an L2Release retires its own staging's copy, not another of the tile", "[csp][lca][l2]") {
+    using sw::kpu::timing::EventType;
+    StagingRig g;
+    // M1 (ordinary), M2 (staged, slot 1), the L2Release (no Feeds of the staging), then F1, which
+    // reads M1's copy. The release must wait for M2's copy, not take M1's.
+    g.exec.schedule_move(g.a);
+    g.exec.schedule_move(g.staged(1, 0));
+    g.exec.schedule_l2_release(g.staged(1, 0));
+    auto f1 = g.a;
+    f1.ordered = false;                         // reads whichever copy is there: M1's
+    g.exec.schedule_feed(f1);
+    const auto events = g.run();
+    std::size_t staged_arrival = events.size(), release = events.size();
+    for (std::size_t i = 0; i < events.size(); ++i) {
+        const auto& e = events[i];
+        if (e.type == EventType::TILE_ARRIVED_L2 && e.slot_id == 1) staged_arrival = i;
+        if (e.type == EventType::CREDIT_RELEASED && e.component_name == "L2:release") {
+            CHECK(e.slot_id == 1);
+            release = i;
+        }
+    }
+    REQUIRE(release < events.size());
+    CHECK(staged_arrival < release);
+}

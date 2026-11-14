@@ -369,7 +369,9 @@ public:
      *
      * The staging Move put the copy in its placed L2 slot and staged Feeds (l2_held) read it
      * without consuming it. The release retires the entry, returning its L2 credit and the slot,
-     * once every Feed of the tile scheduled before it has completed.
+     * once every Feed of the tile scheduled before it has completed. `tile.l2_slot` and
+     * `l2_slot_turn` name the staging it closes: it retires that copy only, once its Move has
+     * arrived, never another L2 copy of the tile (a drained result, an unstaged Move's).
      */
     void schedule_l2_release(const TileDescriptor& tile);
 
@@ -760,8 +762,14 @@ private:
     // a boolean "ever fed" flag lets a reused tile start a later compute early.
     std::unordered_map<TileID, size_t, TileIDHash> scheduled_feed_counts_;
     std::unordered_map<TileID, size_t, TileIDHash> completed_feed_counts_;
-    // L2Releases not yet retired: the tile, and the Feeds of it scheduled before the release.
-    std::vector<std::pair<TileID, size_t>> pending_l2_releases_;
+    // L2Releases not yet retired: the staging they close (tile, slot, turn), and the Feeds of
+    // the tile scheduled before the release.
+    struct PendingL2Release {
+        TileID tile;
+        uint32_t slot = 0, turn = 0;
+        size_t feeds = 0;
+    };
+    std::vector<PendingL2Release> pending_l2_releases_;
     void retire_l2_releases();
     // An accumulation chain (a CSP program's MatMulAccum calls on one result, ended by its
     // DRAIN): calls scheduled and done, and DRAINs scheduled that wait for it. Nothing about
@@ -1185,17 +1193,24 @@ inline void ConcurrentTimingExecutor::schedule_release(const TileDescriptor& til
 }
 
 inline void ConcurrentTimingExecutor::schedule_l2_release(const TileDescriptor& tile) {
-    pending_l2_releases_.emplace_back(tile.tile_id, scheduled_feed_counts_[tile.tile_id]);
+    if (tile.l2_slot < 0)
+        throw std::invalid_argument("schedule_l2_release: " + tile.tile_id.to_string() +
+                                    " names no staging (its L2 slot and turn)");
+    pending_l2_releases_.push_back(PendingL2Release{tile.tile_id, static_cast<uint32_t>(tile.l2_slot),
+                                                    tile.l2_slot_turn, scheduled_feed_counts_[tile.tile_id]});
 }
 
 inline void ConcurrentTimingExecutor::retire_l2_releases() {
     for (auto it = pending_l2_releases_.begin(); it != pending_l2_releases_.end();) {
-        const auto& [tile, feeds] = *it;
+        const TileID tile = it->tile;
         const auto done = completed_feed_counts_.find(tile);
         const auto entry = l2_tag_cam_.match(tile);
-        // Its Feeds have completed, and the staged copy has arrived (a staging with no Feed
-        // still waits for its Move).
-        if ((done == completed_feed_counts_.end() ? 0 : done->second) < feeds || !entry) { ++it; continue; }
+        // Its Feeds have completed, and ITS staged copy has arrived: the slot's claim for this
+        // turn is the tile's, and the tile's entry is the one in that slot (a staging with no
+        // Feed still waits for its Move; another copy of the tile is not this one).
+        const bool arrived = entry && entry->slot_id == it->slot && l2_tag_cam_.slot_turns(it->slot) == it->turn + 1 &&
+                             l2_tag_cam_.slot_owner(it->slot) == std::optional<TileID>(tile);
+        if ((done == completed_feed_counts_.end() ? 0 : done->second) < it->feeds || !arrived) { ++it; continue; }
         TimingEvent e(EventType::CREDIT_RELEASED, current_cycle_, 0, tile, "L2:release");
         e.slot_id = entry->slot_id;
         if (l2_tag_cam_.invalidate(tile)) l2_credits_.release(static_cast<size_t>(tile.matrix));

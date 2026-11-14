@@ -611,6 +611,7 @@ private:
             const auto& tile = move_queue_.at(i);
             if (!released_before(tile)) { ++i; continue; }
             if (tile.l2_slot >= 0) { ++i; continue; }   // a staging Move: a copy in its own slot
+            if (behind_staging(i)) { ++i; continue; }    // its arrival must not count before the staging's
             auto l2_entry = l2_tag_cam_.match(tile.tile_id);
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
             // Dedup only when the tile is present on BOTH sides: resident in
@@ -683,6 +684,7 @@ private:
         for (size_t i = 0; i < move_queue_.size(); ++i) {
             const auto& tile = move_queue_.at(i);
             if (!released_before(tile)) continue;    // the copy in L3 is an earlier residency's
+            if (behind_staging(i)) continue;          // after the tile's staging Move, in program order
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
             // A staging Move (#399) takes the L2 slot the program placed the copy in, at its
             // turn, once the tile's earlier copy has left L2. Skipped while it waits, so a later
@@ -993,6 +995,17 @@ private:
     /**
      * @brief Allocate an L2 bank slot (round-robin)
      */
+    // An unstaged Move queued after a staging Move of the same tile waits for it (#399): were it
+    // to arrive first (a dedup onto another copy, or a transfer), its arrival would open the
+    // staged Feeds' gate before the staged copy is in its slot.
+    [[nodiscard]] bool behind_staging(size_t i) const {
+        const TileDescriptor& t = move_queue_.at(i);
+        if (t.l2_slot >= 0) return false;
+        for (size_t j = 0; j < i; ++j)
+            if (move_queue_.at(j).l2_slot >= 0 && move_queue_.at(j).tile_id == t.tile_id) return true;
+        return false;
+    }
+
     // A slot outside the program's placed L2 slots (#399): an unstaged copy is transient.
     uint32_t allocate_l2_slot() { return l2_tag_cam_.transient_slot(next_l2_slot_); }
 };
