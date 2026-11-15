@@ -127,6 +127,30 @@ TEST_CASE("Bubbles: the report adds up, and every bubble names a cause", "[progr
     }
 }
 
+TEST_CASE("Bubbles: with a declared fabric, feeds and drains are scheduled apart", "[program][csp][bubbles]") {
+    // #438's review: the streamer's drains have lanes of their own under a fabric, issued in their
+    // own order. The report must still add up, with every bubble's cause known.
+    auto dev = characterize::DeviceDescriptor::single();
+    dev.pe_rows = 16;
+    dev.pe_cols = 16;
+    dev.streamers = 2;
+    for (const char* df : {"os", "ws"}) {
+        CAPTURE(df);
+        const Run r = run(matmul(df), dev);
+        bool split = false;
+        for (const auto& rec : r.records)
+            if (rec.kind == Action::Kind::Drain && rec.lane >= 2) split = true;
+        CHECK(split);                                    // the drains ran on their own lanes
+        BubbleReport::Cycle sum = 0;
+        for (const auto& b : r.report.bubbles) {
+            CHECK(b.cause != Cause::Unknown);
+            sum += b.idle;
+        }
+        CHECK(sum == r.report.cf_idle);
+        for (const auto& l : r.report.loads) CHECK(l.utilization <= 1.0);
+    }
+}
+
 TEST_CASE("Bubbles: the cause follows the binding resource", "[program][csp][bubbles]") {
     // A starved BlockMover: every call waits for its operands' Moves.
     auto slow_bm = characterize::DeviceDescriptor::single();
@@ -155,4 +179,5 @@ TEST_CASE("Bubbles: the cause follows the binding resource", "[program][csp][bub
     const auto in_ws = ws.idle_by_cause.find(Cause::MoverBusy);
     CHECK((in_ws == ws.idle_by_cause.end() ? 0 : in_ws->second) < bm.idle_by_cause.at(Cause::MoverBusy));
 }
+
 

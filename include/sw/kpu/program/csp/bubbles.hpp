@@ -66,7 +66,8 @@ struct BubbleReport {
         L3Slot,         // the Move's Load waited for its L3 slot's credit
         DmaBusy,        // the Load waited for a DMA lane
         Dram,           // the Load itself: the DRAM transfer (and what it waited on, a Store or a Release)
-        Result,         // the Move's tile is a result: its Writeback, and what it waited for
+        Result,         // a result's way out: an operand's move held behind a Drain, Writeback or
+                        // Store on its process, or the Move of a tile that is itself a result
         Unknown,
     };
     static const char* to_string(Cause c) {
@@ -79,7 +80,7 @@ struct BubbleReport {
             case Cause::L3Slot:       return "L3 slot credit";
             case Cause::DmaBusy:      return "DMA lanes busy";
             case Cause::Dram:         return "DRAM transfer";
-            case Cause::Result:       return "a result's writeback";
+            case Cause::Result:       return "a result's way out (drain, writeback, store) ahead of it";
             case Cause::Unknown:      return "unknown";
         }
         return "?";
@@ -223,15 +224,41 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
         rep.loads.push_back(l);
     }
 
-    // The previous record of the same process, in program order (its in-order issue).
+    // Scheduling groups: a process's lanes, issued in order. With a declared fabric the streamer's
+    // drains have lanes of their own, [n, 2n) after its n feed lanes, issued in their own order:
+    // there feeds and drains are two groups (the process's utilization keeps them together).
+    std::size_t str_feed_lanes = 0;                      // 0: the streamer is one group
+    {
+        std::size_t max_feed = 0, min_drain = ~std::size_t{0};
+        bool feeds = false, drains = false;
+        for (const Rec& r : records) {
+            if (r.proc != Proc::Str || !TransactionalInterpreter::has_process(r.kind)) continue;
+            if (r.kind == Action::Kind::Drain) { drains = true; min_drain = std::min(min_drain, r.lane); }
+            else { feeds = true; max_feed = std::max(max_feed, r.lane); }
+        }
+        if (drains && (!feeds || min_drain > max_feed)) str_feed_lanes = min_drain;
+    }
+    auto group_of = [&](const Rec& r) {
+        return static_cast<int>(r.proc) * 2 + (str_feed_lanes && r.proc == Proc::Str && r.kind == Action::Kind::Drain);
+    };
+    auto group_lanes = [&](const Rec& r) -> int {
+        auto ln = lanes.find(TransactionalInterpreter::name(r.proc));
+        const std::size_t total = ln == lanes.end() ? 1 : std::max<std::size_t>(1, ln->second);
+        if (str_feed_lanes && r.proc == Proc::Str)
+            return static_cast<int>(r.kind == Action::Kind::Drain ? std::max<std::size_t>(1, total - str_feed_lanes)
+                                                                   : str_feed_lanes);
+        return static_cast<int>(total);
+    };
+    // The previous leg of the same group, in program order (its in-order issue), over every leg:
+    // a Store's DMA leg holds the next Load as its BlockMover leg holds the next Move.
     std::map<const Rec*, const Rec*> prev_on_proc;
     {
-        std::map<Proc, const Rec*> last;
-        for (const Rec* r : order) {
-            if (!TransactionalInterpreter::has_process(r->kind)) continue;
-            auto it = last.find(r->proc);
-            if (it != last.end()) prev_on_proc[r] = it->second;
-            last[r->proc] = r;
+        std::map<int, const Rec*> last;
+        for (const Rec& r : records) {
+            if (!TransactionalInterpreter::has_process(r.kind)) continue;
+            auto it = last.find(group_of(r));
+            if (it != last.end()) prev_on_proc[&r] = it->second;
+            last[group_of(r)] = &r;
         }
     }
     // The Feeds that delivered each call's operands: the Feeds between the previous call and this
@@ -256,19 +283,18 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
         }
         return Cause::Unknown;
     };
-    // Was process `p` saturated over [from, to): every lane busy for at least 90% of it? Each
-    // process's legs, swept for the cycles its lane count is reached.
-    std::map<Proc, std::vector<std::pair<BubbleReport::Cycle, int>>> sweep;
+    // Was r's scheduling group saturated over [from, to): every lane busy for at least 90% of it?
+    // Each group's legs, swept for the cycles its lane count is reached.
+    std::map<int, std::vector<std::pair<BubbleReport::Cycle, int>>> sweep;
     for (const Rec& r : records)
         if (TransactionalInterpreter::has_process(r.kind) && r.finish > r.start) {
-            sweep[r.proc].push_back({r.start, +1});
-            sweep[r.proc].push_back({r.finish, -1});
+            sweep[group_of(r)].push_back({r.start, +1});
+            sweep[group_of(r)].push_back({r.finish, -1});
         }
-    for (auto& [p, ev] : sweep) std::sort(ev.begin(), ev.end());
-    auto saturated = [&](Proc p, BubbleReport::Cycle from, BubbleReport::Cycle to) {
-        auto ln = lanes.find(TransactionalInterpreter::name(p));
-        const int n = static_cast<int>(ln == lanes.end() ? 1 : std::max<std::size_t>(1, ln->second));
-        auto it = sweep.find(p);
+    for (auto& [g, ev] : sweep) std::sort(ev.begin(), ev.end());
+    auto saturated = [&](const Rec& r, BubbleReport::Cycle from, BubbleReport::Cycle to) {
+        const int n = group_lanes(r);
+        auto it = sweep.find(group_of(r));
         if (it == sweep.end() || to <= from) return false;
         int live = 0;
         BubbleReport::Cycle full = 0, at = from;
@@ -291,10 +317,21 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
         if (depth > 256) return Cause::Unknown;
         into->chain.push_back(r->action);
         if (r->start > r->ready) {
-            if (saturated(r->proc, r->ready, r->start)) return busy_of(r->proc);
+            if (saturated(*r, r->ready, r->start)) return busy_of(r->proc);
             auto p = prev_on_proc.find(r);
-            if (p != prev_on_proc.end()) return explain(p->second, depth + 1);
-            return busy_of(r->proc);
+            if (p == prev_on_proc.end()) return busy_of(r->proc);
+            // An operand's move held behind a result's way out on the same process (a streamer
+            // that feeds and drains in one order, a BlockMover that moves and writes back): the
+            // results ahead of it are the cause. Walking on through them would loop -- the drain
+            // waits for its call, which waits for its feeds.
+            const auto k = p->second->kind;
+            const bool result = k == Action::Kind::Drain || k == Action::Kind::Writeback || k == Action::Kind::Store;
+            const bool operand = r->kind == Action::Kind::Feed || r->kind == Action::Kind::Move || r->kind == Action::Kind::Load;
+            if (result && operand) {
+                into->chain.push_back(p->second->action);
+                return Cause::Result;
+            }
+            return explain(p->second, depth + 1);
         }
         switch (r->kind) {
             case Action::Kind::Call: {
