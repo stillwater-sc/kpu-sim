@@ -212,6 +212,7 @@ inline TileDependencies build_tile_dependencies(const TileProgram& prog) {
                 break;
             case TileOpKind::LuDiagFactor:
             case TileOpKind::Activation:                // Y in place
+            case TileOpKind::BlockConvert:
                 reads.push_back(&op.outputs[0]);
                 writes.push_back(&op.outputs[0]);
                 break;

@@ -96,7 +96,7 @@ inline bool is_known_dataflow(const std::string& name) {
 inline Version format_version()  { return {1, 3, 0}; }   // container structure: 1.3.0 adds
                                                          // OPERAND type= (an operand's number
                                                          // system, numeric.hpp; #394)
-inline Version opset_version()   { return {1, 5, 0}; }   // the TileOpKind surface this build
+inline Version opset_version()   { return {1, 6, 0}; }   // the TileOpKind surface this build
                                                          // implements: 1.1.0 adds BIAS_ADD and
                                                          // ACTIVATION (act=); 1.2.0 adds the L3
                                                          // transactions (L3_*, l3= slot= bank=);
@@ -104,7 +104,8 @@ inline Version opset_version()   { return {1, 5, 0}; }   // the TileOpKind surfa
                                                          // 1.4.0 ACC_INIT (an accumulator's
                                                          // initial value); 1.5.0 MATMUL_MERGE
                                                          // (the Combiner's merge of a partial,
-                                                         // merge= l2= slot=; #429)
+                                                         // merge= l2= slot=; #429); 1.6.0
+                                                         // BLOCK_CONVERT (format=; #427)
 
 // The op set a FILE needs, written on its OPSET line: what is in it, not who wrote it -- the
 // rule min_consumer_for() states. A matmul or LU program uses only 1.0.0 ops, so its bytes do
@@ -116,6 +117,7 @@ inline Version opset_version()   { return {1, 5, 0}; }   // the TileOpKind surfa
 // older reader would drop silently. Keep it that way, or make MIN_CONSUMER see the op set.
 inline Version opset_for(const TileProgram& prog) {
     Version v{1, 0, 0};
+    for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::BlockConvert) return Version{1, 6, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::MatMulMerge) return Version{1, 5, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::AccInit) return Version{1, 4, 0};
     for (const TileOp& op : prog.ops()) if (is_l2(op.kind)) return Version{1, 3, 0};
@@ -410,6 +412,7 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
             os << " merge=" << (op.overwrite ? "overwrite" : "accumulate") << " l2=" << op.l2.cf << " slot=" << op.l2.slot;
         if (op.pivot_slot >= 0) os << " pivot=" << op.pivot_slot;
         if (op.kind == TileOpKind::Activation) os << " act=" << to_string(op.act);
+        if (op.kind == TileOpKind::BlockConvert) os << " format=" << op.format;
         if (is_l3(op.kind)) os << " l3=" << op.l3.l3_tile << " slot=" << op.l3.slot << " bank=" << op.l3.bank;
         if (is_l2(op.kind)) os << " l2=" << op.l2.cf << " slot=" << op.l2.slot;
         if (!op.label.empty()) os << " label=" << detail::quote(op.label);
@@ -597,7 +600,7 @@ inline TileOpKind parse_kind(const std::string& s) {
                          TileOpKind::L3Store, TileOpKind::L3Move, TileOpKind::L3Writeback,
                          TileOpKind::L3Release, TileOpKind::L3Inherit, TileOpKind::L3Retain,
                          TileOpKind::L2Stage, TileOpKind::L2Release, TileOpKind::AccInit,
-                         TileOpKind::MatMulMerge})
+                         TileOpKind::MatMulMerge, TileOpKind::BlockConvert})
         if (s == to_string(k)) return k;
     throw FormatError(FormatError::Cause::UnknownOp,
                       "l0: unknown op '" + s + "': this build implements opset tile " +
@@ -830,6 +833,16 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                     throw FormatError(FormatError::Cause::MalformedRecord,
                                       std::string("l0: OP ") + to_string(op.kind) + ": an L2 transaction names one "
                                       "tile, as out=");
+            }
+            if (op.kind == TileOpKind::BlockConvert) {
+                // Required: a conversion is its format, on one tile, written out=.
+                op.format = detail::require(f, "format", "OP");
+                if (!numeric::is_block_format(op.format))
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: OP BLOCK_CONVERT format=" + op.format + ": " + numeric::block_format_names());
+                if (op.outputs.size() != 1 || !op.inputs.empty())
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: OP BLOCK_CONVERT: out= names the one tile it converts");
             }
             if (op.kind == TileOpKind::MatMulMerge) {
                 // Required: a merge is its mode and the partial's L2 slot.

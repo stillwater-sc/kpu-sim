@@ -83,6 +83,9 @@ struct Options {
     // fabric; ws: B, staged in L2 across the i loop; is: A, staged across the j loop. ws and is
     // reduce across K blocks through the Combiner's merge into C's L2 slots.
     std::string dataflow = "os";
+    // linear: the block format the result is converted into, after the activation, at the
+    // epilogue's place (#427): none, or an OCP Microscaling format (mxint8, mxfp8).
+    std::string format = "none";
 };
 
 // Tiles along one dimension.
@@ -129,6 +132,14 @@ inline void check(const Options& o) {
         throw GenError("csp-gen: dtype '" + o.dtype + "' has no registered gemm (" + numeric::mac_names() + ")");
     if (o.stage_a && o.orient != "row")
         throw GenError("csp-gen: stage_a stages A's row panel for the loop over B's panels, which needs orient row");
+    if (o.format != "none") {
+        if (o.algo != "linear") throw GenError("csp-gen: format is linear's; --algo is '" + o.algo + "'");
+        if (!numeric::is_block_format(o.format))
+            throw GenError("csp-gen: format '" + o.format + "' (none | " + numeric::block_format_names() + ")");
+        if (o.place != "combiner" && o.place != "bm.egress")
+            throw GenError("csp-gen: format " + o.format + " @ " + o.place + ": a block-format conversion rides the "
+                           "result's move into memory, on the Combiner or at bm.egress");
+    }
     if (o.dataflow != "os" && o.dataflow != "ws" && o.dataflow != "is")
         throw GenError("csp-gen: dataflow '" + o.dataflow + "' (os | ws | is)");
     if (o.dataflow != "os") {
@@ -180,6 +191,11 @@ inline std::string tensor(const char* name, const Options& o, const char* io, co
            std::to_string(o.tile) + " " + io + ";\n";
 }
 
+// A linear's block-format conversion (#427), the epilogue's last stage, at the epilogue's place.
+inline std::string format_stage(const Options& o) {
+    return o.format == "none" ? std::string() : ", " + o.format + " @ " + o.place;
+}
+
 // The matmul nest, and for a fused linear its bias (resident with B's panel) and context.
 inline std::string matmul_nest(const Options& o, bool linear_fused) {
     const std::string nt = std::to_string(tiles(o));
@@ -188,7 +204,7 @@ inline std::string matmul_nest(const Options& o, bool linear_fused) {
     // carries none (lang/validate.hpp), so only the plain matmul nest defers its stores.
     std::string via = " late";
     if (linear_fused)
-        via = std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place;
+        via = std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place + format_stage(o);
     // The accumulator's init: a tile made resident for it (D's, or C's own), or b's with B's panel.
     std::string before, init, after;
     if (o.init == "bias") {
@@ -260,7 +276,8 @@ inline std::string stationary_nest(const Options& o, bool linear_fused) {
     const bool ws = o.dataflow == "ws";
     const bool at_combiner = linear_fused && o.place == "combiner";
     const bool at_egress = linear_fused && o.place == "bm.egress";
-    const std::string epilogue = std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place;
+    const std::string epilogue =
+        std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place + format_stage(o);
     // ws: j outer, B[k, j] stationary across i. is: i outer, A[i, k] stationary across j.
     const std::string outer = ws ? "j" : "i", inner = ws ? "i" : "j";
     const std::string panel = ws ? "C[:, j]" : "C[i, :]";
@@ -338,6 +355,7 @@ inline std::string linear(const Options& o) {
                                                       : o.orient + "-panel schedule";
     std::string s = header(o, std::string("linear C = ") + to_string(o.act) + "(A . B + b), " + schedule +
                                   ", epilogue " + (fused ? "@ " + o.place : std::string("unfused")) +
+                                  (o.format != "none" ? ", into " + o.format : std::string()) +
                                   (o.dataflow != "os" && o.place == "combiner" ? " on each tile's final merge"
                                                                                : std::string()));
     s += "program linear machine flat(l3 = " + std::to_string(o.l3) +

@@ -16,8 +16,11 @@
 #include <sw/kpu/program/numeric.hpp>
 
 #include <universal/number/integer/integer.hpp>
+#include <universal/number/mxfloat/mxfloat.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace sw::kpu::program::numeric {
@@ -171,6 +174,86 @@ std::string mac_names() {
     std::string out;
     for (const MacRow& r : macs()) out += (out.empty() ? "" : ", ") + std::string(r.in) + " -> " + r.acc;
     return out;
+}
+
+// ---- the OCP Microscaling block formats (#427) ----
+namespace {
+
+template <class Block>
+void convert_blocks(float* v, std::size_t n) {
+    Block b;
+    for (std::size_t at = 0; at < n; at += Block::size()) {
+        const std::size_t len = std::min(Block::size(), n - at);
+        b.quantize(v + at, len);
+        b.dequantize(v + at, len);
+    }
+}
+
+// MXINT8 per OCP MX v1.0, until Universal's mxint8 is fixed (stillwater-sc/universal#2083: v5.17.0
+// saturates each block's largest element and rounds ties away from zero). The block's scale is
+// 2^(floor(log2 amax) - 6), an e8m0 power of two; each element is an int8 code, x / scale rounded
+// to nearest, ties to even, clamped to [-128, 127]. A non-finite amax makes the scale NaN, and
+// the block reads back as NaN, as Universal's blocks do.
+void convert_mxint8(float* v, std::size_t n) {
+    for (std::size_t at = 0; at < n; at += kBlockSize) {
+        const std::size_t len = std::min(kBlockSize, n - at);
+        float amax = 0.0f;
+        for (std::size_t i = 0; i < len; ++i) amax = std::max(amax, std::fabs(v[at + i]));
+        if (!std::isfinite(amax)) {
+            for (std::size_t i = 0; i < len; ++i) v[at + i] = std::numeric_limits<float>::quiet_NaN();
+            continue;
+        }
+        if (amax == 0.0f) {
+            for (std::size_t i = 0; i < len; ++i) v[at + i] = 0.0f;
+            continue;
+        }
+        const int shared = std::clamp(static_cast<int>(std::floor(std::log2(amax))), -127, 127);
+        const int scale = std::clamp(shared - 6, -127, 127);   // e8m0: biased 0..254
+        for (std::size_t i = 0; i < len; ++i) {
+            const float code = std::clamp(std::nearbyint(std::ldexp(v[at + i], -scale)), -128.0f, 127.0f);
+            v[at + i] = std::ldexp(code, scale);
+        }
+    }
+}
+
+struct BlockFormat {
+    const char* name;
+    void (*convert)(float*, std::size_t);
+    std::size_t element_bytes;
+};
+
+const std::vector<BlockFormat>& block_formats() {
+    static const std::vector<BlockFormat> f = {
+        {"mxint8", &convert_mxint8, 1},                  // Universal's, once universal#2083 is fixed
+        {"mxfp8", &convert_blocks<su::mxfp8>, 1},
+    };
+    return f;
+}
+
+const BlockFormat& block_format(const std::string& name) {
+    for (const BlockFormat& f : block_formats())
+        if (name == f.name) return f;
+    throw std::invalid_argument("numeric: '" + name + "' is not a block format (" + block_format_names() + ")");
+}
+
+}  // namespace
+
+bool is_block_format(const std::string& name) {
+    for (const BlockFormat& f : block_formats())
+        if (name == f.name) return true;
+    return false;
+}
+
+std::string block_format_names() {
+    std::string s;
+    for (const BlockFormat& f : block_formats()) s += (s.empty() ? "" : ", ") + std::string(f.name);
+    return s;
+}
+
+void block_convert(const std::string& format, float* v, std::size_t n) { block_format(format).convert(v, n); }
+
+std::size_t block_bytes(const std::string& format, std::size_t n) {
+    return n * block_format(format).element_bytes + (n + kBlockSize - 1) / kBlockSize;
 }
 
 }  // namespace sw::kpu::program::numeric

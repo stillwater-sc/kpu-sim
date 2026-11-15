@@ -112,13 +112,14 @@ if(KPU_BUILD_PYTHON_BINDINGS)
 endif()
 
 # Universal library for arbitrary precision number types
-# Provides: bfloat16, half, cfloat (for FP8/FP4 variants), integer
+# Provides: bfloat16, half, cfloat (for FP8/FP4 variants), integer, and the OCP Microscaling block
+# formats (mxfloat: mxint8, mxfp8; v3.95+), which the Combiner converts results into (#427)
 # This is a header-only library - we only need the include directory
 # SOURCE_SUBDIR points to non-existent dir to skip CMakeLists.txt processing
 
 FetchContent_Declare(universal
     GIT_REPOSITORY https://github.com/stillwater-sc/universal.git
-    GIT_TAG v3.91
+    GIT_TAG v5.17.0
     GIT_SHALLOW TRUE
     SOURCE_SUBDIR _skip_cmake  # Non-existent subdir prevents CMakeLists.txt processing
 )

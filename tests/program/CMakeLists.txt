@@ -441,3 +441,14 @@ set_tests_properties(test_csp_dataflow PROPERTIES
     LABELS "program;csp;lang;v0.10"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
+
+# The Combiner's block-format conversion into the OCP Microscaling formats (MXINT8, MXFP8), from
+# Universal through the numeric registry (#427)
+kpu_add_component_test(test_csp_block_format "program"
+    test_csp_block_format.cpp
+)
+
+set_tests_properties(test_csp_block_format PROPERTIES
+    LABELS "program;csp;numeric;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -65,6 +66,21 @@ using Mac = void (*)(const Word* a, const Word* b, Word* c, std::uint32_t m, std
 Mac mac(const std::string& in, const std::string& acc);
 std::vector<std::pair<std::string, std::string>> mac_pairs();
 std::string mac_names();                             // "fp32 -> fp32, int8 -> int32"
+
+// The OCP Microscaling (MX) block formats (#427; docs/01-architecture/combiner.md): blocks of 32
+// elements sharing one 8-bit power-of-two scale (e8m0). MXFP8 (e4m3 elements, saturating) is
+// Universal's mxfp8. MXINT8 (int8 codes, ties to even) is converted per OCP MX v1.0 in
+// numeric.cpp until Universal's mxint8 is fixed (stillwater-sc/universal#2083). The Combiner converts a result
+// into one as it writes it to L2: block_convert runs the conversion on fp32 elements -- each run
+// of 32 consecutive elements (row-major in a tile; the last run may be shorter) is quantized to
+// the format and read back -- so the elements hold the values the format represents.
+bool is_block_format(const std::string& name);
+std::string block_format_names();                    // "mxint8, mxfp8", for messages
+// Throws std::invalid_argument for a name that is not a block format.
+void block_convert(const std::string& format, float* v, std::size_t n);
+// The bytes n elements occupy in the format: an element each, and a scale per block of 32.
+std::size_t block_bytes(const std::string& format, std::size_t n);
+inline constexpr std::size_t kBlockSize = 32;
 
 // fp32's word is the float's bits.
 inline Word word_of(float f) { Word w; std::memcpy(&w, &f, sizeof w); return w; }

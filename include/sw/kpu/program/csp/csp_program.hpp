@@ -96,9 +96,17 @@ inline bool parse_place(const std::string& s, Place& out) {
 }
 
 // A vector operation: the epilogue (decision Q4). add takes a vector tile, broadcast down the
-// rows; the rest are the activations.
-enum class VeOp : std::uint8_t { Add, Relu, Gelu, Silu, Atan };
-inline constexpr std::size_t kVeOps = 5;
+// rows; relu, gelu, silu and atan are the activations; mxint8 and mxfp8 are the block-format
+// conversions into the OCP Microscaling formats (#427; numeric::block_convert), the last of a
+// result's operations (esg#68's order: bias, scale, activation, format).
+enum class VeOp : std::uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8 };
+inline constexpr std::size_t kVeOps = 7;
+
+// A block-format conversion: its format's name (numeric.hpp); else empty.
+inline const char* block_format_of(VeOp v) {
+    return v == VeOp::MxInt8 ? "mxint8" : v == VeOp::MxFp8 ? "mxfp8" : "";
+}
+inline bool is_block_format(VeOp v) { return v == VeOp::MxInt8 || v == VeOp::MxFp8; }
 
 inline const char* to_string(VeOp v) {
     switch (v) {
@@ -107,12 +115,14 @@ inline const char* to_string(VeOp v) {
         case VeOp::Gelu: return "gelu";
         case VeOp::Silu: return "silu";
         case VeOp::Atan: return "atan";
+        case VeOp::MxInt8: return "mxint8";
+        case VeOp::MxFp8: return "mxfp8";
     }
     return "?";
 }
 
 inline bool parse_veop(const std::string& s, VeOp& out) {
-    for (VeOp v : {VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu, VeOp::Atan})
+    for (VeOp v : {VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu, VeOp::Atan, VeOp::MxInt8, VeOp::MxFp8})
         if (s == to_string(v)) { out = v; return true; }
     return false;
 }

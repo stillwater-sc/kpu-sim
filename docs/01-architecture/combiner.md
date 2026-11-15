@@ -88,8 +88,21 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
   Under ws, `--place bm.egress` puts the epilogue on the panel's store instead. A fabric stage
   is refused, because it would act on one partial.
 
+- **Block-format conversion** (#427): `mxint8 @ combiner` and `mxfp8 @ combiner` (or
+  `@ bm.egress`) convert a result into an OCP Microscaling format as the last of its fused
+  operations, after bias and activation (esg#68's order). Each run of 32 row-major elements
+  shares an e8m0 scale.
+  - MXFP8 is Universal's `mxfp8` (e4m3, saturating), through the numeric registry.
+  - MXINT8 is converted per OCP MX v1.0 in `src/program/numeric.cpp`, until Universal's
+    `mxint8` is fixed (stillwater-sc/universal#2083: v5.17.0 saturates each block's largest
+    element).
+  - The trace records `BLOCK_CONVERT` (L0 opset 1.6), and every level computes the same bits.
+  - `kpu-csp-gen --algo linear --format mxint8|mxfp8` appends it to the epilogue.
+  - The result stays in fp32 words holding the values the format represents. Storing the
+    block format itself (element bytes and scales) is not modelled yet.
+
 Not built yet:
-- scaling (requantization) and block-format conversion (MXINT8, then MXFP8) on the Combiner;
+- scaling (requantization, int32 -> int8 with rounding and saturation) on the Combiner;
 - an init (`acc ... in l2 init ...`);
 - a weight-stationary timing of the array. L-T1 and L-CA time each merge's gemm as a
   one-call output-stationary chain.

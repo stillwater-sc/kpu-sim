@@ -508,6 +508,9 @@ private:
                 if (st.op == VeOp::Add) {
                     op.kind = TileOpKind::BiasAdd;
                     op.inputs = {st.arg};
+                } else if (is_block_format(st.op)) {
+                    op.kind = TileOpKind::BlockConvert;
+                    op.format = block_format_of(st.op);
                 } else {
                     op.kind = TileOpKind::Activation;
                     op.act = activation_of(st.op);

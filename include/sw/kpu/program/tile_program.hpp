@@ -187,6 +187,10 @@ enum class TileOpKind {
     // K blocks this way: Y's partial lives in an L2 slot and the Combiner merges each block into
     // it (docs/01-architecture/combiner.md). inputs = {A, B}; outputs = {Y}; `overwrite`.
     MatMulMerge,
+    // A block-format conversion (opset 1.6; #427): Y's elements, in runs of 32 row-major, quantized
+    // to an OCP Microscaling format and read back (numeric::block_convert) -- the values the
+    // format represents. The Combiner's last fused operation. outputs = {Y}; `format`.
+    BlockConvert,
 };
 
 // An L3 transaction: carries an L3 address and one tile (outputs[0]); computes nothing.
@@ -227,6 +231,7 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::L2Release:      return "L2_RELEASE";
         case TileOpKind::AccInit:        return "ACC_INIT";
         case TileOpKind::MatMulMerge:    return "MATMUL_MERGE";
+        case TileOpKind::BlockConvert:   return "BLOCK_CONVERT";
     }
     return "?";
 }
@@ -270,6 +275,9 @@ struct TileOp {
     // MatMulMerge: the Combiner's merge of the partial into Y -- overwrite (Y := P, the first K
     // block) or accumulate (Y := Y + P).
     bool overwrite = false;
+
+    // BlockConvert: the block format (numeric.hpp: mxint8, mxfp8).
+    std::string format;
 
     // Feed/Drain: which logical port the tile streams through.
     PortKind port_kind = PortKind::Input;
@@ -374,6 +382,7 @@ inline std::string TileProgram::disassemble() const {
             if ((op.kind == TileOpKind::MatMulAccum || op.kind == TileOpKind::MatMulMerge) && op.alpha != 1.0f)
                 s += " (alpha=" + std::to_string(op.alpha) + ")";
             if (op.kind == TileOpKind::MatMulMerge) s += op.overwrite ? " (merge overwrite)" : " (merge accumulate)";
+            if (op.kind == TileOpKind::BlockConvert) s += " (" + op.format + ")";
             if (op.pivot_slot >= 0) s += " {pivot#" + std::to_string(op.pivot_slot) + "}";
             if (op.kind == TileOpKind::Activation) s += std::string(" (") + to_string(op.act) + ")";
         }
