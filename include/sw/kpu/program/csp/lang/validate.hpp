@@ -152,7 +152,7 @@ private:
     // over a loop variable is widened to the variable's whole dimension when its loop ends.
     // formatted: a final merge converted its tile into a block format, after which nothing may run.
     struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false;
-                 std::vector<Family> finals = {}; bool formatted = false; };
+                 std::vector<Family> finals = {}; bool formatted = false; bool requantized = false; };
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
@@ -435,6 +435,9 @@ private:
     }
     void retain(const Stmt& s, const TileRef& r) {
         const Family f = family(r);
+        if (scaled(f.operand))
+            throw CompileError(s.line, "retain " + text(f) + ": it is requantized on its way to memory; retaining one "
+                                       "is not built yet, so store it");
         not_staged(f, s.line, "retain");
         distinct_per_iteration(f, s.line);
         const std::uint64_t n = count(f), total = n * multiplier_;
@@ -466,7 +469,24 @@ private:
     // ---- statements ----
     // A result's `via` list (context.hpp), and each add's vector provably resident and tiled as
     // the result's columns.
-    void context(const Stmt& s, const Family& y) {
+    // A requantized result (`acc` declared, #427): its accumulator values need a scale on every
+    // path into storage (`required`), and its context is that scale alone. Any other tile's
+    // context has no scale.
+    bool context(const Stmt& s, const Family& y, bool required = false) {
+        const auto all = resolve_result_context(s.context, target_, [](int line, const std::string& m) {
+            throw CompileError(line, m);
+        });
+        const bool has = std::any_of(all.begin(), all.end(), [](const ResolvedStage& r) { return r.op == VeOp::Scale; });
+        if (scaled(y.operand)) {
+            if (all.size() > 1 || (required && !has))
+                throw CompileError(s.line, "via ...: " + text(y) + " holds " + acc_of(y.operand) + " accumulator values; "
+                                           "its context is scale(m, shift) @ combiner, which makes them " +
+                                           type_of(y.operand) + (all.size() > 1 ? ", and nothing else" : ""));
+            return has;
+        }
+        if (has)
+            throw CompileError(s.line, "via ... scale: scale requantizes an accumulator into its tensor's type, and " +
+                                           y.operand + " declares no acc");
         if (!s.context.empty() && type_of(y.operand) != numeric::kFp32)
             throw CompileError(s.line, "via ...: a tile context computes in fp32; " + y.operand + " is " +
                                            type_of(y.operand));
@@ -486,6 +506,7 @@ private:
                 throw CompileError(r.arg->line, "add(" + text(b) + ") @ " + to_string(r.place) + " reads " + text(b) +
                                                     ", which is not provably resident; make it resident first");
         }
+        return false;
     }
     // `acc y in fabric init x` (docs/plans/accumulator-init-stream.md), as the walker checks it: x
     // provably resident and tiled as y (a vector: as y's columns). `init y` on its own accumulator
@@ -548,6 +569,10 @@ private:
             case Stmt::Kind::Resident:
                 for (const TileRef& r : s.tiles) {
                     const Family f = family(r);
+                    if (scaled(f.operand))
+                        throw CompileError(s.line, "resident " + text(f) + ": " + f.operand + " is a requantized result "
+                                                   "(acc " + acc_of(f.operand) + "), computed and stored, never made "
+                                                   "resident");
                     for (const Entry& e : state_)
                         if (may_overlap(f, e.family))
                             throw CompileError(s.line, same(f, e.family) || (count(f) == 1 && covers(e.family, f))
@@ -719,12 +744,19 @@ private:
             if (d.name == operand) return d.type;
         return numeric::kFp32;
     }
+    // The number system it is computed in (`acc`, #427), and whether that is not its type.
+    std::string acc_of(const std::string& operand) const {
+        for (const Decl& d : ast_.decls)
+            if (d.name == operand) return d.acc.empty() ? d.type : d.acc;
+        return numeric::kFp32;
+    }
+    bool scaled(const std::string& operand) const { return acc_of(operand) != type_of(operand); }
     // The number systems a call computes in (docs/plans/typed-value-path.md): a gemm's inputs
     // share one, and its (input, accumulator) pair has a registered MAC; every other tile
     // function computes in fp32.
     void types(const Stmt& s, const std::vector<Family>& args, const Family& y) const {
         if (s.fn == "gemm") {
-            const std::string in = type_of(args[0].operand), in2 = type_of(args[1].operand), acc = type_of(y.operand);
+            const std::string in = type_of(args[0].operand), in2 = type_of(args[1].operand), acc = acc_of(y.operand);
             if (in != in2)
                 throw CompileError(s.line, "gemm(" + args[0].operand + ", " + args[1].operand + "): " + args[0].operand +
                                                " is " + in + " and " + args[1].operand + " is " + in2 +
@@ -805,7 +837,7 @@ private:
                                                std::string(r.place == Place::BmEgress ? "; a bm.egress stage goes on the store"
                                                                                       : "; a fabric stage would act on one partial"));
             }
-            context(s, y);
+            if (context(s, y, !s.context.empty())) acc->requantized = true;
             if (!s.context.empty()) {
                 Family f = y;
                 f.line = s.line;
@@ -867,6 +899,12 @@ private:
             if (acc->formatted && !s.context.empty())
                 throw CompileError(s.line, "store " + text(y) + " via ...: its final merge converted it into a block "
                                            "format, its last operation; no stage may follow it");
+            if (scaled(y.operand) && !acc->requantized)
+                throw CompileError(s.line, "store " + text(y) + ": it holds " + acc_of(y.operand) + " accumulator values; "
+                                           "its final merge needs `via scale(m, shift) @ combiner`");
+            if (scaled(y.operand) && !s.context.empty())
+                throw CompileError(s.line, "store " + text(y) + " via ...: it was requantized on its final merge; its "
+                                           "store takes no stage");
             for (const ResolvedStage& r : resolve_result_context(s.context, target_, [](int line, const std::string& m) {
                      throw CompileError(line, m);
                  }))
@@ -888,7 +926,10 @@ private:
             if (s.late && !s.context.empty())
                 throw CompileError(s.line, "store " + text(y) + " late via ...: a late store carries no epilogue (it is "
                                            "emitted after the next accumulator, where its vectors' residency is not known)");
-            context(s, y);
+            if (scaled(y.operand) && s.late)
+                throw CompileError(s.line, "store " + text(y) + " late: it is requantized on its way to memory, and a "
+                                           "late store carries no stage; store it with `via scale(m, shift) @ combiner`");
+            context(s, y, true);
             hold(1, s.line, "store " + text(y) + "'s writeback");      // the writeback's moment in L3
             live_ -= 1;
             accs_.erase(acc);

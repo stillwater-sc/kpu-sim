@@ -161,7 +161,11 @@ moves. The linear driver adds the epilogue. A context names where each stage run
 
 Vector operations start with the epilogue (Q4): `add(vector)` (a broadcast bias), `scale(s)`,
 `relu`, `gelu`, `silu`, and **`atan`**. The block-format conversions `mxint8` and `mxfp8` (#427)
-come last in a context, on the Combiner or at bm.egress, never in the fabric. Each stage costs vector-processor time
+come last in a context, on the Combiner or at bm.egress, never in the fabric. `scale(m, shift)`
+(#427) requantizes a tensor declared with an accumulator, `tensor C[..] int8 tile .. out acc
+int32`, on the Combiner: round(x * m / 2^shift), ties to even, saturated. It is the only stage
+such a tensor's context takes, and every store of it (or, for an L2 accumulator, its final merge)
+must carry it. Each stage costs vector-processor time
 (elements / lanes x rate). That time overlaps the move it rides on, unless the vector processor
 is the slower of the two.
 

@@ -86,6 +86,13 @@ struct Options {
     // linear: the block format the result is converted into, after the activation, at the
     // epilogue's place (#427): none, or an OCP Microscaling format (mxint8, mxfp8).
     std::string format = "none";
+    // matmul with an integer dtype: requantize the result into the dtype (#427). C is declared in
+    // the dtype with its MAC's accumulator (`int8 ... out acc int32`), and the Combiner's
+    // scale(requant_m, requant_shift) takes each C tile there: on its store (os), on each tile's
+    // final merge (ws, is).
+    bool requant = false;
+    long long requant_m = 1;
+    int requant_shift = 0;
 };
 
 // Tiles along one dimension.
@@ -140,6 +147,16 @@ inline void check(const Options& o) {
             throw GenError("csp-gen: format " + o.format + " @ " + o.place + ": a block-format conversion rides the "
                            "result's move into memory, on the Combiner or at bm.egress");
     }
+    if (o.requant) {
+        if (o.algo != "matmul") throw GenError("csp-gen: requant is matmul's; --algo is '" + o.algo + "'");
+        const numeric::NumberSystem* ns = numeric::find(o.dtype);
+        if (!ns || ns->kind != numeric::Kind::Integer)
+            throw GenError("csp-gen: requant takes an integer accumulator into an integer dtype; dtype is '" + o.dtype + "'");
+        if (o.init != "none") throw GenError("csp-gen: requant with an init is not built yet");
+        if (o.stage_a) throw GenError("csp-gen: requant with stage_a is not built yet");
+        if (o.requant_m <= -(1LL << 31) || o.requant_m >= (1LL << 31) || o.requant_shift < 0 || o.requant_shift > 62)
+            throw GenError("csp-gen: requant m in (-2^31, 2^31), shift in 0..62");
+    }
     if (o.dataflow != "os" && o.dataflow != "ws" && o.dataflow != "is")
         throw GenError("csp-gen: dataflow '" + o.dataflow + "' (os | ws | is)");
     if (o.dataflow != "os") {
@@ -191,6 +208,19 @@ inline std::string tensor(const char* name, const Options& o, const char* io, co
            std::to_string(o.tile) + " " + io + ";\n";
 }
 
+// The result C: in its accumulator's number system, or -- requantized (#427) -- in the dtype, with
+// the accumulator declared (`int8 ... out acc int32`).
+inline std::string result_tensor(const Options& o, const char* io, const std::string& acc) {
+    if (!o.requant) return tensor("C", o, io, acc);
+    std::string t = tensor("C", o, io, o.dtype);
+    return t.substr(0, t.size() - 2) + " acc " + acc + ";\n";     // before the ';\n'
+}
+
+// A requantized matmul's stage (#427): its result's accumulator values into its dtype.
+inline std::string requant_stage(const Options& o) {
+    return " via scale(" + std::to_string(o.requant_m) + ", " + std::to_string(o.requant_shift) + ") @ combiner";
+}
+
 // A linear's block-format conversion (#427), the epilogue's last stage, at the epilogue's place.
 inline std::string format_stage(const Options& o) {
     return o.format == "none" ? std::string() : ", " + o.format + " @ " + o.place;
@@ -203,6 +233,7 @@ inline std::string matmul_nest(const Options& o, bool linear_fused) {
     // A fused store carries its epilogue, which reads b[j] where it is written; a late store
     // carries none (lang/validate.hpp), so only the plain matmul nest defers its stores.
     std::string via = " late";
+    if (o.requant) via = requant_stage(o);
     if (linear_fused)
         via = std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place + format_stage(o);
     // The accumulator's init: a tile made resident for it (D's, or C's own), or b's with B's panel.
@@ -274,10 +305,13 @@ inline std::string stationary_nest(const Options& o, bool linear_fused) {
     const std::size_t n = tiles(o);
     const std::string nt = std::to_string(n);
     const bool ws = o.dataflow == "ws";
-    const bool at_combiner = linear_fused && o.place == "combiner";
+    // The final merges' context: the linear epilogue @ combiner (with b[j]), or a matmul's requant.
+    const bool at_combiner = (linear_fused && o.place == "combiner") || o.requant;
     const bool at_egress = linear_fused && o.place == "bm.egress";
+    const bool bias = linear_fused;
     const std::string epilogue =
-        std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place + format_stage(o);
+        o.requant ? requant_stage(o)
+                  : std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place + format_stage(o);
     // ws: j outer, B[k, j] stationary across i. is: i outer, A[i, k] stationary across j.
     const std::string outer = ws ? "j" : "i", inner = ws ? "i" : "j";
     const std::string panel = ws ? "C[:, j]" : "C[i, :]";
@@ -286,14 +320,14 @@ inline std::string stationary_nest(const Options& o, bool linear_fused) {
         const std::string held = ws ? "B[" + k + ", j]" : "A[i, " + k + "]";     // the stationary tile
         const std::string in = last ? "      " : "        ";
         std::string call = "call gemm(A[i, " + k + "], B[" + k + ", j]) +-> C[i, j]" + (last ? epilogue : std::string()) + ";";
-        const std::string bias = last && ws ? std::string(", b[j]") : std::string();
-        if (last && !ws) call = "resident b[j]; " + call + " release b[j];";
+        const std::string with_b = last && ws && bias ? std::string(", b[j]") : std::string();
+        if (last && !ws && bias) call = "resident b[j]; " + call + " release b[j];";
         std::string t;
-        t += in + "resident " + moving + ", " + held + bias + ";\n";
+        t += in + "resident " + moving + ", " + held + with_b + ";\n";
         t += in + "stage " + held + " in l2 {\n";
         t += in + "  for " + inner + " in 0.." + nt + " { " + call + " }\n";
         t += in + "}\n";
-        t += in + "release " + moving + ", " + held + bias + ";\n";
+        t += in + "release " + moving + ", " + held + with_b + ";\n";
         return t;
     };
     std::string s;
@@ -320,11 +354,13 @@ inline std::string matmul(const Options& o) {
         std::string s = header(o, std::string("matmul C = A . B, ") +
                                       (ws ? "weight-stationary: B's tile staged in L2 across the i loop"
                                           : "input-stationary: A's tile staged in L2 across the j loop") +
-                                      ", C's partials merged by the Combiner in L2");
+                                      ", C's partials merged by the Combiner in L2" +
+                                      (o.requant ? std::string(", requantized into ") + o.dtype + " on each final merge"
+                                                 : std::string()));
         s += "program matmul machine flat(l3 = " + std::to_string(o.l3) + ", l2 = " + std::to_string(tiles(o) + 1) +
              ") {\n";
         const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
-        s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype) + tensor("C", o, "out", acc);
+        s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype) + result_tensor(o, "out", acc);
         s += stationary_nest(o, false);
         return s + "}\n";
     }
@@ -334,7 +370,8 @@ inline std::string matmul(const Options& o) {
                                                       : "matmul C = A . B";
     std::string s = header(o, what + ", " + o.orient + "-panel schedule" +
                                   (o.stage_a ? std::string(", A's row panel staged in L2") : std::string()) +
-                                  (o.init != "none" ? ", the accumulator's init streamed in" : std::string()));
+                                  (o.init != "none" ? ", the accumulator's init streamed in" : std::string()) +
+                                  (o.requant ? ", requantized into " + o.dtype + " on the Combiner" : std::string()));
     s += "program matmul machine flat(l3 = " + std::to_string(o.l3) +
          (o.stage_a ? ", l2 = " + std::to_string(tiles(o)) : std::string()) + ") {\n";
     const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
@@ -343,7 +380,7 @@ inline std::string matmul(const Options& o) {
     if (o.init == "bias-row")
         s += "  vector b[" + std::to_string(o.size) + "]" + (acc == "fp32" ? std::string() : " " + acc) + " tile " +
              std::to_string(o.tile) + " in;\n";
-    s += tensor("C", o, o.init == "accumulate" ? "inout" : "out", acc);
+    s += result_tensor(o, o.init == "accumulate" ? "inout" : "out", acc);
     s += matmul_nest(o, false);
     return s + "}\n";
 }

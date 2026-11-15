@@ -62,6 +62,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
   --place <fabric|combiner|bm.egress|unfused>
                                 linear: where the epilogue runs      (default fabric)
+  --requant <m,shift>           matmul with an integer --dtype: requantize the result into the
+                                dtype on the Combiner, round(x * m / 2^shift), ties to even,
+                                saturated; C is declared `<dtype> ... out acc <accumulator>`
   --format <none|mxint8|mxfp8>  linear: convert the result into an OCP Microscaling block format,
                                 after the activation, at --place (combiner | bm.egress)
                                 (default none)
@@ -101,7 +104,7 @@ int main(int argc, char** argv) {
     for (const auto& [k, v] : a)
         if (k != "--algo" && k != "--size" && k != "--tile" && k != "--l3" && k != "--target" && k != "--orient" &&
             k != "--act" && k != "--place" && k != "--stage-a" && k != "--init" && k != "--dtype" &&
-            k != "--dataflow" && k != "--format" && k != "-o")
+            k != "--dataflow" && k != "--format" && k != "--requant" && k != "-o")
             return usage("unknown option '" + k + "'");
     for (const char* k : {"--algo", "--size", "--tile"})
         if (!a.count(k)) return usage(std::string(k) + " is required");
@@ -134,6 +137,23 @@ int main(int argc, char** argv) {
     if (a.count("--dtype")) {
         if (o.algo != "matmul") return usage("--dtype is matmul's; --algo is '" + o.algo + "'");
         o.dtype = a["--dtype"];
+    }
+    if (a.count("--requant")) {
+        if (o.algo != "matmul") return usage("--requant is matmul's; --algo is '" + o.algo + "'");
+        const std::string& v = a["--requant"];
+        const auto comma = v.find(',');
+        try {
+            if (comma == std::string::npos) throw std::invalid_argument("no comma");
+            std::size_t used = 0;
+            o.requant_m = std::stoll(v.substr(0, comma), &used);
+            if (used != comma) throw std::invalid_argument("m");
+            const std::string sh = v.substr(comma + 1);
+            o.requant_shift = std::stoi(sh, &used);
+            if (used != sh.size()) throw std::invalid_argument("shift");
+        } catch (const std::exception&) {
+            return usage("--requant '" + v + "': m,shift (integers)");
+        }
+        o.requant = true;
     }
     if (a.count("--format")) {
         if (o.algo != "linear") return usage("--format is linear's; --algo is '" + o.algo + "'");

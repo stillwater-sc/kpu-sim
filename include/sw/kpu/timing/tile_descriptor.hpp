@@ -11,6 +11,7 @@
 #include <sw/kpu/isa/data_movement_isa.hpp>
 
 #include <cstdint>
+#include <string>
 #include <functional>
 #include <tuple>
 #include <vector>
@@ -107,7 +108,7 @@ struct TileIDHash {
 // from L3) down the rows; the rest are elementwise activations.
 // ============================================================================
 struct VectorStage {
-    enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8 };
+    enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8, Scale };
     Op op = Op::Relu;
     TileID arg{};
     // Add: its read of `arg`, numbered in the order the executor scheduled the reads of `arg`.
@@ -117,6 +118,10 @@ struct VectorStage {
     // the move waits for (a CSP driver sets it, in program order). 0: the executor's own count
     // of the Loads scheduled with it.
     uint64_t arg_loads = 0;
+    // Scale: the requantization (numeric::requantize) from the tile's accumulator type to its type.
+    int64_t scale_m = 1;
+    int scale_shift = 0;
+    std::string from_type, to_type;
 };
 
 // ============================================================================

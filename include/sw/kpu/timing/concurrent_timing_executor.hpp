@@ -1487,6 +1487,8 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
                     throw std::runtime_error("Tile context: add(" + st.arg.to_string() + ") on " + id.to_string() +
                                              ": the vector is not in L3");
                 program::bias_tile(y.values, y.cols, b->second.payload.values);
+            } else if (st.op == VectorStage::Op::Scale) {
+                program::requant_tile(st.from_type, st.to_type, y.values, st.scale_m, st.scale_shift);
             } else if (st.op == VectorStage::Op::MxInt8 || st.op == VectorStage::Op::MxFp8) {
                 program::numeric::block_convert(st.op == VectorStage::Op::MxInt8 ? "mxint8" : "mxfp8", y.values.data(),
                                                 y.values.size());

@@ -53,6 +53,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Combiner's requantization: int32 accumulators into int8 results** (#427, part 2b).
+  - The language:
+    - a result declares its accumulator, `tensor C[..] int8 tile .. out acc int32`. Its gemms and
+      merges compute in int32, its storage holds int8, and it is never resident;
+    - `scale(m, shift) @ combiner` computes `round(x * m / 2^shift)`, ties to even, saturated;
+    - every store of such a tensor (an L2 accumulator: its final merge) must carry the scale and
+      no other stage. A scale on a tensor without `acc` is refused, as is one off the Combiner or
+      out of esg#68's order.
+  - `numeric::requantize` does the arithmetic exactly in int64, for any registered integer
+    types.
+  - The L0 trace: `REQUANT m= shift=` (opset 1.7), and `OPERAND acc=` (container 1.4.0,
+    MIN_CONSUMER 1.4.0, so an older reader refuses the file instead of reading int32 words as
+    int8).
+  - L-B, the replay, L-T1 and L-CA store the same int8 results under OS, WS and IS. The test
+    checks them against an independent requantization of the int32 matmul.
+  - `kpu-csp-gen --algo matmul --dtype int8 --requant m,shift`.
+  - The rounding mode (ties to even) is kpu-sim's choice until the RTL (esg#68) fixes one.
+
 - **The Combiner's block-format conversion: MXINT8 and MXFP8** (#427, part 2a).
   - The language: `mxint8 @ <place>` and `mxfp8 @ <place>` stages convert a result into an OCP
     Microscaling format, as the last of its fused operations (after bias and activation). They

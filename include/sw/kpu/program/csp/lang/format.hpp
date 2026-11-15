@@ -94,6 +94,11 @@ inline std::string context_text(const std::vector<Stage>& via) {
         s += i ? ", " : " via ";
         s += via[i].op;
         if (!via[i].args.empty()) s += "(" + refs_text(via[i].args) + ")";
+        if (!via[i].nums.empty()) {
+            s += "(";
+            for (std::size_t k = 0; k < via[i].nums.size(); ++k) s += (k ? ", " : "") + std::to_string(via[i].nums[k]);
+            s += ")";
+        }
         s += " @ " + via[i].place;
     }
     return s;
@@ -175,7 +180,7 @@ inline std::string format(const Program& p) {
               << ";\n";
         else
             o << "  tensor " << d.name << "[" << d.rows << "," << d.cols << "]" << type << " tile " << d.tile_rows
-              << "x" << d.tile_cols << " " << d.io << ";\n";
+              << "x" << d.tile_cols << " " << d.io << (d.acc.empty() ? std::string() : " acc " + d.acc) << ";\n";
     }
     detail::stmts(o, p.body, 1);
     o << "}\n";

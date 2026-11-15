@@ -99,13 +99,15 @@ inline void kernel_matmul_accum(TileProgram& prog, const TileOp& op) {
 
     // A typed gemm (#394): the MAC registered for (A's and B's number system, C's), on the tiles'
     // words. An fp32 gemm keeps the arithmetic below, bit for bit.
-    if (!A.fp32() || !B.fp32() || !C.fp32()) {
+    // C accumulates in its accumulator's number system (TensorOperand::acc_type: `acc int32` on an
+    // int8 tensor), which its words hold until a `scale` requantizes them.
+    if (!A.fp32() || !B.fp32() || C.acc_type() != numeric::kFp32) {
         if (A.type != B.type)
             throw std::invalid_argument("MatMulAccum: " + ac.operand + " is " + A.type + " and " + bc.operand + " is " +
                                         B.type + "; a gemm's inputs share a number system");
-        const numeric::Mac mac = numeric::mac(A.type, C.type);
+        const numeric::Mac mac = numeric::mac(A.type, C.acc_type());
         if (!mac)
-            throw std::invalid_argument("MatMulAccum: no MAC for " + A.type + " -> " + C.type + " (registered: " +
+            throw std::invalid_argument("MatMulAccum: no MAC for " + A.type + " -> " + C.acc_type() + " (registered: " +
                                         numeric::mac_names() + ")");
         if (op.alpha != 1.0f)
             throw std::invalid_argument("MatMulAccum: a " + A.type + " gemm computes alpha 1");
@@ -322,9 +324,9 @@ inline void kernel_acc_init(TileProgram& prog, const TileOp& op) {
     const TileCoord& xc = op.inputs.at(0);
     const TensorOperand& X = prog.operand(xc.operand);
     if (&X == &Y && xc.ti == yc.ti && xc.tj == yc.tj) return;   // accumulate onto Y: it starts as it is
-    if (X.type != Y.type)
+    if (X.type != Y.acc_type())
         throw std::invalid_argument("AccInit: " + xc.to_string() + " is " + X.type + " and the accumulator " +
-                                    yc.to_string() + " is " + Y.type + "; an init is in the accumulator's number system");
+                                    yc.to_string() + " is " + Y.acc_type() + "; an init is in the accumulator's number system");
     const Dim x0 = X.row_begin(xc.ti), x1 = X.row_end(xc.ti);
     // A vector (one column) on a wider tile is a bias row; a single-column Y takes a tensor init.
     if (X.cols == 1 && Y.cols > 1) {
@@ -390,7 +392,7 @@ inline void kernel_matmul_merge(TileProgram& prog, const TileOp& op) {
     std::vector<float> p;
     for (Dim r = r0; r < r1; ++r)
         for (Dim c = c0; c < c1; ++c) p.push_back(Y.at(r, c));
-    merge_tile(Y.type, before, p);
+    merge_tile(Y.acc_type(), before, p);
     std::size_t n = 0;
     for (Dim r = r0; r < r1; ++r)
         for (Dim c = c0; c < c1; ++c) Y.at(r, c) = before[n++];
@@ -409,6 +411,25 @@ inline void kernel_block_convert(TileProgram& prog, const TileOp& op) {
     std::size_t n = 0;
     for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
         for (Dim c = Y.col_begin(yc.tj); c < Y.col_end(yc.tj); ++c) Y.at(r, c) = v[n++];
+}
+
+// REQUANT (opset 1.7; #427): Y's words, accumulator values, requantized into Y's type
+// (numeric::requantize: round(x * m / 2^shift), ties to even, saturated). outputs = {Y}.
+inline void requant_tile(const std::string& from, const std::string& to, std::vector<float>& v, std::int64_t m,
+                         int shift) {
+    for (float& f : v) {
+        numeric::Word w;
+        std::memcpy(&w, &f, sizeof w);
+        const numeric::Word q = numeric::requantize(from, to, w, m, shift);
+        std::memcpy(&f, &q, sizeof q);
+    }
+}
+inline void kernel_requant(TileProgram& prog, const TileOp& op) {
+    const TileCoord& yc = op.outputs.at(0);
+    TensorOperand& Y = prog.operand(yc.operand);
+    for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
+        for (Dim c = Y.col_begin(yc.tj); c < Y.col_end(yc.tj); ++c)
+            Y.set_word(r, c, numeric::requantize(Y.acc_type(), Y.type, Y.word(r, c), op.scale_m, op.scale_shift));
 }
 
 // Y := act(Y): outputs = {Y's tile}.
@@ -445,6 +466,7 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::AccInit:        kernel_acc_init(prog, op); break;
         case TileOpKind::MatMulMerge:    kernel_matmul_merge(prog, op); break;
         case TileOpKind::BlockConvert:   kernel_block_convert(prog, op); break;
+        case TileOpKind::Requant:        kernel_requant(prog, op); break;
         case TileOpKind::L3Load:
         case TileOpKind::L3Store:
         case TileOpKind::L3Move:

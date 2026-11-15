@@ -418,14 +418,14 @@ private:
                         d.l2_slot_turn = l2_turns_[a.l2->slot]++;
                     }
                     std::vector<VectorStage> epilogue;    // the final merge's (#427), after the merge
-                    for (const auto& st : a.context) epilogue.push_back(stage(st));
-                    exec_.schedule_merge(d, overwrite, inputs_.operand(a.tile.operand).type, std::move(epilogue));
+                    for (const auto& st : a.context) epilogue.push_back(stage(st, a.tile));
+                    exec_.schedule_merge(d, overwrite, inputs_.operand(a.tile.operand).acc_type(), std::move(epilogue));
                     break;
                 }
                 if (a.context.empty()) { exec_.schedule_drain(d); break; }
                 std::vector<VectorStage> fabric, drain;
                 for (const auto& st : a.context)
-                    (st.place == program::csp::Place::Fabric ? fabric : drain).push_back(stage(st));
+                    (st.place == program::csp::Place::Fabric ? fabric : drain).push_back(stage(st, a.tile));
                 exec_.schedule_drain(d, std::move(fabric), std::move(drain));
                 break;
             }
@@ -434,7 +434,7 @@ private:
                 d.l2_held = a.l2.has_value();                  // an L2 partial: its L2Release retires it
                 if (a.context.empty()) { exec_.schedule_writeback(d); break; }
                 std::vector<VectorStage> egress;
-                for (const auto& st : a.context) egress.push_back(stage(st));
+                for (const auto& st : a.context) egress.push_back(stage(st, a.tile));
                 exec_.schedule_writeback(d, std::move(egress));
                 break;
             }
@@ -455,7 +455,7 @@ private:
                     spec.partial = partial;         // a partial from zero, merged into L2 by its Drain
                     // A typed gemm computes with the registered MAC, as L-B does (#394 step 2).
                     const std::string& in_type = inputs_.operand(op->inputs.at(0).operand).type;
-                    const std::string& acc_type = inputs_.operand(y.operand).type;
+                    const std::string& acc_type = inputs_.operand(y.operand).acc_type();
                     if (in_type != program::numeric::kFp32 || acc_type != program::numeric::kFp32) {
                         spec.mac = program::numeric::mac(in_type, acc_type);
                         if (!spec.mac)
@@ -521,7 +521,7 @@ private:
     }
     TileID id(const program::TileCoord& c) const { return id(c.operand, c.ti, c.tj); }
 
-    VectorStage stage(const program::csp::Stage& st) const {
+    VectorStage stage(const program::csp::Stage& st, const program::TileCoord& tile) const {
         VectorStage v;
         switch (st.op) {
             case program::csp::VeOp::Add: {
@@ -539,6 +539,16 @@ private:
             case program::csp::VeOp::Atan: v.op = VectorStage::Op::Atan; break;
             case program::csp::VeOp::MxInt8: v.op = VectorStage::Op::MxInt8; break;
             case program::csp::VeOp::MxFp8: v.op = VectorStage::Op::MxFp8; break;
+            case program::csp::VeOp::Scale: {
+                // The tile's accumulator values into its type: the payload's words change type here.
+                const auto& t = inputs_.operand(tile.operand);
+                v.op = VectorStage::Op::Scale;
+                v.scale_m = st.m;
+                v.scale_shift = st.shift;
+                v.from_type = t.acc_type();
+                v.to_type = t.type;
+                break;
+            }
         }
         return v;
     }
