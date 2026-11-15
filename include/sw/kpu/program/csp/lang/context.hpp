@@ -76,6 +76,8 @@ struct ResolvedStage {
     VeOp op = VeOp::Relu;
     Place place = Place::Fabric;
     std::optional<TileRef> arg;
+    std::int64_t m = 1;                 // scale
+    int shift = 0;
 };
 
 // Resolve the `via` list of a result (a store's, or an in-place call's): known operations,
@@ -87,6 +89,8 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
     int last_rank = -1;
     Place last = Place::Fabric;
     const Stage* format = nullptr;                      // a block-format conversion seen: it is last
+    const Stage* after_scale = nullptr;                 // an activation or format seen: scale comes before it
+    bool scaled = false;
     for (const Stage& s : via) {
         ResolvedStage r;
         if (!parse_veop(s.op, r.op))
@@ -104,6 +108,25 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
             if (r.place == Place::Fabric)
                 fail(s.line, s.op + " @ fabric: a block-format conversion runs where the result leaves for memory, "
                              "on the Combiner or at bm.egress");
+        }
+        // esg#68's order: bias, scale, activation, format.
+        if (r.op == VeOp::Scale) {
+            if (s.nums.size() != 2) fail(s.line, "scale takes a multiplier and a shift: scale(m, shift)");
+            if (s.nums[0] <= -(1LL << 31) || s.nums[0] >= (1LL << 31))
+                fail(s.line, "scale: the multiplier " + std::to_string(s.nums[0]) + " is outside (-2^31, 2^31)");
+            if (s.nums[1] < 0 || s.nums[1] > 62) fail(s.line, "scale: the shift " + std::to_string(s.nums[1]) + " is outside 0..62");
+            if (r.place != Place::Combiner)
+                fail(s.line, "scale @ " + s.place + ": the requantization runs on the Combiner, as the result enters L2");
+            if (after_scale)
+                fail(s.line, "scale follows " + after_scale->op + ": the order is bias, scale, activation, format");
+            if (scaled) fail(s.line, "scale: the result is already requantized");
+            r.m = s.nums[0];
+            r.shift = static_cast<int>(s.nums[1]);
+            scaled = true;
+        } else if (r.op == VeOp::Add) {
+            if (scaled) fail(s.line, "add follows scale: the order is bias, scale, activation, format");
+        } else {
+            after_scale = after_scale ? after_scale : &s;
         }
         if (r.op == VeOp::Add) {
             if (s.args.size() != 1) fail(s.line, "add takes one vector tile: add(b[j])");

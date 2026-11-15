@@ -54,6 +54,12 @@ struct TensorOperand {
     // the default, stores the floats themselves; any other stores each element's Universal bit
     // pattern in its 4 bytes -- read it through word()/value(), never as a float.
     std::string type = numeric::kFp32;
+    // The number system the operand is computed in, when it is not `type` (#427): a gemm's result
+    // accumulates in it -- `tensor C int8 ... acc int32` -- and the Combiner's `scale` stage
+    // requantizes each tile into `type` on its way to memory. Until then the tile's words hold
+    // accumulator values; after it, `type` values. Empty: the operand computes in `type`.
+    std::string acc;
+    const std::string& acc_type() const { return acc.empty() ? type : acc; }
 
     TensorOperand() = default;
     TensorOperand(std::string n, Dim r, Dim c, Dim tr, Dim tc)
@@ -191,6 +197,10 @@ enum class TileOpKind {
     // to an OCP Microscaling format and read back (numeric::block_convert) -- the values the
     // format represents. The Combiner's last fused operation. outputs = {Y}; `format`.
     BlockConvert,
+    // Requantization (opset 1.7; #427): Y's words, accumulator values (TensorOperand::acc), into
+    // Y's type -- round(x * m / 2^shift), ties to even, saturated (numeric::requantize). The
+    // Combiner's scale stage. outputs = {Y}; `scale_m`, `scale_shift`.
+    Requant,
 };
 
 // An L3 transaction: carries an L3 address and one tile (outputs[0]); computes nothing.
@@ -232,6 +242,7 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::AccInit:        return "ACC_INIT";
         case TileOpKind::MatMulMerge:    return "MATMUL_MERGE";
         case TileOpKind::BlockConvert:   return "BLOCK_CONVERT";
+        case TileOpKind::Requant:        return "REQUANT";
     }
     return "?";
 }
@@ -278,6 +289,10 @@ struct TileOp {
 
     // BlockConvert: the block format (numeric.hpp: mxint8, mxfp8).
     std::string format;
+
+    // Requant: the multiplier and the right shift.
+    std::int64_t scale_m = 1;
+    int scale_shift = 0;
 
     // Feed/Drain: which logical port the tile streams through.
     PortKind port_kind = PortKind::Input;
@@ -383,6 +398,8 @@ inline std::string TileProgram::disassemble() const {
                 s += " (alpha=" + std::to_string(op.alpha) + ")";
             if (op.kind == TileOpKind::MatMulMerge) s += op.overwrite ? " (merge overwrite)" : " (merge accumulate)";
             if (op.kind == TileOpKind::BlockConvert) s += " (" + op.format + ")";
+            if (op.kind == TileOpKind::Requant)
+                s += " (scale " + std::to_string(op.scale_m) + " >> " + std::to_string(op.scale_shift) + ")";
             if (op.pivot_slot >= 0) s += " {pivot#" + std::to_string(op.pivot_slot) + "}";
             if (op.kind == TileOpKind::Activation) s += std::string(" (") + to_string(op.act) + ")";
         }

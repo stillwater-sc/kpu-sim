@@ -82,6 +82,7 @@ inline TileProgram csp_inputs(const csp::lang::Program& ast) {
         TensorOperand& o = out.add_operand(TensorOperand(shape.name, shape.rows, shape.cols, shape.tile_rows,
                                                          shape.tile_cols));
         o.type = shape.type;
+        o.acc = shape.acc;
         const bool reads = d.io == "in" || (d.io == "inout" && (!read_first.count(d.name) || read_first.at(d.name)));
         if (reads) fill_operand(o);
         // A square operand the program reads and then updates in place -- LU's A, factored where

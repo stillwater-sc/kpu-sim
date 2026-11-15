@@ -86,6 +86,7 @@ struct TileRef {
 struct Stage {                                // a tile-context stage: op(args) @ place
     std::string op;
     std::vector<TileRef> args;
+    std::vector<long long> nums;              // scale(m, shift): its integers
     std::string place;
     int line = 0;
 };
@@ -130,6 +131,9 @@ struct Decl {
     std::string io;                           // in | out | inout
     // The elements' number system (numeric.hpp): `tensor A[M,K] int8 tile ...`. None written: fp32.
     std::string type = "fp32";
+    // `... out acc int32`: the number system it is computed in, when not `type` (#427): a gemm
+    // accumulates in it, and a scale stage requantizes the result into `type`. Empty: `type`.
+    std::string acc;
     int line = 0;
 };
 
@@ -361,6 +365,12 @@ private:
         d.io = ident("in, out or inout");
         if (d.io != "in" && d.io != "out" && d.io != "inout")
             throw SyntaxError(d.line, "'" + d.io + "': in, out or inout");
+        if (word("acc")) {
+            take();
+            d.acc = ident("the accumulator's number system");
+            if (!numeric::find(d.acc))
+                throw SyntaxError(d.line, "acc '" + d.acc + "' is not a number system (" + numeric::names() + ")");
+        }
         expect(";");
         return d;
     }
@@ -446,7 +456,17 @@ private:
             Stage s;
             s.line = line();
             s.op = ident("a vector operation");
-            if (sym("(")) {
+            if (s.op == "scale") {                // scale(m, shift): integers, m maybe negative
+                expect("(");
+                for (int n = 0; n < 2; ++n) {
+                    if (n) expect(",");
+                    const bool neg = sym("-");
+                    if (neg) take();
+                    const long long v = integer(n ? "the shift" : "the multiplier");
+                    s.nums.push_back(neg ? -v : v);
+                }
+                expect(")");
+            } else if (sym("(")) {
                 take();
                 if (!sym(")")) s.args = tiles();
                 expect(")");

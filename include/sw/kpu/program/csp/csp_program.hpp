@@ -99,8 +99,10 @@ inline bool parse_place(const std::string& s, Place& out) {
 // rows; relu, gelu, silu and atan are the activations; mxint8 and mxfp8 are the block-format
 // conversions into the OCP Microscaling formats (#427; numeric::block_convert), the last of a
 // result's operations (esg#68's order: bias, scale, activation, format).
-enum class VeOp : std::uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8 };
-inline constexpr std::size_t kVeOps = 7;
+// scale(m, shift) is the requantization (#427): an accumulator's values into its tensor's type,
+// round(x * m / 2^shift), ties to even, saturated (numeric::requantize).
+enum class VeOp : std::uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8, Scale };
+inline constexpr std::size_t kVeOps = 8;
 
 // A block-format conversion: its format's name (numeric.hpp); else empty.
 inline const char* block_format_of(VeOp v) {
@@ -117,12 +119,13 @@ inline const char* to_string(VeOp v) {
         case VeOp::Atan: return "atan";
         case VeOp::MxInt8: return "mxint8";
         case VeOp::MxFp8: return "mxfp8";
+        case VeOp::Scale: return "scale";
     }
     return "?";
 }
 
 inline bool parse_veop(const std::string& s, VeOp& out) {
-    for (VeOp v : {VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu, VeOp::Atan, VeOp::MxInt8, VeOp::MxFp8})
+    for (VeOp v : {VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu, VeOp::Atan, VeOp::MxInt8, VeOp::MxFp8, VeOp::Scale})
         if (s == to_string(v)) { out = v; return true; }
     return false;
 }
@@ -152,6 +155,8 @@ struct Stage {
     VeOp op = VeOp::Relu;
     Place place = Place::Fabric;
     TileCoord arg;                      // add: the vector tile (resident in L3)
+    std::int64_t m = 1;                 // scale: the multiplier
+    int shift = 0;                      //        and the right shift
 };
 
 // One step of one process.
@@ -396,6 +401,7 @@ public:
                 const Stage& st = a.context[k];
                 o << (k ? ", " : "  via ") << to_string(st.op);
                 if (st.op == VeOp::Add) o << "(" << st.arg.to_string() << ")";
+                if (st.op == VeOp::Scale) o << "(" << st.m << ", " << st.shift << ")";
                 o << " @ " << to_string(st.place);
             }
             if (a.place) o << "  @" << a.place->to_string();

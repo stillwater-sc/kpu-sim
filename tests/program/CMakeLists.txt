@@ -452,3 +452,14 @@ set_tests_properties(test_csp_block_format PROPERTIES
     LABELS "program;csp;numeric;v0.10"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
+
+# The Combiner's requantization: an int32 accumulator into an int8 result, scale(m, shift) with
+# rounding (ties to even) and saturation (#427)
+kpu_add_component_test(test_csp_requant "program"
+    test_csp_requant.cpp
+)
+
+set_tests_properties(test_csp_requant PROPERTIES
+    LABELS "program;csp;numeric;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

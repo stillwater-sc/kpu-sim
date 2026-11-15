@@ -373,7 +373,7 @@ private:
         if (it->second.tag.to_string() != k || it->second.staging != a.staging)
             throw BehavioralError(where + ": merge accumulate into " + a.l2->to_string() + ", which holds " +
                                   it->second.tag.to_string() + ", not " + k);
-        merge_tile(work_.operand(a.tile.operand).type, it->second.values, v);
+        merge_tile(work_.operand(a.tile.operand).acc_type(), it->second.values, v);
         stages(it->second.values, a, where);    // the final merge's epilogue (#427), on the merged value
     }
 
@@ -467,6 +467,8 @@ private:
                 bias_tile(v, cols, slot_of(b).values);
             } else if (is_block_format(st.op)) {
                 numeric::block_convert(block_format_of(st.op), v.data(), v.size());
+            } else if (st.op == VeOp::Scale) {     // the accumulator's values into the tensor's type
+                requant_tile(t.acc_type(), t.type, v, st.m, st.shift);
             } else {
                 activate_tile(v, activation_of(st.op));
             }

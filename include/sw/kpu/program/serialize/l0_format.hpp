@@ -93,10 +93,11 @@ inline bool is_known_dataflow(const std::string& name) {
 // 1.1.0 added the VALUES_ROW record; 1.2.0 adds STREAMS. The op set has not changed for
 // either, which is why the two axes are separate: a new container record is not a new
 // operator. (Opset 1.2.0 and container 1.2.0 share a number by coincidence.)
-inline Version format_version()  { return {1, 3, 0}; }   // container structure: 1.3.0 adds
+inline Version format_version()  { return {1, 4, 0}; }   // container structure: 1.3.0 adds
                                                          // OPERAND type= (an operand's number
-                                                         // system, numeric.hpp; #394)
-inline Version opset_version()   { return {1, 6, 0}; }   // the TileOpKind surface this build
+                                                         // system, numeric.hpp; #394); 1.4.0
+                                                         // OPERAND acc= (its accumulator's; #427)
+inline Version opset_version()   { return {1, 7, 0}; }   // the TileOpKind surface this build
                                                          // implements: 1.1.0 adds BIAS_ADD and
                                                          // ACTIVATION (act=); 1.2.0 adds the L3
                                                          // transactions (L3_*, l3= slot= bank=);
@@ -105,7 +106,8 @@ inline Version opset_version()   { return {1, 6, 0}; }   // the TileOpKind surfa
                                                          // initial value); 1.5.0 MATMUL_MERGE
                                                          // (the Combiner's merge of a partial,
                                                          // merge= l2= slot=; #429); 1.6.0
-                                                         // BLOCK_CONVERT (format=; #427)
+                                                         // BLOCK_CONVERT (format=; #427);
+                                                         // 1.7.0 REQUANT (m= shift=; #427)
 
 // The op set a FILE needs, written on its OPSET line: what is in it, not who wrote it -- the
 // rule min_consumer_for() states. A matmul or LU program uses only 1.0.0 ops, so its bytes do
@@ -117,6 +119,7 @@ inline Version opset_version()   { return {1, 6, 0}; }   // the TileOpKind surfa
 // older reader would drop silently. Keep it that way, or make MIN_CONSUMER see the op set.
 inline Version opset_for(const TileProgram& prog) {
     Version v{1, 0, 0};
+    for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::Requant) return Version{1, 7, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::BlockConvert) return Version{1, 6, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::MatMulMerge) return Version{1, 5, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::AccInit) return Version{1, 4, 0};
@@ -127,7 +130,7 @@ inline Version opset_for(const TileProgram& prog) {
     }
     return v;
 }
-inline Version reader_version()  { return {1, 3, 0}; }   // what THIS reader supports
+inline Version reader_version()  { return {1, 4, 0}; }   // what THIS reader supports
 
 // Does any operand carry a number system other than fp32 (OPERAND type=)?
 inline bool has_typed_operands(const TileProgram& prog) {
@@ -137,8 +140,15 @@ inline bool has_typed_operands(const TileProgram& prog) {
 }
 // The container version a FILE needs, by the same rule as opset_for: what is in it. A program
 // whose operands are all fp32 writes 1.2.0, so the checked-in corpus stays byte-identical.
+// Does any operand compute in a number system other than its own (OPERAND acc=)?
+inline bool has_acc_operands(const TileProgram& prog) {
+    for (const std::string& k : prog.operand_order())
+        if (!prog.operand(k).acc.empty()) return true;
+    return false;
+}
 inline Version format_for(const TileProgram& prog) {
-    return has_typed_operands(prog) ? format_version() : Version{1, 2, 0};
+    if (has_acc_operands(prog)) return Version{1, 4, 0};
+    return has_typed_operands(prog) ? Version{1, 3, 0} : Version{1, 2, 0};
 }
 
 // The oldest reader that can be trusted with this file, which depends on WHAT IS IN IT
@@ -159,7 +169,11 @@ inline Version format_for(const TileProgram& prog) {
 // VALUES_ROW would have produced on a 1.0.0 reader.
 // OPERAND type= carries SEMANTICS by the same rule: a 1.2.0 reader would ignore the attribute
 // and read an int8 operand's values as fp32 -- so a file with a typed operand demands 1.3.0.
-inline Version min_consumer_for(bool has_values, bool has_streams = false, bool has_types = false) {
+// OPERAND acc= by the same rule: a 1.3.0 reader would ignore it and read an accumulator's words
+// in the operand's type -- so a file with one demands 1.4.0.
+inline Version min_consumer_for(bool has_values, bool has_streams = false, bool has_types = false,
+                                bool has_acc = false) {
+    if (has_acc) return Version{1, 4, 0};
     if (has_types) return Version{1, 3, 0};
     if (has_streams) return Version{1, 2, 0};
     return has_values ? Version{1, 1, 0} : Version{1, 0, 0};
@@ -326,7 +340,8 @@ struct WriteOptions {
 inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptions& opt = {}) {
     os << kMagic << " " << format_for(prog).str() << "\n";
     os << "MIN_CONSUMER "
-       << min_consumer_for(opt.include_values, !opt.dataflow.empty(), has_typed_operands(prog)).str() << "\n";
+       << min_consumer_for(opt.include_values, !opt.dataflow.empty(), has_typed_operands(prog), has_acc_operands(prog)).str()
+       << "\n";
     os << "OPSET tile " << opset_for(prog).str() << "\n";
     os << "PRODUCER kpu-sim " << producer_version().str() << "\n";
     os << "PROGRAM " << detail::quote(prog.name()) << "\n";
@@ -368,6 +383,7 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
            << " cols=" << op.cols << " tile_rows=" << op.tile_rows
            << " tile_cols=" << op.tile_cols;
         if (!op.fp32()) os << " type=" << op.type;     // fp32 is unwritten (format 1.3.0)
+        if (!op.acc.empty()) os << " acc=" << op.acc;   // format 1.4.0
         os << "\n";
     }
 
@@ -413,6 +429,7 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
         if (op.pivot_slot >= 0) os << " pivot=" << op.pivot_slot;
         if (op.kind == TileOpKind::Activation) os << " act=" << to_string(op.act);
         if (op.kind == TileOpKind::BlockConvert) os << " format=" << op.format;
+        if (op.kind == TileOpKind::Requant) os << " m=" << op.scale_m << " shift=" << op.scale_shift;
         if (is_l3(op.kind)) os << " l3=" << op.l3.l3_tile << " slot=" << op.l3.slot << " bank=" << op.l3.bank;
         if (is_l2(op.kind)) os << " l2=" << op.l2.cf << " slot=" << op.l2.slot;
         if (!op.label.empty()) os << " label=" << detail::quote(op.label);
@@ -600,7 +617,7 @@ inline TileOpKind parse_kind(const std::string& s) {
                          TileOpKind::L3Store, TileOpKind::L3Move, TileOpKind::L3Writeback,
                          TileOpKind::L3Release, TileOpKind::L3Inherit, TileOpKind::L3Retain,
                          TileOpKind::L2Stage, TileOpKind::L2Release, TileOpKind::AccInit,
-                         TileOpKind::MatMulMerge, TileOpKind::BlockConvert})
+                         TileOpKind::MatMulMerge, TileOpKind::BlockConvert, TileOpKind::Requant})
         if (s == to_string(k)) return k;
     throw FormatError(FormatError::Cause::UnknownOp,
                       "l0: unknown op '" + s + "': this build implements opset tile " +
@@ -781,6 +798,14 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                                       "' is not a number system this build reads (" + numeric::names() + ")");
                 operands.back().type = kv["type"];
             }
+            if (kv.count("acc")) {
+                const numeric::NumberSystem* ns = numeric::find(kv["acc"]);
+                if (!ns || ns->kind != numeric::Kind::Integer)
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: OPERAND \"" + op_name + "\": acc '" + kv["acc"] +
+                                      "' is not an integer number system this build reads (" + numeric::names() + ")");
+                operands.back().acc = kv["acc"];
+            }
         } else if (kw == "OP") {
             TileOp op;
             op.kind = detail::parse_kind(detail::require(f, "kind", "OP"));
@@ -833,6 +858,22 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                     throw FormatError(FormatError::Cause::MalformedRecord,
                                       std::string("l0: OP ") + to_string(op.kind) + ": an L2 transaction names one "
                                       "tile, as out=");
+            }
+            if (op.kind == TileOpKind::Requant) {
+                // Required: a requantization is its multiplier and shift, on one tile, written out=.
+                // Whole fields only: a converted prefix (m=3.5, shift=9x) is refused, not truncated.
+                try {
+                    const std::string ms = detail::require(f, "m", "OP"), ss = detail::require(f, "shift", "OP");
+                    std::size_t mu = 0, su = 0;
+                    op.scale_m = std::stoll(ms, &mu);
+                    op.scale_shift = std::stoi(ss, &su);
+                    if (mu != ms.size() || su != ss.size()) throw std::invalid_argument("trailing characters");
+                } catch (const std::logic_error&) {
+                    throw FormatError(FormatError::Cause::MalformedRecord, "l0: OP REQUANT: m= and shift= are integers");
+                }
+                if (op.outputs.size() != 1 || !op.inputs.empty())
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: OP REQUANT: out= names the one tile it requantizes");
             }
             if (op.kind == TileOpKind::BlockConvert) {
                 // Required: a conversion is its format, on one tile, written out=.
@@ -1009,7 +1050,7 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
     // nothing but readers.
     {
         const Version needed =
-            min_consumer_for(declares_values, !declared_dataflow.empty(), has_typed_operands(out));
+            min_consumer_for(declares_values, !declared_dataflow.empty(), has_typed_operands(out), has_acc_operands(out));
         if (!(needed <= declared_min))
             throw FormatError(FormatError::Cause::MalformedPreamble,
                               "l0: the file declares MIN_CONSUMER " + declared_min.str() +

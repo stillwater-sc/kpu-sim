@@ -103,8 +103,21 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
   - The result stays in fp32 words holding the values the format represents. Storing the
     block format itself (element bytes and scales) is not modelled yet.
 
+- **Requantization** (#427): `scale(m, shift) @ combiner` takes an integer accumulator into its
+  tensor's integer type, as `round(x * m / 2^shift)`: ties to even, saturated
+  (`numeric::requantize`). The result tensor declares both: `tensor C[..] int8 tile .. out acc
+  int32`. Its gemm accumulates in int32, and the scale is on every path into memory: a
+  fabric accumulator's store, or an L2 accumulator's final merge. It is the context's only
+  stage, so no int8 bias or activation yet, and it runs on the Combiner, after a bias and before
+  an activation or format (esg#68's order). The trace records `REQUANT` (opset 1.7), and an
+  operand's `acc=` (container 1.4). `kpu-csp-gen --algo matmul --dtype int8 --requant m,shift`
+  writes it under OS, WS and IS.
+  - **The rounding mode is kpu-sim's choice.** esg#68 asks for "a scale and shift ... with
+    rounding and saturation" without fixing the mode. kpu-sim's follows the RTL when it does.
+  - **A per-channel scale** (a vector of multipliers) is not built yet.
+
 Not built yet:
-- scaling (requantization, int32 -> int8 with rounding and saturation) on the Combiner;
+- an integer bias or activation beside the scale, and a per-channel scale;
 - an init (`acc ... in l2 init ...`);
 - a weight-stationary timing of the array. L-T1 and L-CA time each merge's gemm as a
   one-call output-stationary chain.

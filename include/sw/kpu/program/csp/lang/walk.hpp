@@ -146,6 +146,18 @@ inline TileProgram declared_operands(const Program& ast) {
         op.tile_rows = static_cast<Dim>(d.tile_rows);
         op.tile_cols = static_cast<Dim>(d.tile_cols);
         op.type = d.type;
+        op.acc = d.acc == d.type ? std::string() : d.acc;
+        if (!op.acc.empty()) {
+            // A requantized result (#427): computed in its accumulator, stored in its type.
+            const numeric::NumberSystem* a = numeric::find(op.acc);
+            const numeric::NumberSystem* s = numeric::find(op.type);
+            if (d.io != "out" || d.is_vector)
+                throw CompileError(d.line, "tensor " + d.name + " ... acc " + op.acc + ": a requantized result is a "
+                                           "tensor declared out (it is computed, then stored through a scale)");
+            if (!a || !s || a->kind != numeric::Kind::Integer || s->kind != numeric::Kind::Integer)
+                throw CompileError(d.line, "tensor " + d.name + " " + op.type + " ... acc " + op.acc + ": requantization "
+                                           "takes an integer accumulator into an integer type");
+        }
         t.add_operand(std::move(op));
     }
     return t;
@@ -258,8 +270,9 @@ private:
     };
     // An L2 accumulator's tile: its reserved L2 slot, and its staging once the first merge opens it.
     // formatted: its final merge converted it into a block format, the last operation it may take.
+    // requantized: its final merge carried the scale its accumulator values need (#427).
     struct Partial { L2Address at; TileCoord tile; std::size_t id = kNone; std::size_t merges = 0; int final_line = 0;
-                     bool formatted = false; };
+                     bool formatted = false; bool requantized = false; };
     struct Staged { L2Address at; std::size_t id; TileCoord tile; };
     struct LateStore { const Stmt* s; TileCoord y; Where where; std::size_t seq; };
     struct Live { std::size_t id; bool dirty; bool inherited = false; };
@@ -471,6 +484,28 @@ private:
                                      "program cannot name it again");
     }
 
+    // A result requantized on its way to memory (`acc` declared, #427): its accumulator values
+    // need a scale stage on every path into storage, and it is never resident.
+    bool scaled(const TileCoord& t) const { return !operands_.operand(t.operand).acc.empty(); }
+    static bool has_scale(const std::vector<csp::Stage>& v) {
+        return std::any_of(v.begin(), v.end(), [](const csp::Stage& s) { return s.op == VeOp::Scale; });
+    }
+    // A requantized result's context is exactly its scale, on the Combiner; any other tile's has no scale.
+    void check_scale(const TileCoord& y, const std::vector<csp::Stage>& drain, const std::vector<csp::Stage>& wb,
+                     int line, const std::string& what, bool required) const {
+        const TensorOperand& o = operands_.operand(y.operand);
+        if (!scaled(y)) {
+            if (has_scale(drain) || has_scale(wb))
+                throw CompileError(line, what + ": scale requantizes an accumulator into its tensor's type, and " +
+                                         y.operand + " declares no acc");
+            return;
+        }
+        if (drain.size() + wb.size() > 1 || (required && !has_scale(drain)))
+            throw CompileError(line, what + ": " + y.to_string() + " holds " + o.acc + " accumulator values; its "
+                                     "context is scale(m, shift) @ combiner, which makes them " + o.type +
+                                     (drain.size() + wb.size() > 1 ? ", and nothing else" : ""));
+    }
+
     // ---- statements ----
     // A result's `via` list, resolved and checked against the target, as the stages of its Drain
     // (fabric, combiner) and of its Writeback (bm.egress). An add's vector must be resident in
@@ -484,6 +519,8 @@ private:
             csp::Stage st;
             st.op = r.op;
             st.place = r.place;
+            st.m = r.m;
+            st.shift = r.shift;
             if (r.arg) {
                 if (!vectors_.count(r.arg->name))
                     throw CompileError(r.arg->line, "add(" + r.arg->name + "[..]): add takes a vector operand");
@@ -513,6 +550,10 @@ private:
                 } else if (is_block_format(st.op)) {
                     op.kind = TileOpKind::BlockConvert;
                     op.format = block_format_of(st.op);
+                } else if (st.op == VeOp::Scale) {
+                    op.kind = TileOpKind::Requant;
+                    op.scale_m = st.m;
+                    op.scale_shift = st.shift;
                 } else {
                     op.kind = TileOpKind::Activation;
                     op.act = activation_of(st.op);
@@ -583,6 +624,10 @@ private:
                 for (const TileCoord& t : ts) {
                     const std::string k = t.to_string();
                     flush_late_until(k);
+                    if (scaled(t))
+                        throw CompileError(s.line, "resident " + k + ": " + t.operand + " is a requantized result (acc " +
+                                                   operands_.operand(t.operand).acc + "), computed and stored, never "
+                                                   "made resident");
                     if (resident_.count(k)) throw CompileError(s.line, k + " is already resident");
                     if (acc_.count(k)) throw CompileError(s.line, k + " is an accumulator in the fabric, not a DRAM tile to load");
                     not_retained(s.line, k);
@@ -789,9 +834,11 @@ private:
                                                    "after the merge" +
                                                    (st.place == Place::BmEgress ? "; a bm.egress stage goes on the store"
                                                                                 : "; a fabric stage would act on one partial"));
+            check_scale(y, d, wb, s.line, "call gemm +-> " + yk, true);
             drain_ctx = std::move(d);
             pt.final_line = s.line;
             for (const csp::Stage& st : drain_ctx) pt.formatted = pt.formatted || is_block_format(st.op);
+            pt.requantized = has_scale(drain_ctx);
         }
         for (std::size_t i = 0; i < args.size(); ++i) {
             TileOp feed;
@@ -833,6 +880,12 @@ private:
                                        "put the epilogue on its final merge (`call gemm(..) +-> " + k + " via ... @ "
                                        "combiner`), or @ bm.egress here");
         const Partial pt = partial_.at(k);
+        if (scaled(y) && !pt.requantized)
+            throw CompileError(s.line, "store " + k + ": " + k + " holds " + operands_.operand(y.operand).acc +
+                                       " accumulator values; its final merge needs `via scale(m, shift) @ combiner`");
+        if (scaled(y) && !wb_ctx.empty())
+            throw CompileError(s.line, "store " + k + " via ...: " + k + " was requantized on its final merge; its "
+                                       "store takes no stage");
         if (pt.formatted && !wb_ctx.empty())
             throw CompileError(s.line, "store " + k + " via ...: " + k + "'s final merge (csp line " +
                                        std::to_string(pt.final_line) + ") converted it into a block format, its "
@@ -1010,6 +1063,9 @@ private:
             partial_out(s, y);
             return;
         }
+        if (acc != acc_.end() && s.late && scaled(y))
+            throw CompileError(s.line, "store " + k + " late: " + k + " is requantized on its way to memory, and a late "
+                                       "store carries no stage; store it with `via scale(m, shift) @ combiner`");
         if (acc != acc_.end() && s.late) {
             if (!s.context.empty())
                 throw CompileError(s.line, "store " + k + " late via ...: a late store carries no epilogue (it is "
@@ -1045,6 +1101,7 @@ private:
         const std::string k = y.to_string();
         need_slot(s.line, "store " + k + "'s writeback");
         auto [drain_ctx, wb_ctx] = result_context(s, y);
+        check_scale(y, drain_ctx, wb_ctx, s.line, "store " + k, true);
         TileOp drain;
         drain.kind = TileOpKind::Drain;
         drain.port_kind = PortKind::Output;
@@ -1076,6 +1133,9 @@ private:
             if (partial_.count(k))
                 throw CompileError(s.line, "retain " + k + ": " + k + " is an L2 accumulator; retaining one is not "
                                            "built yet, so store it");
+            if (scaled(y))
+                throw CompileError(s.line, "retain " + k + ": " + k + " is requantized on its way to memory; retaining "
+                                           "one is not built yet, so store it");
             need_slot(s.line, "retain " + k + "'s writeback");
             auto [drain_ctx, wb_ctx] = result_context(s, y);
             TileOp drain;

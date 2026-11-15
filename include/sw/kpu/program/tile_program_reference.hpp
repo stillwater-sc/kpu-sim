@@ -108,7 +108,8 @@ public:
                 case TileOpKind::TrsmUpperRight: ++sum.trsms; break;
                 case TileOpKind::BiasAdd:
                 case TileOpKind::Activation:
-                case TileOpKind::BlockConvert:   ++sum.epilogues; break;
+                case TileOpKind::BlockConvert:
+                case TileOpKind::Requant:        ++sum.epilogues; break;
                 case TileOpKind::AccInit:        ++sum.acc_inits; break;
                 case TileOpKind::L3Load:
                 case TileOpKind::L3Store:

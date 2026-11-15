@@ -151,8 +151,10 @@ private:
     // finals: an L2 accumulator's tiles whose final merge (a call with `via`) has run. A family
     // over a loop variable is widened to the variable's whole dimension when its loop ends.
     // formatted: a final merge converted its tile into a block format, after which nothing may run.
+    // requantized: the tiles whose final merge carried the scale (#427), widened over a loop's
+    // variable when the loop ends, as finals are; a requantized result's store must be covered.
     struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false;
-                 std::vector<Family> finals = {}; bool formatted = false; };
+                 std::vector<Family> finals = {}; bool formatted = false; std::vector<Family> requantized = {}; };
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
@@ -435,6 +437,9 @@ private:
     }
     void retain(const Stmt& s, const TileRef& r) {
         const Family f = family(r);
+        if (scaled(f.operand))
+            throw CompileError(s.line, "retain " + text(f) + ": it is requantized on its way to memory; retaining one "
+                                       "is not built yet, so store it");
         not_staged(f, s.line, "retain");
         distinct_per_iteration(f, s.line);
         const std::uint64_t n = count(f), total = n * multiplier_;
@@ -466,7 +471,24 @@ private:
     // ---- statements ----
     // A result's `via` list (context.hpp), and each add's vector provably resident and tiled as
     // the result's columns.
-    void context(const Stmt& s, const Family& y) {
+    // A requantized result (`acc` declared, #427): its accumulator values need a scale on every
+    // path into storage (`required`), and its context is that scale alone. Any other tile's
+    // context has no scale.
+    bool context(const Stmt& s, const Family& y, bool required = false) {
+        const auto all = resolve_result_context(s.context, target_, [](int line, const std::string& m) {
+            throw CompileError(line, m);
+        });
+        const bool has = std::any_of(all.begin(), all.end(), [](const ResolvedStage& r) { return r.op == VeOp::Scale; });
+        if (scaled(y.operand)) {
+            if (all.size() > 1 || (required && !has))
+                throw CompileError(s.line, "via ...: " + text(y) + " holds " + acc_of(y.operand) + " accumulator values; "
+                                           "its context is scale(m, shift) @ combiner, which makes them " +
+                                           type_of(y.operand) + (all.size() > 1 ? ", and nothing else" : ""));
+            return has;
+        }
+        if (has)
+            throw CompileError(s.line, "via ... scale: scale requantizes an accumulator into its tensor's type, and " +
+                                           y.operand + " declares no acc");
         if (!s.context.empty() && type_of(y.operand) != numeric::kFp32)
             throw CompileError(s.line, "via ...: a tile context computes in fp32; " + y.operand + " is " +
                                            type_of(y.operand));
@@ -486,6 +508,7 @@ private:
                 throw CompileError(r.arg->line, "add(" + text(b) + ") @ " + to_string(r.place) + " reads " + text(b) +
                                                     ", which is not provably resident; make it resident first");
         }
+        return false;
     }
     // `acc y in fabric init x` (docs/plans/accumulator-init-stream.md), as the walker checks it: x
     // provably resident and tiled as y (a vector: as y's columns). `init y` on its own accumulator
@@ -493,9 +516,10 @@ private:
     void init(const Stmt& s, const Family& y) {
         const Family x = single(*s.init);
         const std::string what = "acc " + text(y) + " init " + text(x);
-        if (type_of(x.operand) != type_of(y.operand))
+        if (type_of(x.operand) != acc_of(y.operand))
             throw CompileError(s.line, what + ": " + x.operand + " is " + type_of(x.operand) + " and " + y.operand +
-                                       " is " + type_of(y.operand) + "; an init is in the accumulator's number system");
+                                       (scaled(y.operand) ? " accumulates in " : " is ") + acc_of(y.operand) +
+                                       "; an init is in the accumulator's number system");
         const TensorOperand& xo = operands_.operand(x.operand);
         const TensorOperand& yo = operands_.operand(y.operand);
         if (vectors_.count(x.operand)) {
@@ -548,6 +572,10 @@ private:
             case Stmt::Kind::Resident:
                 for (const TileRef& r : s.tiles) {
                     const Family f = family(r);
+                    if (scaled(f.operand))
+                        throw CompileError(s.line, "resident " + text(f) + ": " + f.operand + " is a requantized result "
+                                                   "(acc " + acc_of(f.operand) + "), computed and stored, never made "
+                                                   "resident");
                     for (const Entry& e : state_)
                         if (may_overlap(f, e.family))
                             throw CompileError(s.line, same(f, e.family) || (count(f) == 1 && covers(e.family, f))
@@ -702,11 +730,12 @@ private:
         // the family stands for all of them (conservative over a loop that does not cover the
         // dimension).
         for (Acc& a : accs_)
-            for (Family& f : a.finals)
-                for (Dimension& d : f.dims) {
-                    auto c = d.a.coeff.find(s.var);
-                    if (!d.all && c != d.a.coeff.end() && c->second != 0) d.all = true;
-                }
+            for (auto* fams : {&a.finals, &a.requantized})
+                for (Family& f : *fams)
+                    for (Dimension& d : f.dims) {
+                        auto c = d.a.coeff.find(s.var);
+                        if (!d.all && c != d.a.coeff.end() && c->second != 0) d.all = true;
+                    }
         multiplier_ = saved_mult;
         if (!rectangular) --nonrect_;
         loop_order_.pop_back();
@@ -719,12 +748,19 @@ private:
             if (d.name == operand) return d.type;
         return numeric::kFp32;
     }
+    // The number system it is computed in (`acc`, #427), and whether that is not its type.
+    std::string acc_of(const std::string& operand) const {
+        for (const Decl& d : ast_.decls)
+            if (d.name == operand) return d.acc.empty() ? d.type : d.acc;
+        return numeric::kFp32;
+    }
+    bool scaled(const std::string& operand) const { return acc_of(operand) != type_of(operand); }
     // The number systems a call computes in (docs/plans/typed-value-path.md): a gemm's inputs
     // share one, and its (input, accumulator) pair has a registered MAC; every other tile
     // function computes in fp32.
     void types(const Stmt& s, const std::vector<Family>& args, const Family& y) const {
         if (s.fn == "gemm") {
-            const std::string in = type_of(args[0].operand), in2 = type_of(args[1].operand), acc = type_of(y.operand);
+            const std::string in = type_of(args[0].operand), in2 = type_of(args[1].operand), acc = acc_of(y.operand);
             if (in != in2)
                 throw CompileError(s.line, "gemm(" + args[0].operand + ", " + args[1].operand + "): " + args[0].operand +
                                                " is " + in + " and " + args[1].operand + " is " + in2 +
@@ -805,7 +841,11 @@ private:
                                                std::string(r.place == Place::BmEgress ? "; a bm.egress stage goes on the store"
                                                                                       : "; a fabric stage would act on one partial"));
             }
-            context(s, y);
+            if (context(s, y, !s.context.empty())) {
+                Family f = y;
+                f.line = s.line;
+                acc->requantized.push_back(f);
+            }
             if (!s.context.empty()) {
                 Family f = y;
                 f.line = s.line;
@@ -867,6 +907,46 @@ private:
             if (acc->formatted && !s.context.empty())
                 throw CompileError(s.line, "store " + text(y) + " via ...: its final merge converted it into a block "
                                            "format, its last operation; no stage may follow it");
+            // covers() takes its second family to be a single tile (a ':' there reads as index 0),
+            // so a stored family is checked dimension by dimension.
+            auto contains = [](const Family& f, const Family& t) {
+                for (std::size_t i = 0; i < f.dims.size(); ++i)
+                    if (!f.dims[i].all && (t.dims[i].all || !(f.dims[i].a == t.dims[i].a))) return false;
+                return f.operand == t.operand;
+            };
+            // Or the requantized tiles cover it together, one index at a time along its one ':'
+            // dimension (C[0, 0] and C[0, 1] cover C[0, :]), with its other dimensions as written.
+            auto covered_together = [&](const Family& t) {
+                std::size_t slice = t.dims.size();
+                for (std::size_t i = 0; i < t.dims.size(); ++i)
+                    if (t.dims[i].all) {
+                        if (slice != t.dims.size()) return false;   // more than one ':'
+                        slice = i;
+                    }
+                if (slice == t.dims.size()) return false;
+                const TensorOperand& o = operands_.operand(t.operand);
+                const long long n = static_cast<long long>(slice == 0 ? o.n_tile_rows() : o.n_tile_cols());
+                std::set<long long> seen;
+                for (const Family& f : acc->requantized) {
+                    if (f.operand != t.operand || f.dims[slice].all || !f.dims[slice].a.is_constant()) continue;
+                    bool rest = true;
+                    for (std::size_t i = 0; i < t.dims.size(); ++i)
+                        if (i != slice && !f.dims[i].all && !(f.dims[i].a == t.dims[i].a)) rest = false;
+                    if (rest) seen.insert(f.dims[slice].a.constant);
+                }
+                for (long long k = 0; k < n; ++k)
+                    if (!seen.count(k)) return false;
+                return true;
+            };
+            if (scaled(y.operand) && !covered_together(y) &&
+                std::none_of(acc->requantized.begin(), acc->requantized.end(),
+                             [&](const Family& f) { return contains(f, y); }))
+                throw CompileError(s.line, "store " + text(y) + ": it holds " + acc_of(y.operand) + " accumulator values, "
+                                           "and not every tile of it was requantized; each tile's final merge needs `via "
+                                           "scale(m, shift) @ combiner`");
+            if (scaled(y.operand) && !s.context.empty())
+                throw CompileError(s.line, "store " + text(y) + " via ...: it was requantized on its final merge; its "
+                                           "store takes no stage");
             for (const ResolvedStage& r : resolve_result_context(s.context, target_, [](int line, const std::string& m) {
                      throw CompileError(line, m);
                  }))
@@ -888,7 +968,10 @@ private:
             if (s.late && !s.context.empty())
                 throw CompileError(s.line, "store " + text(y) + " late via ...: a late store carries no epilogue (it is "
                                            "emitted after the next accumulator, where its vectors' residency is not known)");
-            context(s, y);
+            if (scaled(y.operand) && s.late)
+                throw CompileError(s.line, "store " + text(y) + " late: it is requantized on its way to memory, and a "
+                                           "late store carries no stage; store it with `via scale(m, shift) @ combiner`");
+            context(s, y, true);
             hold(1, s.line, "store " + text(y) + "'s writeback");      // the writeback's moment in L3
             live_ -= 1;
             accs_.erase(acc);

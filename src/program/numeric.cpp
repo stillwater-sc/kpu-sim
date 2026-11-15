@@ -270,4 +270,30 @@ std::size_t block_bytes(const std::string& format, std::size_t n) {
     return n * block_format(format).element_bytes + (n + kBlockSize - 1) / kBlockSize;
 }
 
+// ---- requantization (#427) ----
+Word requantize(const std::string& from, const std::string& to, Word w, std::int64_t m, int shift) {
+    const NumberSystem& f = get(from);
+    const NumberSystem& t = get(to);
+    if (f.kind != Kind::Integer || t.kind != Kind::Integer)
+        throw std::invalid_argument("requantize: " + from + " -> " + to + ": both must be integers");
+    if (m <= -(std::int64_t{1} << 31) || m >= (std::int64_t{1} << 31))
+        throw std::invalid_argument("requantize: the multiplier " + std::to_string(m) + " is outside (-2^31, 2^31)");
+    if (shift < 0 || shift > 62) throw std::invalid_argument("requantize: the shift " + std::to_string(shift) + " is outside 0..62");
+    const auto x = static_cast<std::int64_t>(decode(from, w));   // an integer of at most 32 bits: exact
+    const std::int64_t p = x * m;                                  // |p| < 2^62
+    std::int64_t q = p;
+    if (shift > 0) {
+        // floor division by 2^shift, then round to nearest, ties to even.
+        const std::int64_t d = std::int64_t{1} << shift;
+        std::int64_t fl = p >> shift;                             // arithmetic shift: floor
+        const std::int64_t rem = p - fl * d;                      // in [0, d)
+        const std::int64_t half = d >> 1;
+        if (rem > half || (rem == half && (fl & 1))) ++fl;
+        q = fl;
+    }
+    const std::int64_t lo = -(std::int64_t{1} << (t.bits - 1)), hi = (std::int64_t{1} << (t.bits - 1)) - 1;
+    q = std::clamp(q, lo, hi);
+    return encode(to, static_cast<double>(q));
+}
+
 }  // namespace sw::kpu::program::numeric

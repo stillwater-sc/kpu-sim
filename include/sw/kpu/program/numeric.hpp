@@ -84,6 +84,14 @@ void block_convert(const std::string& format, float* v, std::size_t n);
 std::size_t block_bytes(const std::string& format, std::size_t n);
 inline constexpr std::size_t kBlockSize = 32;
 
+// Requantization (#427; esg#68): an integer accumulator's value x into the integer type `to`,
+// y = saturate(round(x * m / 2^shift)), the division rounded to nearest, ties to even, and the
+// result clamped to `to`'s range. Both types are integers; |m| < 2^31 and 0 <= shift <= 62.
+// (The rounding mode is kpu-sim's choice until the RTL fixes one: branes-ai/embodied-ai-soc-
+// generator#68 asks for "a scale and shift ... with rounding and saturation".)
+// Throws std::invalid_argument for a type that is not an integer, or m or shift out of range.
+Word requantize(const std::string& from, const std::string& to, Word w, std::int64_t m, int shift);
+
 // fp32's word is the float's bits.
 inline Word word_of(float f) { Word w; std::memcpy(&w, &f, sizeof w); return w; }
 inline float float_of(Word w) { float f; std::memcpy(&f, &w, sizeof f); return f; }
