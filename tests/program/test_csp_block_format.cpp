@@ -30,6 +30,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -132,6 +133,16 @@ TEST_CASE("Block formats: the registry converts as Universal's mxint8 and mxfp8 
         numeric::block_convert("mxfp8", w.data(), w.size());
         CHECK(v == std::vector<float>{0x1p-126f, 0.0f, 0.0f});
         CHECK(w == std::vector<float>{0x1p-120f, 0x1p-126f});
+    }
+    // A NaN or an inf anywhere in a block makes its scale NaN, and the block reads back as NaN --
+    // even beside zeros, where the largest magnitude is 0 (#436's review).
+    for (const char* f : {"mxint8", "mxfp8"}) {
+        CAPTURE(f);
+        std::vector<float> v{std::numeric_limits<float>::quiet_NaN(), 0.0f}, w{0.0f, -std::numeric_limits<float>::infinity()};
+        numeric::block_convert(f, v.data(), v.size());
+        numeric::block_convert(f, w.data(), w.size());
+        CHECK((std::isnan(v[0]) && std::isnan(v[1])));
+        CHECK((std::isnan(w[0]) && std::isnan(w[1])));
     }
     // An element a byte, a scale a block.
     CHECK(numeric::block_bytes("mxint8", 256) == 256 + 8);

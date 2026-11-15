@@ -190,9 +190,15 @@ template <class Element>
 void convert_blocks(float* v, std::size_t n) {
     for (std::size_t at = 0; at < n; at += kBlockSize) {
         const std::size_t len = std::min(kBlockSize, n - at);
+        // A NaN never wins std::max against 0, so non-finite elements are found on their own: any
+        // one makes the scale NaN (an all-zero shortcut would otherwise read a NaN back as 0).
         float amax = 0.0f;
-        for (std::size_t i = 0; i < len; ++i) amax = std::max(amax, std::fabs(v[at + i]));
-        if (!std::isfinite(amax)) {
+        bool finite = true;
+        for (std::size_t i = 0; i < len; ++i) {
+            finite = finite && std::isfinite(v[at + i]);
+            amax = std::max(amax, std::fabs(v[at + i]));
+        }
+        if (!finite) {
             for (std::size_t i = 0; i < len; ++i) v[at + i] = std::numeric_limits<float>::quiet_NaN();
             continue;
         }
