@@ -66,20 +66,38 @@ platform::DeviceSpecification s1_with_combiner() {
     return d;
 }
 
-std::string refused(const std::string& src) {
+// The walker's verdict and the validator's, separately: each must refuse on its own.
+struct Verdicts {
     std::string walk = "accepted", sym = "accepted";
+};
+Verdicts refused(const std::string& src) {
+    Verdicts v;
     try {
         (void)lang::compile(src);
     } catch (const std::exception& e) {
-        walk = e.what();
+        v.walk = e.what();
     }
     try {
         (void)lang::validate(src);
     } catch (const std::exception& e) {
-        sym = e.what();
+        v.sym = e.what();
     }
-    return walk + " | " + sym;
+    return v;
 }
+#define BOTH_REFUSE(src, text)                                    \
+    do {                                                          \
+        const Verdicts v_ = refused(src);                         \
+        INFO("walker: " << v_.walk);                              \
+        CHECK_THAT(v_.walk, ContainsSubstring(text));             \
+        INFO("validator: " << v_.sym);                            \
+        CHECK_THAT(v_.sym, ContainsSubstring(text));              \
+    } while (0)
+#define BOTH_ACCEPT(src)                                          \
+    do {                                                          \
+        const Verdicts v_ = refused(src);                         \
+        CHECK(v_.walk == "accepted");                             \
+        CHECK(v_.sym == "accepted");                              \
+    } while (0)
 
 // x * m / 2^shift in double (exact here), ties to even, clamped to int8.
 long long expected(long long x, long long m, int shift) {
@@ -142,36 +160,52 @@ TEST_CASE("Requant: what the language refuses, in the walker and the validator",
                             "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n";
     const std::string end = "  release A[0, 0], B[0, 0];\n}\n";
     // Accepted: the scale on the store.
-    CHECK(refused(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner;\n" + end) == "accepted | accepted");
+    BOTH_ACCEPT(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner;\n" + end);
     // No scale: the accumulator's values would reach memory as int8 words.
-    CHECK_THAT(refused(head + q + fab + "  store C[0, 0];\n" + end),
-               ContainsSubstring("holds int32 accumulator values; its context is scale(m, shift) @ combiner"));
+    BOTH_REFUSE(head + q + fab + "  store C[0, 0];\n" + end, "holds int32 accumulator values; its context is scale(m, shift) @ combiner");
     // Anything beside it.
-    CHECK_THAT(refused(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner, relu @ combiner;\n" + end),
-               ContainsSubstring("and nothing else"));
+    BOTH_REFUSE(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner, relu @ combiner;\n" + end, "and nothing else");
     // Off the Combiner, out of order, or twice.
-    CHECK_THAT(refused(head + q + fab + "  store C[0, 0] via scale(1, 4) @ bm.egress;\n" + end),
-               ContainsSubstring("scale @ bm.egress: the requantization runs on the Combiner"));
+    BOTH_REFUSE(head + q + fab + "  store C[0, 0] via scale(1, 4) @ bm.egress;\n" + end, "scale @ bm.egress: the requantization runs on the Combiner");
     // A scale on a tensor with no accumulator declared.
-    CHECK_THAT(refused(head + "  tensor C[16,16] int32 tile 16x16 out;\n" + fab + "  store C[0, 0] via scale(1, 4) @ combiner;\n" + end),
-               ContainsSubstring("declares no acc"));
+    BOTH_REFUSE(head + "  tensor C[16,16] int32 tile 16x16 out;\n" + fab + "  store C[0, 0] via scale(1, 4) @ combiner;\n" + end, "declares no acc");
     // A late store carries no stage.
-    CHECK_THAT(refused(head + q + fab + "  store C[0, 0] late;\n" + end),
-               ContainsSubstring("store C[0,0] late: C[0,0] is requantized on its way to memory"));
+    BOTH_REFUSE(head + q + fab + "  store C[0, 0] late;\n" + end, "is requantized on its way to memory, and a late store carries no stage");
     // Never resident; declared out, integer to integer.
-    CHECK_THAT(refused(head + q + "  resident C[0, 0];\n  release C[0, 0];\n}\n"),
-               ContainsSubstring("is a requantized result (acc int32), computed and stored, never made resident"));
-    CHECK_THAT(refused(head + "  tensor C[16,16] int8 tile 16x16 in acc int32;\n}\n"),
-               ContainsSubstring("a requantized result is a tensor declared out"));
-    CHECK_THAT(refused(head + "  tensor C[16,16] tile 16x16 out acc int32;\n}\n"),
-               ContainsSubstring("requantization takes an integer accumulator into an integer type"));
+    BOTH_REFUSE(head + q + "  resident C[0, 0];\n  release C[0, 0];\n}\n", "is a requantized result (acc int32), computed and stored, never made resident");
+    BOTH_REFUSE(head + "  tensor C[16,16] int8 tile 16x16 in acc int32;\n}\n", "a requantized result is a tensor declared out");
+    BOTH_REFUSE(head + "  tensor C[16,16] tile 16x16 out acc int32;\n}\n", "requantization takes an integer accumulator into an integer type");
     // An L2 accumulator: the scale is its final merge's, and its store takes none.
     const std::string l2 = "  acc C[0, 0] in l2 {\n    resident A[0, 0], B[0, 0];\n"
                            "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]";
     const std::string l2end = ";\n    release A[0, 0], B[0, 0];\n  }\n";
-    CHECK(refused(head + q + l2 + " via scale(1, 4) @ combiner" + l2end + "  store C[0, 0];\n}\n") == "accepted | accepted");
-    CHECK_THAT(refused(head + q + l2 + l2end + "  store C[0, 0];\n}\n"),
-               ContainsSubstring("its final merge needs `via scale(m, shift) @ combiner`"));
+    BOTH_ACCEPT(head + q + l2 + " via scale(1, 4) @ combiner" + l2end + "  store C[0, 0];\n}\n");
+    BOTH_REFUSE(head + q + l2 + l2end + "  store C[0, 0];\n}\n", "final merge needs `via scale(m, shift) @ combiner`");
+    // Every tile of an L2 family must be requantized: C[0, 0] is, C[0, 1] is not (#437's review).
+    {
+        const std::string wide = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                                 "  tensor A[16,16] int8 tile 16x16 in;\n  tensor B[16,32] int8 tile 16x16 in;\n"
+                                 "  tensor C[16,32] int8 tile 16x16 out acc int32;\n"
+                                 "  acc C[0, :] in l2 {\n    resident A[0, 0], B[0, :];\n"
+                                 "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0] via scale(1, 4) @ combiner;\n"
+                                 "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                                 "    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n";
+        BOTH_REFUSE(wide, "final merge needs `via scale(m, shift) @ combiner`");
+        std::string all = wide;
+        all.replace(all.find("+-> C[0, 1];"), 12, "+-> C[0, 1] via scale(1, 4) @ combiner;");
+        BOTH_ACCEPT(all);
+    }
+    // An init is in the accumulator's number system (int32), not the result's (int8).
+    {
+        const std::string init = head + "  tensor D[16,16] int32 tile 16x16 in;\n" + q +
+                                 "  resident A[0, 0], B[0, 0], D[0, 0];\n"
+                                 "  acc C[0, 0] in fabric init D[0, 0] { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
+                                 "  store C[0, 0] via scale(1, 4) @ combiner;\n  release A[0, 0], B[0, 0], D[0, 0];\n}\n";
+        BOTH_ACCEPT(init);
+        std::string bad = init;
+        bad.replace(bad.find("tensor D[16,16] int32"), 21, "tensor D[16,16] int8 ");
+        CHECK_THAT(refused(bad).sym, ContainsSubstring("accumulates in int32; an init is in the accumulator's number system"));
+    }
 }
 
 TEST_CASE("Requant: every dataflow and level stores the requantized result, bit for bit", "[program][csp][run][requant]") {
@@ -248,4 +282,42 @@ TEST_CASE("Requant: the trace records OPERAND acc= and REQUANT, and reads them b
     const auto& a = back.operand("C").values;
     const auto& b = ref.values->operand("C").values;
     CHECK((a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0));
+}
+
+TEST_CASE("Requant: the trace-form L-CA driver runs it, and checks the inputs' accumulator", "[program][csp][run][requant]") {
+    // The review of #437: the trace form scanned the recorded REQUANT (and BLOCK_CONVERT) as calls,
+    // and the structured form did not check an input's accumulator type.
+    const auto d = s1_with_combiner();
+    const lang::Program ast = lang::parse(matmul("os", true));
+    const TileProgram inputs = driver::csp_inputs(ast);
+    const auto ref = driver::csp_reference(ast, inputs, 1'000'000);
+    REQUIRE(ref.values);
+    REQUIRE(ref.trace);
+    CspProgram p = lang::compile(matmul("os", true));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = inputs.operand(name).values;
+    auto cfg = sw::kpu::timing::csp_config_from(d);
+    REQUIRE(cfg);
+    {
+        sw::kpu::timing::ConcurrentTimingExecutor exec(cfg->config);
+        const auto r = sw::kpu::timing::CspDriver(exec, p).run();
+        REQUIRE(r.completed);
+        const auto& a = r.values.operand("C").values;
+        const auto& b = ref.values->operand("C").values;
+        CHECK((a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0));
+    }
+    {
+        TileProgram wrong = inputs;
+        wrong.operand("C").acc.clear();                  // int8, accumulating in int8
+        sw::kpu::timing::ConcurrentTimingExecutor exec(cfg->config);
+        lang::ActionStream s(ast, lang::target_from(d));
+        CHECK_THROWS_WITH(sw::kpu::timing::CspDriver(exec, s, wrong),
+                          ContainsSubstring("'C' accumulates in int8; the program declares int32"));
+    }
+    // A REQUANT field with trailing characters is refused, not truncated.
+    std::ostringstream os;
+    serialize::write_l0(os, *ref.trace);
+    std::string bad = os.str();
+    bad.replace(bad.find(" m=3 "), 5, " m=3.5 ");
+    std::istringstream is(bad);
+    CHECK_THROWS_WITH(serialize::read_l0(is), ContainsSubstring("m= and shift= are integers"));
 }

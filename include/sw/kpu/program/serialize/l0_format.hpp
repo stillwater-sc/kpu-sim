@@ -861,9 +861,13 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
             }
             if (op.kind == TileOpKind::Requant) {
                 // Required: a requantization is its multiplier and shift, on one tile, written out=.
+                // Whole fields only: a converted prefix (m=3.5, shift=9x) is refused, not truncated.
                 try {
-                    op.scale_m = std::stoll(detail::require(f, "m", "OP"));
-                    op.scale_shift = std::stoi(detail::require(f, "shift", "OP"));
+                    const std::string ms = detail::require(f, "m", "OP"), ss = detail::require(f, "shift", "OP");
+                    std::size_t mu = 0, su = 0;
+                    op.scale_m = std::stoll(ms, &mu);
+                    op.scale_shift = std::stoi(ss, &su);
+                    if (mu != ms.size() || su != ss.size()) throw std::invalid_argument("trailing characters");
                 } catch (const std::logic_error&) {
                     throw FormatError(FormatError::Cause::MalformedRecord, "l0: OP REQUANT: m= and shift= are integers");
                 }

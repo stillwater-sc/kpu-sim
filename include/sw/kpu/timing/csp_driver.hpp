@@ -130,8 +130,11 @@ public:
               std::size_t window = kWholeProgram)
         : exec_(exec), trace_(&p), inputs_(p.source), window_(window) {
         for (const auto& op : p.source.ops())
+            // A context's recorded stages (BLOCK_CONVERT, REQUANT) ride their drain or writeback,
+            // and the L2 transactions record placement: none is a call.
             if (op.kind != program::TileOpKind::Feed && op.kind != program::TileOpKind::Drain &&
-                op.kind != program::TileOpKind::AccInit && !program::is_l3(op.kind))
+                op.kind != program::TileOpKind::AccInit && op.kind != program::TileOpKind::BlockConvert &&
+                op.kind != program::TileOpKind::Requant && !program::is_l3(op.kind) && !program::is_l2(op.kind))
                 check_call(op);
         check_machine(p.channel(program::csp::Chan::L3).capacity, p.l2_slots);
     }
@@ -155,6 +158,10 @@ public:
             if (d.type != v.type)
                 throw std::invalid_argument("CspDriver: the inputs' '" + name + "' is " + v.type +
                                             "; the program declares " + d.type);
+            // The accumulator's number system picks the MAC and the scale's source (#427).
+            if (d.acc_type() != v.acc_type())
+                throw std::invalid_argument("CspDriver: the inputs' '" + name + "' accumulates in " + v.acc_type() +
+                                            "; the program declares " + d.acc_type());
         }
         check_machine(s.capacity(), s.l2_slots());
     }

@@ -18,6 +18,7 @@
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
 
+#include <cctype>
 #include <cstdint>
 #include <exception>
 #include <fstream>
@@ -97,7 +98,10 @@ int main(int argc, char** argv) {
         }
         // No option takes a value that begins with '-': the next token being another option
         // means this one has no value (`-o --help` must not write a file named "--help").
-        if (i + 1 >= argc || argv[i + 1][0] == '-') return usage(k + ": missing value");
+        // --requant's multiplier may be negative: `--requant -2,1`.
+        const bool signed_value = k == "--requant" && i + 1 < argc && argv[i + 1][0] == '-' &&
+                                  std::isdigit(static_cast<unsigned char>(argv[i + 1][1]));
+        if (i + 1 >= argc || (argv[i + 1][0] == '-' && !signed_value)) return usage(k + ": missing value");
         if (a.count(k)) return usage(k + " given twice");
         a[k] = argv[++i];
     }
