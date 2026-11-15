@@ -53,6 +53,15 @@
 // that credit to its L2Release, and every Feed in between reads it (the reuse count). A transient
 // Move -- an unstaged operand, fed once -- holds no L2 credit at L-T1: its copy streams straight on.
 //
+// AN L2 ACCUMULATOR'S PARTIAL HOLDS ONE TOO (#429, #430). The first merge (a Drain, Overwrite)
+// waits for its slot's credit, as a stage Move does, and the slot is held to the partial's
+// L2Release, which follows its store's Writeback. Every later merge (Accumulate) is a
+// read-modify-write of the slot: it starts after the merge before it into the same slot has
+// finished. Each merge's gemm is a stream chain of one call (its partial starts from zero in the
+// array), timed output-stationary like any chain; the merge itself rides the Drain at the
+// streamer's rate. Stats count the merges and their L2 bytes (an accumulate reads the partial and
+// writes it back; an overwrite only writes). L2's banks are untimed (#417).
+//
 // THE FABRIC IS A SYSTOLIC ARRAY when the deployment declares one (fabric.pe_rows x pe_cols;
 // docs/plans/l2-reuse-and-fabric-pipeline-view.md §3.1). An accumulator's gemm calls -- `acc C in
 // fabric { for k ... call gemm(...) +-> C }` -- are then ONE CHAIN, timed output-stationary: C
@@ -133,6 +142,7 @@ public:
         std::size_t lane = 0;
         Cycle start = 0, finish = 0;
         Cycle slot_wait = 0;            // a Load whose slot decided its start: what the wait cost
+        Cycle l2_wait = 0;              // a stage Move or a first merge whose L2 slot decided its start: the same
         std::uint32_t chain = kNoChain; // a Call in a stream chain: its index in chains()
         std::uint32_t chain_pos = 0;    //   and its place in it, from 1
     };
@@ -170,6 +180,8 @@ public:
         L2Address place;                // the walker's L2 address, executed
         Cycle t0 = 0, t1 = 0;
         std::uint32_t feeds = 0;        // the Feeds that read it: its reuse count
+        bool partial = false;           // an L2 accumulator's partial (#429): merged into, not fed
+        std::uint32_t merges = 0;       // a partial: the Drains the Combiner merged into it
     };
 
     struct Stats {
@@ -186,6 +198,10 @@ public:
         std::size_t peak_l2 = 0;                    // staged copies held at once, in time
         std::size_t l2_bound = 0;                   // stage Moves whose start their L2 slot decided
         Cycle l2_wait_cycles = 0;                   //   and what those waits cost
+        std::size_t merges = 0;                     // Drains the Combiner merged into an L2 partial
+        std::size_t merge_accumulates = 0;          //   of them, read-modify-writes (all but each first)
+        std::uint64_t merge_l2_read_bytes = 0;      // the partials those read back from L2
+        std::uint64_t merge_l2_write_bytes = 0;     // and what every merge wrote into L2
         std::size_t stream_chains = 0;              // chains timed as systolic streams
         Cycle link_delay_cycles = 0;                // what their results waited for a top link
         std::map<std::string, std::size_t> one_leg; // calls timed as one leg, by why
@@ -218,6 +234,7 @@ public:
         moved_.clear();
         drained_.clear();
         fed_.clear();
+        partial_read_.clear();
         acc_.clear();
         chains_.clear();
         open_chain_.clear();
@@ -279,6 +296,7 @@ public:
             case Action::Kind::Move: {
                 Residency& r = residency_[k];
                 Cycle ready = r.current;
+                Cycle l2_wait = 0;
                 if (a.l2) {                                 // a stage: after ITS L2 slot's L2Release
                     const Cycle credit = get_l2(*a.l2);
                     if (credit > ready) {
@@ -288,11 +306,13 @@ public:
                         if (credit > other) {
                             ++st_.l2_bound;
                             st_.l2_wait_cycles += credit - other;
+                            l2_wait = credit - other;
                         }
                         ready = credit;
                     }
                 }
                 const Cycle f = run(Proc::Bm, ready, transfer(Proc::Bm, bytes), a);
+                records_.back().l2_wait = l2_wait;
                 r.readers = std::max(r.readers, f);
                 moved_[k] = f;
                 if (a.l2) {
@@ -340,13 +360,43 @@ public:
             }
             case Action::Kind::Drain: {
                 Cycle ready = get(acc_, k);
+                Cycle l2_wait = 0;
                 auto oc = open_chain_.find(k);
                 if (oc != open_chain_.end()) {                  // its last result is out of the array
                     if (!chains_[oc->second].closed) close_chain(oc->second);
                     ready = std::max(ready, chains_[oc->second].out1);
                 }
+                if (a.merge == Merge::Overwrite) {              // the partial's slot: after its credit
+                    const Cycle credit = get_l2(*a.l2);
+                    if (credit > ready) {
+                        // The credit binds only past every other bound on the drain's start: a
+                        // free drain lane and the drains' issue order (run_drain, run).
+                        const auto& lanes_free = fabric() ? drain_free_ : lane_free_[Proc::Str];
+                        const Cycle issue = fabric() ? drain_last_start_ : last_start_[Proc::Str];
+                        const Cycle other = std::max({ready, *std::min_element(lanes_free.begin(), lanes_free.end()), issue});
+                        if (credit > other) {
+                            ++st_.l2_bound;
+                            st_.l2_wait_cycles += credit - other;
+                            l2_wait = credit - other;
+                        }
+                        ready = credit;
+                    }
+                    l2_open_[k] = l2_slots_.size();
+                    l2_slots_.push_back(L2Slot{a.tile, *a.l2, ready, 0, 0, true, 0});
+                } else if (a.merge == Merge::Accumulate) {     // read-modify-write: after the merge before it
+                    ready = std::max(ready, get(drained_, k));
+                    ++st_.merge_accumulates;
+                    st_.merge_l2_read_bytes += bytes;
+                }
+                if (a.merge != Merge::None) {
+                    ++st_.merges;
+                    st_.merge_l2_write_bytes += bytes;
+                    auto it = l2_open_.find(k);
+                    if (it != l2_open_.end()) ++l2_slots_[it->second].merges;
+                }
                 drained_[k] = fabric() ? run_drain(ready, transfer(Proc::Str, bytes), a)
                                        : run(Proc::Str, ready, transfer(Proc::Str, bytes), a);
+                records_.back().l2_wait = l2_wait;
                 if (oc != open_chain_.end()) {
                     chains_[oc->second].drain_action = records_.back().action;
                     open_chain_.erase(oc);
@@ -363,6 +413,7 @@ public:
                     ready = std::max({ready, take_slot(a), get(released_, k)});   // opens a residency
                 }
                 const Cycle f = run(Proc::Bm, ready, transfer(Proc::Bm, bytes), a);
+                if (a.l2) partial_read_[k] = f;             // an L2 partial, read out of its slot
                 Residency& r = residency_[k];
                 if (!in_place) {
                     r = Residency{};
@@ -411,7 +462,7 @@ public:
             case Action::Kind::L2Release: {
                 // A stage block's end: its slot is free once the staged copy's last Feed is out,
                 // and the next stage into it may start from then (its credit returns upstream).
-                const Cycle t = std::max(get(moved_, k), get(fed_, k));
+                const Cycle t = std::max({get(moved_, k), get(fed_, k), get(partial_read_, k)});
                 l2_free_[key_of(*a.l2)] = t;
                 auto it = l2_open_.find(k);
                 if (it != l2_open_.end()) {
@@ -509,7 +560,7 @@ private:
     std::map<Proc, Cycle> last_start_;
     std::map<std::pair<std::uint32_t, std::uint32_t>, Cycle> slot_free_;   // (module, slot) -> when its Release freed it
     std::map<std::string, Residency> residency_;
-    std::map<std::string, Cycle> dram_ready_, moved_, drained_, fed_, acc_, stage_reads_, released_;
+    std::map<std::string, Cycle> dram_ready_, moved_, drained_, fed_, acc_, stage_reads_, released_, partial_read_;
     std::vector<Chain> chains_;
     std::map<std::string, std::uint32_t> open_chain_;     // accumulator -> its open chain
     std::vector<std::uint32_t> lane_chain_;              // compute tile -> the open chain it holds
@@ -613,8 +664,9 @@ private:
             // one comes back to it -- two accumulators interleaved on one array.
             return chains_[open->second].closed ? one_leg("accumulators interleaved on one array") : open->second;
         if (dev_.pe_rows == 0 || dev_.pe_cols == 0) return one_leg("no fabric declared");
-        if (op.kind != TileOpKind::MatMulAccum || !a.accumulate)
-            return one_leg(op.kind == TileOpKind::MatMulAccum ? "in-place gemm (C preloaded)" : "not a gemm");
+        const bool gemm = op.kind == TileOpKind::MatMulAccum || op.kind == TileOpKind::MatMulMerge;
+        if (!gemm || !a.accumulate)
+            return one_leg(gemm ? "in-place gemm (C preloaded)" : "not a gemm");
         const TensorOperand& o = shapes_.operand(a.tile.operand);
         const Dim rows = o.row_end(a.tile.ti) - o.row_begin(a.tile.ti);
         const Dim cols = o.col_end(a.tile.tj) - o.col_begin(a.tile.tj);

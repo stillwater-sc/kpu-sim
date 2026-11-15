@@ -52,6 +52,13 @@
 //                  is retired, its L2 credit and slot returned, once the tile's Feeds before it
 //                  have completed. The program's slots are the L2 CAM's first `l2`; an unstaged
 //                  copy takes one of the rest.
+//   L2 accumulators (#429, #430): a Call of MATMUL_MERGE -> schedule_matmul_compute with
+//                  `partial` (from zero, after the tile's earlier drains have landed); its Drain
+//                  -> schedule_merge, the Combiner's overwrite (the slot taken at its turn, as a
+//                  staging Move takes one) or accumulate (a read-modify-write of the slot's
+//                  entry, in the tile's number system). The store's Writeback reads the slot and
+//                  leaves it (l2_held), and the L2Release retires it once the merges have landed
+//                  and the Writeback has read it.
 //
 // This step runs matmul and the linear operator: operands A, B and C, vector operands (a
 // bias), gemm with alpha 1, and the epilogue fused or not. Any other operand -- a vector, or a
@@ -105,6 +112,8 @@ public:
         ConcurrentTimingExecutor::VectorStats ve;   // tile-context time by site
         std::size_t peak_held = 0;          // most actions the driver and executor held at once
         std::size_t staged_feeds = 0;       // Feeds that read an L2-staged copy
+        std::uint64_t merges = 0;           // Drains the Combiner merged into an L2 partial (#429)
+        std::uint64_t merge_accumulates = 0;    //   of them, read-modify-writes
         // Each staged copy's L2 slot as L-CA executed it: (tile, slot), in claim order (#399).
         std::vector<std::pair<program::TileCoord, std::uint32_t>> l2_placement;
         // Each residency's L3 slot as L-CA executed it: (tile, slot), in the order the slots were
@@ -216,6 +225,8 @@ public:
         }
         r.dram_bytes = dram_bytes_;
         r.staged_feeds = staged_feeds_;
+        r.merges = exec_.merges();
+        r.merge_accumulates = exec_.merge_accumulates();
         for (const auto& [slot, tile] : exec_.l3_tile_tag_cam(0).claim_log())
             r.l3_placement.emplace_back(coord_.at(tile), slot);
         for (const auto& [slot, tile] : exec_.l2_tag_cam().claim_log())
@@ -314,7 +325,7 @@ private:
 
     static void check_call(const program::TileOp& op) {
         if (op.kind == program::TileOpKind::BiasAdd || op.kind == program::TileOpKind::Activation) return;
-        if (op.kind != program::TileOpKind::MatMulAccum)
+        if (op.kind != program::TileOpKind::MatMulAccum && op.kind != program::TileOpKind::MatMulMerge)
             throw std::invalid_argument(std::string("CspDriver: L0 op ") + program::to_string(op.kind) +
                                         ": L-CA runs matmul and the linear operator in this step");
         if (op.alpha != 1.0f)
@@ -394,6 +405,19 @@ private:
                 exec_.schedule_l2_release(d);
                 break;
             case Action::Kind::Drain: {
+                if (a.merge != program::csp::Merge::None) {   // the Combiner's merge into an L2 partial
+                    if (!a.l2) throw std::logic_error("CspDriver: a merge carries no L2 slot");
+                    const bool overwrite = a.merge == program::csp::Merge::Overwrite;
+                    d.l2_slot = static_cast<std::int32_t>(a.l2->slot);
+                    if (overwrite) {
+                        if (!staged_.insert(d.tile_id).second)
+                            throw std::invalid_argument("CspDriver: " + a.tile.to_string() +
+                                                        " is in L2 twice at once");
+                        d.l2_slot_turn = l2_turns_[a.l2->slot]++;
+                    }
+                    exec_.schedule_merge(d, overwrite, inputs_.operand(a.tile.operand).type);
+                    break;
+                }
                 if (a.context.empty()) { exec_.schedule_drain(d); break; }
                 std::vector<VectorStage> fabric, drain;
                 for (const auto& st : a.context)
@@ -403,6 +427,7 @@ private:
             }
             case Action::Kind::Writeback: {
                 d.l3_held = loaded_.count(d.tile_id) != 0;     // in place, into its residency's slot
+                d.l2_held = a.l2.has_value();                  // an L2 partial: its L2Release retires it
                 if (a.context.empty()) { exec_.schedule_writeback(d); break; }
                 std::vector<VectorStage> egress;
                 for (const auto& st : a.context) egress.push_back(stage(st));
@@ -417,11 +442,13 @@ private:
                 break;
             case Action::Kind::Call: {
                 const program::TileCoord& y = op->outputs.at(0);
-                if (op->kind == program::TileOpKind::MatMulAccum) {
+                if (op->kind == program::TileOpKind::MatMulAccum || op->kind == program::TileOpKind::MatMulMerge) {
+                    const bool partial = op->kind == program::TileOpKind::MatMulMerge;
                     ConcurrentTimingExecutor::MatMulComputeSpec spec;
                     spec.a_tiles = {id(op->inputs.at(0))};
                     spec.b_tiles = {id(op->inputs.at(1))};
-                    spec.accumulate = true;         // one k-slice; C stays in the fabric
+                    spec.accumulate = !partial;     // one k-slice; C stays in the fabric
+                    spec.partial = partial;         // a partial from zero, merged into L2 by its Drain
                     // A typed gemm computes with the registered MAC, as L-B does (#394 step 2).
                     const std::string& in_type = inputs_.operand(op->inputs.at(0).operand).type;
                     const std::string& acc_type = inputs_.operand(y.operand).type;

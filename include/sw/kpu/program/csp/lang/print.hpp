@@ -8,7 +8,8 @@
 //
 // An IR whose actions do not form statements (say, one edited to release a tile between one
 // operand's feed and the next operand's load, which a call cannot express: its operands are
-// co-resident) is refused by name. It has no text form.
+// co-resident) is refused by name. It has no text form. So is a program with an L2 accumulator
+// (`acc T in l2`): lang::format prints its structured source.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -66,6 +67,13 @@ inline std::string print(const CspProgram& p) {
     using K = Action::Kind;
     // How each operand is used, for its declaration.
     std::set<std::string> loaded, stored;
+    for (std::size_t i = 0; i < p.actions.size(); ++i)
+        if (p.actions[i].merge != Merge::None)
+            // The block's open emits no action, and its tiles' merges interleave with the stage
+            // blocks inside it: the flat form cannot place `acc ... in l2 {`. Print the source.
+            throw PrintError("csp print: action " + std::to_string(i) + " merges into the L2 accumulator " +
+                             p.actions[i].tile.to_string() + ", which has no flat text form; format the "
+                             "structured program instead (lang::format)");
     for (const Action& a : p.actions) {
         if (a.kind == K::Load || a.kind == K::Inherit) loaded.insert(a.tile.operand);   // arrives with a value
         if (a.kind == K::Store || a.kind == K::Retain) stored.insert(a.tile.operand);   // leaves with one

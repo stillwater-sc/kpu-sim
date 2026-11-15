@@ -164,6 +164,24 @@ struct Stage {
 // L2 address opens a STAGING -- the tile's copy in that L2 slot, kept for the block -- and a
 // Feed that carries one reads the staged copy and leaves it there. Unstaged Moves and Feeds
 // carry none: the tile passes through L2 once, as before.
+//
+// L2 ACCUMULATORS (#429, #430; docs/01-architecture/combiner.md): `acc T in l2 { ... }` holds each
+// result tile's partial in an L2 slot the walker allocates, and the Combiner merges every call's
+// result into it. A call into one Drains a fresh partial from the fabric with `merge` set and the
+// slot as its L2 address: Overwrite for the tile's first call (the slot opens; it is a staging
+// whose `partial` is set), Accumulate for every later one (a read-modify-write in L2). The
+// store's Writeback reads the slot (carrying its address), and its L2Release frees it.
+enum class Merge : std::uint8_t { None, Overwrite, Accumulate };
+
+inline const char* to_string(Merge m) {
+    switch (m) {
+        case Merge::None:       return "none";
+        case Merge::Overwrite:  return "overwrite";
+        case Merge::Accumulate: return "accumulate";
+    }
+    return "?";
+}
+
 struct Action {
     enum class Kind : std::uint8_t { Load, Store, Move, Writeback, Feed, Drain, Call, Release, Inherit, Retain, L2Release };
     Kind kind = Kind::Call;
@@ -183,6 +201,8 @@ struct Action {
     // staging it is (CspProgram::stagings). None on an unstaged action.
     std::optional<L2Address> l2;
     std::size_t staging = kNone;
+    // Drain into an L2 accumulator: how the Combiner merges the partial into its slot.
+    Merge merge = Merge::None;
     // Feed: the tile's values start this accumulator in the fabric (`acc Y in fabric init X`;
     // docs/plans/accumulator-init-stream.md): the init is one more edge stream, fed before the
     // accumulator's first call, and its values (a vector's broadcast down the rows) are the
@@ -262,19 +282,26 @@ struct Residency {
 
 // One tile's stay in an L2 slot: opened by a staging Move, read by staged Feeds, closed by its
 // L2Release at the end of its `stage` block.
+//
+// A partial's stay in an L2 slot (an L2 accumulator, `partial`): opened by its first merge (a
+// Drain, Overwrite), merged into by the rest, read by its store's Writeback, closed by its
+// L2Release. It has no L3 residency.
 struct Staging {
     TileCoord tile;
-    std::size_t open = kNone;           // action index of the Move that staged it
+    std::size_t open = kNone;           // action index of the Move that staged it (a partial: its first Drain)
     std::size_t release = kNone;        // action index of its L2Release
     std::size_t feeds = 0;              // Feeds of the staged copy: its reuse count
     std::size_t residency = kNone;      // the L3 residency it was copied from (live throughout)
     L2Address place;
+    bool partial = false;               // an L2 accumulator's partial, which the Combiner merges into
+    std::size_t merges = 0;             // a partial: the Drains merged into it, the first included
 };
 
 // What the program decided about reuse, before any simulation.
 struct ReuseReport {
     std::size_t loads = 0, stores = 0, moves = 0, calls = 0;
     std::size_t stagings = 0, staged_feeds = 0;   // L2: copies staged, and Feeds they served
+    std::size_t partials = 0, merges = 0;         // L2 accumulators: partials held, Drains merged into them
     std::size_t peak_l2 = 0;            // most stagings open at once
     std::size_t distinct_loaded = 0;    // tiles read from DRAM at least once
     std::size_t reloads = 0;            // loads - distinct_loaded: what capacity cost
@@ -303,6 +330,8 @@ public:
         std::size_t open = 0, staged = 0;
         for (const Action& a : actions) {
             if (a.l2 && a.kind == Action::Kind::Move) { ++r.stagings; r.peak_l2 = std::max(r.peak_l2, ++staged); }
+            if (a.merge == Merge::Overwrite) { ++r.partials; r.peak_l2 = std::max(r.peak_l2, ++staged); }
+            if (a.merge != Merge::None) ++r.merges;
             if (a.l2 && a.kind == Action::Kind::Feed) ++r.staged_feeds;
             if (a.kind == Action::Kind::L2Release) --staged;
             switch (a.kind) {
@@ -341,7 +370,9 @@ public:
         o << "  reuse: " << r.loads << " loads of " << r.distinct_loaded << " tiles (" << r.reloads
           << " reloads), " << r.stores << " stores, " << r.moves << " moves, " << r.calls
           << " calls, peak L3 " << r.peak_l3;
-        if (r.stagings) o << ", " << r.stagings << " staged in L2 for " << r.staged_feeds << " feeds, peak L2 " << r.peak_l2;
+        if (r.stagings) o << ", " << r.stagings << " staged in L2 for " << r.staged_feeds << " feeds";
+        if (r.partials) o << ", " << r.partials << " partials in L2 for " << r.merges << " merges";
+        if (r.stagings || r.partials) o << ", peak L2 " << r.peak_l2;
         o << "\n";
         for (std::size_t i = 0; i < actions.size(); ++i) {
             const Action& a = actions[i];
@@ -358,6 +389,7 @@ public:
                 o << " @ " << to_string(st.place);
             }
             if (a.place) o << "  @" << a.place->to_string();
+            if (a.merge != Merge::None) o << "  merge " << to_string(a.merge) << " @ combiner";
             if (a.l2) o << "  @" << a.l2->to_string();
             if (a.residency != kNone && a.kind == Action::Kind::Release)
                 o << "  (" << residencies[a.residency].consumers << " consumers)";

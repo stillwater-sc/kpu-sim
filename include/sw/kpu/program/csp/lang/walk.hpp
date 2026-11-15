@@ -37,6 +37,17 @@
 // emits an L2Release per tile, which frees its slot. The L3 residency stays live for the whole
 // block (decided 2026-10-16): releasing a staged tile, or writing it, is refused there.
 //
+// L2 accumulators (#429, #430; docs/01-architecture/combiner.md): `acc T in l2 { ... }` reserves
+// an L2 slot per tile of T (the lowest free one, from the same `l2 = N` as the stages) as the
+// block opens. Each call `+->` into one of its tiles feeds its operands, runs the gemm on a fresh
+// accumulator in the fabric (the call's partial; L0 MATMUL_MERGE), and Drains it into the slot
+// with the Combiner's merge: Overwrite for the tile's first call, which opens the slot (a staging
+// whose `partial` is set), Accumulate for each later one. `store` then Writes the slot back into an
+// L3 slot for the moment (the Writeback carries the L2 address), frees the L2 slot (L2Release),
+// and Stores and Releases the L3 slot. A late store, a retain and an `init` are refused for an
+// L2 accumulator, and so is a fabric or combiner stage on its store: the epilogue on the final
+// merge is #427's (a bm.egress stage rides the Writeback, as for any result).
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -179,6 +190,18 @@ public:
                 frames_.pop_back();
                 return true;
             case Frame::Kind::Acc: {
+                if (!f.accs.empty()) {                     // an L2 accumulator: every tile fed
+                    const std::vector<std::string> keys = f.accs;
+                    const int line = f.line;
+                    frames_.pop_back();
+                    for (const std::string& k : keys) {
+                        if (acc_calls_[k] == 0)
+                            throw CompileError(line, "acc " + k + " in l2 receives no call; each of its tiles needs at "
+                                                     "least one '+->' into it");
+                        acc_[k] = AccState::Closed;
+                    }
+                    return true;
+                }
                 const std::string k = f.acc;
                 const int line = f.line;
                 const std::size_t due = f.due;
@@ -225,7 +248,10 @@ private:
         int line = 0;
         std::size_t due = 0;                               // Acc: late stores numbered below this leave at its close
         std::vector<std::string> staged = {};              // Stage: the tiles it staged, in order
+        std::vector<std::string> accs = {};                // Acc in l2: its tiles, in order
     };
+    // An L2 accumulator's tile: its reserved L2 slot, and its staging once the first merge opens it.
+    struct Partial { L2Address at; TileCoord tile; std::size_t id = kNone; std::size_t merges = 0; };
     struct Staged { L2Address at; std::size_t id; TileCoord tile; };
     struct LateStore { const Stmt* s; TileCoord y; Where where; std::size_t seq; };
     struct Live { std::size_t id; bool dirty; bool inherited = false; };
@@ -247,6 +273,7 @@ private:
     std::size_t late_seq_ = 0;
     std::optional<Where> where_;                           // a late store's own place in the program
     std::map<std::string, Staged> staged_;                 // tiles staged in L2 now
+    std::map<std::string, Partial> partial_;               // L2 accumulators' tiles, until stored
     std::vector<bool> l2_live_;                            // the L2's slots (cf 0), live or free
     std::size_t next_staging_ = 0;
     std::size_t next_residency_ = 0;
@@ -348,10 +375,12 @@ private:
             l3.l3 = pl->second;
             e.action.l0_op = sink_.l0(l3);
         }
+        e.action.merge = merge_;
+        merge_ = Merge::None;
         if (l2) {
             e.action.l2 = l2;
             e.action.staging = staging;
-            e.opens_staging = kind == Action::Kind::Move;
+            e.opens_staging = kind == Action::Kind::Move || e.action.merge == Merge::Overwrite;
             if (kind == Action::Kind::Move || kind == Action::Kind::L2Release) {
                 // The trace records the L2 transaction after the L3 one: out of the L3 slot,
                 // into the L2 slot.
@@ -403,6 +432,7 @@ private:
     }
     std::set<std::size_t> pinned_;                          // residencies the program placed itself
     std::optional<TileCoord> seed_;                         // the accumulator the next Feed starts
+    Merge merge_ = Merge::None;                             // the next Drain's merge (an L2 accumulator's)
     int line_ = 0;                                          // the statement being executed
 
     // Place residency `id` for tile `t`: by the policy, or in `slot` when the program names one.
@@ -505,6 +535,10 @@ private:
                 break;
             }
             case Stmt::Kind::Acc: {
+                if (s.in_l2) {
+                    acc_l2(s);
+                    break;
+                }
                 const TileCoord y = one(s.out);
                 const std::string k = y.to_string();
                 flush_late_until(k);
@@ -686,6 +720,102 @@ private:
         }
     }
 
+    // `acc T in l2 { ... }`: an L2 slot reserved for each tile's partial; the first merge opens it.
+    void acc_l2(const Stmt& s) {
+        if (ast_.l2 <= 0)
+            throw CompileError(s.line, "acc ... in l2: the machine clause declares no L2 (write `l2 = N`)");
+        if (target_ && !target_->combiner)
+            throw CompileError(s.line, "acc ... in l2: the Combiner merges its partials, and the target has no Combiner "
+                                       "(the deployment's `combiner` block)");
+        if (s.init)
+            throw CompileError(s.line, "acc ... in l2 init: an L2 accumulator's first merge overwrites its slot, so it "
+                                       "takes no init (not built yet)");
+        std::vector<std::string> keys;
+        for (const TileCoord& y : expand(s.out)) {
+            const std::string k = y.to_string();
+            flush_late_until(k);
+            if (resident_.count(k))
+                throw CompileError(s.line, "acc " + k + " in l2: it is resident in L3; an L2 accumulator's partial "
+                                           "starts in its L2 slot, so release it first");
+            not_retained(s.line, k);
+            if (acc_.count(k)) throw CompileError(s.line, "acc " + k + ": it already has an accumulator");
+            const auto free = std::find(l2_live_.begin(), l2_live_.end(), false);
+            if (free == l2_live_.end())
+                throw CompileError(s.line, "acc " + k + " in l2 needs an L2 slot for its partial, and all " +
+                                           std::to_string(l2_live_.size()) + " are held");
+            *free = true;
+            partial_[k] = Partial{L2Address{0, static_cast<std::uint32_t>(free - l2_live_.begin())}, y};
+            acc_[k] = AccState::Open;
+            acc_calls_[k] = 0;
+            keys.push_back(k);
+        }
+        Frame f{&s.body, 0, Frame::Kind::Acc, {}, 0, 0, {}, s.line, late_seq_};
+        f.accs = std::move(keys);
+        frames_.push_back(std::move(f));
+    }
+
+    // A call into an open L2 accumulator: the operands fed, the gemm on a fresh partial in the
+    // fabric, and its Drain into the tile's L2 slot with the Combiner's merge.
+    void merge_call(const Stmt& s, const std::vector<TileCoord>& args, const TileCoord& y, TileOp op) {
+        const std::string yk = y.to_string();
+        if (s.fn != "gemm")
+            throw CompileError(s.line, "call " + s.fn + " on the L2 accumulator " + yk + ": an L2 accumulator takes "
+                                       "gemm '+->', whose result the Combiner merges into its slot");
+        if (!s.context.empty())
+            throw CompileError(s.line, "a call into an L2 accumulator drains a partial; its epilogue is the store's");
+        for (std::size_t i = 0; i < args.size(); ++i) {
+            TileOp feed;
+            feed.kind = TileOpKind::Feed;
+            feed.port_kind = PortKind::Input;
+            feed.port = i == 0 ? "West" : "North";
+            feed.inputs = {args[i]};
+            deliver(args[i], s.line, s.fn, &feed);
+        }
+        Partial& pt = partial_.at(yk);
+        op.kind = TileOpKind::MatMulMerge;
+        op.overwrite = pt.merges == 0;
+        op.l2 = pt.at;
+        emit(Action::Kind::Call, y, kNone, sink_.l0(op), &op, false, false, true);
+        TileOp drain;
+        drain.kind = TileOpKind::Drain;
+        drain.port_kind = PortKind::Output;
+        drain.port = "South";
+        drain.outputs = {y};
+        const std::size_t d = sink_.l0(drain);
+        if (pt.merges == 0) pt.id = next_staging_++;   // the first merge opens the slot: its staging
+        merge_ = pt.merges == 0 ? Merge::Overwrite : Merge::Accumulate;
+        emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, {}, pt.at, pt.id);
+        ++pt.merges;
+        ++acc_calls_[yk];
+    }
+
+    // An L2 accumulator's store: its slot written back into an L3 slot for the moment, the L2
+    // slot freed, then stored and released.
+    void partial_out(const Stmt& s, const TileCoord& y) {
+        const std::string k = y.to_string();
+        if (s.late)
+            throw CompileError(s.line, "store " + k + " late: " + k + " is an L2 accumulator, whose partial is already "
+                                       "out of the fabric; store it where it is written");
+        auto [drain_ctx, wb_ctx] = result_context(s, y);
+        if (!drain_ctx.empty())
+            throw CompileError(s.line, "store " + k + " via ... @ " + to_string(drain_ctx.front().place) + ": " + k +
+                                       " is an L2 accumulator, whose partials the Combiner merged as they drained; "
+                                       "an epilogue on the final merge is not built yet (#427), so place it @ bm.egress");
+        need_slot(s.line, "store " + k + "'s writeback");
+        record_stages(y, drain_ctx, wb_ctx);
+        const Partial pt = partial_.at(k);
+        const std::size_t id = next_residency_++;
+        place(id, y);
+        emit(Action::Kind::Writeback, y, id, kNone, nullptr, true, false, false, std::move(wb_ctx), pt.at, pt.id);
+        emit(Action::Kind::L2Release, y, kNone, kNone, nullptr, false, false, false, {}, pt.at, pt.id);
+        l2_live_.at(pt.at.slot) = false;
+        emit(Action::Kind::Store, y, id);
+        emit(Action::Kind::Release, y, id);
+        partial_.erase(k);
+        acc_.erase(k);
+        acc_calls_.erase(k);
+    }
+
     // `stage T in l2 { ... }`: each tile of T, resident in L3, copied into an L2 slot for the block.
     void stage(const Stmt& s) {
         if (ast_.l2 <= 0)
@@ -791,6 +921,10 @@ private:
         if (s.fn != "getrf" && s.fn != "laswp" && s.pivot) throw CompileError(s.line, s.fn + " takes no pivot");
 
         auto acc = acc_.find(yk);
+        if (acc != acc_.end() && acc->second == AccState::Open && partial_.count(yk)) {
+            merge_call(s, args, y, op);
+            return;
+        }
         if (acc != acc_.end() && acc->second == AccState::Open) {
             if (s.fn != "gemm")
                 throw CompileError(s.line, "call " + s.fn + " on the open accumulator " + yk + ": an accumulator takes "
@@ -837,6 +971,10 @@ private:
             throw CompileError(s.line, "store " + k + " inside its own accumulator; store it after the acc block");
         if (acc != acc_.end() && acc->second == AccState::Late)
             throw CompileError(s.line, "store " + k + ": its late store is already pending");
+        if (acc != acc_.end() && partial_.count(k)) {
+            partial_out(s, y);
+            return;
+        }
         if (acc != acc_.end() && s.late) {
             if (!s.context.empty())
                 throw CompileError(s.line, "store " + k + " late via ...: a late store carries no epilogue (it is "
@@ -900,6 +1038,9 @@ private:
                 throw CompileError(s.line, "retain " + k + " inside its own accumulator; retain it after the acc block");
             if (acc->second == AccState::Late)
                 throw CompileError(s.line, "retain " + k + ": its late store is pending");
+            if (partial_.count(k))
+                throw CompileError(s.line, "retain " + k + ": " + k + " is an L2 accumulator; retaining one is not "
+                                           "built yet, so store it");
             need_slot(s.line, "retain " + k + "'s writeback");
             auto [drain_ctx, wb_ctx] = result_context(s, y);
             TileOp drain;
@@ -953,7 +1094,11 @@ public:
                 st.open = i;
                 st.residency = a.residency;
                 st.place = *a.l2;
+                st.partial = a.merge != Merge::None;
+                st.merges = st.partial ? 1 : 0;
                 p_.stagings.push_back(st);
+            } else if (a.merge != Merge::None) {
+                ++p_.stagings.at(a.staging).merges;
             } else if (a.kind == Action::Kind::Feed) {
                 ++p_.stagings.at(a.staging).feeds;
             } else if (a.kind == Action::Kind::L2Release) {

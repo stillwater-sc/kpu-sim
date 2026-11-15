@@ -303,6 +303,64 @@ TEST_CASE("Combiner cycle-accurate update", "[combiner][cycle]") {
     }
 }
 
+TEST_CASE("Combiner merge of partials: overwrite, then accumulate in L2", "[combiner][merge]") {
+    // A partial's first K block overwrites its L2 row; each later one is read, added and written
+    // back (#429).
+    Combiner cmb(0);
+    std::vector<float> l1_data(8), l2_data(8, 99.0f);
+    auto l1_read = [&](size_t, Address addr, void* data, Size size) {
+        std::memcpy(data, reinterpret_cast<uint8_t*>(l1_data.data()) + addr, size);
+    };
+    auto l2_write = [&](size_t, Address addr, const void* data, Size size) {
+        std::memcpy(reinterpret_cast<uint8_t*>(l2_data.data()) + addr, data, size);
+    };
+    auto l2_read = [&](size_t, Address addr, void* data, Size size) {
+        std::memcpy(data, reinterpret_cast<uint8_t*>(l2_data.data()) + addr, size);
+    };
+    auto run = [&](CombinerMerge m) {
+        CombinerOperation op;
+        op.height = 1;
+        op.width = 8;
+        op.merge = m;
+        cmb.enqueue_operation(op);
+        bool done = false;
+        for (Cycle c = 0; c < 100 && !done; ++c) done = cmb.update(c, l1_read, l2_write, l2_read);
+        REQUIRE(done);
+    };
+    for (std::size_t i = 0; i < 8; ++i) l1_data[i] = float(i);
+    run(CombinerMerge::Overwrite);                       // the first block: 99s overwritten
+    for (std::size_t i = 0; i < 8; ++i) CHECK(l2_data[i] == float(i));
+    for (std::size_t i = 0; i < 8; ++i) l1_data[i] = 10.0f * float(i);
+    run(CombinerMerge::Accumulate);
+    run(CombinerMerge::Accumulate);
+    for (std::size_t i = 0; i < 8; ++i) CHECK(l2_data[i] == 21.0f * float(i));
+    CHECK(cmb.stats().elements_merged == 16);
+
+    SECTION("an accumulate with no L2 read is refused") {
+        CombinerOperation op;
+        op.height = 1;
+        op.width = 8;
+        op.merge = CombinerMerge::Accumulate;
+        cmb.enqueue_operation(op);
+        auto step = [&] { for (Cycle c = 0; c < 100; ++c) (void)cmb.update(c, l1_read, l2_write); };
+        CHECK_THROWS_AS(step(), std::logic_error);
+    }
+    SECTION("the epilogue, scaling and block formats are #427's") {
+        CombinerOperation op;
+        op.height = 1;
+        op.width = 8;
+        op.merge = CombinerMerge::Accumulate;
+        op.activation = ActivationType::RELU;
+        CHECK_THROWS_AS(cmb.enqueue_operation(op), std::invalid_argument);
+        CombinerOperation s;
+        s.scale = 0.5f;
+        CHECK_THROWS_AS(cmb.enqueue_operation(s), std::invalid_argument);
+        CombinerOperation f;
+        f.format = CombinerBlockFormat::MXINT8;
+        CHECK_THROWS_AS(cmb.enqueue_operation(f), std::invalid_argument);
+    }
+}
+
 // ============================================================================
 // SFU Access Tests
 // ============================================================================

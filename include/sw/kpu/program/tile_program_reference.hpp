@@ -63,6 +63,7 @@ public:
         std::size_t pivot_applies = 0;  // PivotApply (LASWP)
         std::size_t epilogues = 0;      // BiasAdd + Activation
         std::size_t acc_inits = 0;      // AccInit (opset 1.4)
+        std::size_t merges = 0;         // MatMulMerge (opset 1.5): partials the Combiner merged
         std::size_t l3_ops = 0;         // the L3 transactions (opset 1.2)
         std::size_t l2_ops = 0;         // the L2 transactions (opset 1.3)
         std::size_t peak_l2 = 0;        // L2 slots staged at once, as replayed
@@ -91,12 +92,16 @@ public:
                 stage(op, sum.ops);
                 ++sum.l2_ops;
                 sum.peak_l2 = std::max(sum.peak_l2, l2_.size());
+            } else if (op.kind == TileOpKind::MatMulMerge) {
+                merge_slot(op, sum.ops);        // the partial's L2 slot: opened by the first merge
+                sum.peak_l2 = std::max(sum.peak_l2, l2_.size());
             }
             ++sum.ops;
             switch (op.kind) {
                 case TileOpKind::Feed:           ++sum.feeds; break;   // structural (L1 attaches streams)
                 case TileOpKind::Drain:          ++sum.drains; break;  // structural
                 case TileOpKind::MatMulAccum:    ++sum.computes; break;
+                case TileOpKind::MatMulMerge:    ++sum.computes; ++sum.merges; break;
                 case TileOpKind::LuDiagFactor:   ++sum.diag_factors; break;
                 case TileOpKind::PivotApply:     ++sum.pivot_applies; break;
                 case TileOpKind::TrsmLowerLeft:
@@ -151,6 +156,29 @@ private:
 
     // One L2 transaction, checked as L-B executes it: a stage into a free slot, of a tile staged
     // nowhere else; a release of the slot that holds it.
+    // A merge's L2 slot, checked as L-B executes it: the first merge (overwrite) opens the slot
+    // for Y's partial, and each later one (accumulate) must find Y there. Its L2Release frees it.
+    void merge_slot(const TileOp& op, std::size_t index) {
+        const std::string where = "l0 op " + std::to_string(index) + " " + to_string(op.kind);
+        if (op.outputs.size() != 1) throw PlacementError(where + ": a merge names one result tile");
+        const std::string t = op.outputs[0].to_string();
+        const std::string addr = op.l2.to_string();
+        const Key at{op.l2.cf, op.l2.slot};
+        auto it = l2_.find(at);
+        if (op.overwrite) {
+            if (it != l2_.end())
+                throw PlacementError(where + " " + t + ": " + addr + " holds " + it->second.tile + ", which is live");
+            for (const auto& [k, slot] : l2_)
+                if (slot.tile == t) throw PlacementError(where + " " + t + ": " + t + " is already in L2 at " + slot.addr);
+            l2_[at] = Tag{t, addr};
+            return;
+        }
+        if (it == l2_.end())
+            throw PlacementError(where + " " + t + ": " + addr + ": the slot is free; the first merge overwrites");
+        if (it->second.tile != t)
+            throw PlacementError(where + " " + t + ": " + addr + " holds " + it->second.tile + ", not " + t);
+    }
+
     void stage(const TileOp& op, std::size_t index) {
         const std::string where = "l0 op " + std::to_string(index) + " " + to_string(op.kind);
         if (op.outputs.size() != 1) throw PlacementError(where + ": an L2 transaction names one tile");

@@ -96,13 +96,15 @@ inline bool is_known_dataflow(const std::string& name) {
 inline Version format_version()  { return {1, 3, 0}; }   // container structure: 1.3.0 adds
                                                          // OPERAND type= (an operand's number
                                                          // system, numeric.hpp; #394)
-inline Version opset_version()   { return {1, 4, 0}; }   // the TileOpKind surface this build
+inline Version opset_version()   { return {1, 5, 0}; }   // the TileOpKind surface this build
                                                          // implements: 1.1.0 adds BIAS_ADD and
                                                          // ACTIVATION (act=); 1.2.0 adds the L3
                                                          // transactions (L3_*, l3= slot= bank=);
                                                          // 1.3.0 the L2 ones (L2_*, l2= slot=);
                                                          // 1.4.0 ACC_INIT (an accumulator's
-                                                         // initial value)
+                                                         // initial value); 1.5.0 MATMUL_MERGE
+                                                         // (the Combiner's merge of a partial,
+                                                         // merge= l2= slot=; #429)
 
 // The op set a FILE needs, written on its OPSET line: what is in it, not who wrote it -- the
 // rule min_consumer_for() states. A matmul or LU program uses only 1.0.0 ops, so its bytes do
@@ -114,6 +116,7 @@ inline Version opset_version()   { return {1, 4, 0}; }   // the TileOpKind surfa
 // older reader would drop silently. Keep it that way, or make MIN_CONSUMER see the op set.
 inline Version opset_for(const TileProgram& prog) {
     Version v{1, 0, 0};
+    for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::MatMulMerge) return Version{1, 5, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::AccInit) return Version{1, 4, 0};
     for (const TileOp& op : prog.ops()) if (is_l2(op.kind)) return Version{1, 3, 0};
     for (const TileOp& op : prog.ops()) {
@@ -401,8 +404,10 @@ inline void write_l0(std::ostream& os, const TileProgram& prog, const WriteOptio
         // existing tests only used alpha=-1, which is exact, so they could not see it.
         // The classic locale matters for the same reason: an imbued locale can write
         // "-0,5", which the reader then rejects.
-        if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f)
+        if ((op.kind == TileOpKind::MatMulAccum || op.kind == TileOpKind::MatMulMerge) && op.alpha != 1.0f)
             os << " alpha=" << detail::exact_float(op.alpha);
+        if (op.kind == TileOpKind::MatMulMerge)
+            os << " merge=" << (op.overwrite ? "overwrite" : "accumulate") << " l2=" << op.l2.cf << " slot=" << op.l2.slot;
         if (op.pivot_slot >= 0) os << " pivot=" << op.pivot_slot;
         if (op.kind == TileOpKind::Activation) os << " act=" << to_string(op.act);
         if (is_l3(op.kind)) os << " l3=" << op.l3.l3_tile << " slot=" << op.l3.slot << " bank=" << op.l3.bank;
@@ -591,7 +596,8 @@ inline TileOpKind parse_kind(const std::string& s) {
                          TileOpKind::BiasAdd, TileOpKind::Activation, TileOpKind::L3Load,
                          TileOpKind::L3Store, TileOpKind::L3Move, TileOpKind::L3Writeback,
                          TileOpKind::L3Release, TileOpKind::L3Inherit, TileOpKind::L3Retain,
-                         TileOpKind::L2Stage, TileOpKind::L2Release, TileOpKind::AccInit})
+                         TileOpKind::L2Stage, TileOpKind::L2Release, TileOpKind::AccInit,
+                         TileOpKind::MatMulMerge})
         if (s == to_string(k)) return k;
     throw FormatError(FormatError::Cause::UnknownOp,
                       "l0: unknown op '" + s + "': this build implements opset tile " +
@@ -824,6 +830,25 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                     throw FormatError(FormatError::Cause::MalformedRecord,
                                       std::string("l0: OP ") + to_string(op.kind) + ": an L2 transaction names one "
                                       "tile, as out=");
+            }
+            if (op.kind == TileOpKind::MatMulMerge) {
+                // Required: a merge is its mode and the partial's L2 slot.
+                const std::string m = detail::require(f, "merge", "OP");
+                if (m != "overwrite" && m != "accumulate")
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: OP MATMUL_MERGE merge=" + m + ": overwrite or accumulate");
+                op.overwrite = m == "overwrite";
+                const auto u32 = [&](const char* key) {
+                    return static_cast<std::uint32_t>(detail::to_bounded(
+                        detail::require(f, key, "OP"),
+                        static_cast<unsigned long long>(std::numeric_limits<std::uint32_t>::max()),
+                        std::string("OP ") + key));
+                };
+                op.l2.cf = u32("l2");
+                op.l2.slot = u32("slot");
+                if (op.outputs.size() != 1 || op.inputs.size() != 2)
+                    throw FormatError(FormatError::Cause::MalformedRecord,
+                                      "l0: OP MATMUL_MERGE: in= names A and B, out= the result tile");
             }
             if (f.count("label")) op.label = f["label"];
             // R8, the other half: an unknown OPTIONAL FIELD is ignored, so a minor

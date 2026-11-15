@@ -23,6 +23,13 @@
 // twice, a Feed of a slot that does not hold its tile, and a program that ends with a tile
 // staged. An unstaged Move and Feed pass through L2 as before.
 //
+// L2 ACCUMULATORS ARE ADDRESSED THE SAME WAY (#429, #430). A call into one computes its partial
+// on a fresh accumulator in the fabric (MATMUL_MERGE's gemm, from zero), and its Drain is the
+// Combiner's merge into the tile's L2 slot: Overwrite writes the partial into a free slot and tags
+// it, Accumulate adds it to the partial the slot holds (merge_tile, in the tile's number system).
+// The store's Writeback reads the slot and leaves it; its L2Release frees it. Refused, by name: a
+// first merge into a live slot, an accumulate into a slot that does not hold the tile.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -59,6 +66,7 @@ public:
         std::size_t peak_l3 = 0;            // L3 slots tagged at once, as executed
         std::size_t peak_l2 = 0;            // L2 slots staged at once, as executed
         std::size_t staged_feeds = 0;       // Feeds served by a staged copy
+        std::size_t merges = 0;             // partials the Combiner merged into L2 slots
     };
 
     // Run `p` from its source operands' values. On return, result() holds the operands as DRAM
@@ -128,7 +136,9 @@ public:
             }
             case Action::Kind::Writeback: {
                 const L3Address& s = address(a, where(i));
-                std::vector<float> v = take(Chan::L2, k, where(i), /*keep=*/false);
+                // An L2 accumulator's store reads its slot, which its L2Release then frees.
+                std::vector<float> v = a.l2 ? read_l2(*a.l2, a, k, where(i)).values
+                                            : take(Chan::L2, k, where(i), /*keep=*/false);
                 stages(v, a, where(i));         // a result's epilogue, where the program placed it
                 write_l3(s, a, k, std::move(v), where(i));
                 break;
@@ -150,6 +160,10 @@ public:
             case Action::Kind::Drain: {
                 std::vector<float> v = take(from_chan(a.kind), k, where(i), /*keep=*/false);
                 stages(v, a, where(i));         // a result's epilogue, where the program placed it
+                if (a.merge != Merge::None) {   // the Combiner's merge into the partial's L2 slot
+                    merge(a, k, std::move(v), where(i));
+                    break;
+                }
                 at(to_chan(a.kind))[k] = std::move(v);
                 break;
             }
@@ -341,6 +355,25 @@ private:
         return it->second;
     }
 
+    // A Drain's merge: the first (Overwrite) opens the slot with the partial, every later one
+    // (Accumulate) adds the partial to what the slot holds.
+    void merge(const Action& a, const std::string& k, std::vector<float> v, const std::string& where) {
+        if (!a.l2) throw BehavioralError(where + ": a merge carries no L2 address");
+        ++sum_.merges;
+        if (a.merge == Merge::Overwrite) {
+            stage_l2(*a.l2, a, k, std::move(v), where);
+            return;
+        }
+        auto it = l2_.find(l2_key(*a.l2));
+        if (it == l2_.end())
+            throw BehavioralError(where + ": merge accumulate into " + a.l2->to_string() + ": the slot is free (" + k +
+                                  "'s first merge overwrites it)");
+        if (it->second.tag.to_string() != k || it->second.staging != a.staging)
+            throw BehavioralError(where + ": merge accumulate into " + a.l2->to_string() + ", which holds " +
+                                  it->second.tag.to_string() + ", not " + k);
+        merge_tile(work_.operand(a.tile.operand).type, it->second.values, v);
+    }
+
     const L3Slot& slot_of(const std::string& k) const { return l3_.at(key_of(l3_index_.at(k))); }
 
     // The address an action on a residency carries, checked against the L3's geometry.
@@ -474,7 +507,10 @@ private:
     // shared L0 kernel, its outputs back into the fabric. A fed input is consumed by the call.
     // In an explicit (accumulating) program the fabric's accumulator for a result starts at zero
     // and stays in the fabric until its Drain.
-    void call(const TileOp& op, bool accumulates, const std::string& where) {
+    void call(const TileOp& op_in, bool accumulates, const std::string& where) {
+        // A merge's gemm computes the partial in the fabric; the Drain merges it (merge()).
+        TileOp op = op_in;
+        if (op.kind == TileOpKind::MatMulMerge) op.kind = TileOpKind::MatMulAccum;
         auto& cf = at(Chan::Cf);
         for (const auto& t : op.inputs) {
             const std::string k = t.to_string();

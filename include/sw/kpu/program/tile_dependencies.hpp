@@ -204,6 +204,12 @@ inline TileDependencies build_tile_dependencies(const TileProgram& prog) {
                 reads.push_back(&op.outputs[0]);
                 writes.push_back(&op.outputs[0]);       // read-modify-write accumulate
                 break;
+            case TileOpKind::MatMulMerge:               // the partial from A and B, merged into Y
+                reads.push_back(&op.inputs[0]);
+                reads.push_back(&op.inputs[1]);
+                if (!op.overwrite) reads.push_back(&op.outputs[0]);   // accumulate reads Y's partial
+                writes.push_back(&op.outputs[0]);
+                break;
             case TileOpKind::LuDiagFactor:
             case TileOpKind::Activation:                // Y in place
                 reads.push_back(&op.outputs[0]);

@@ -4,6 +4,7 @@
 #include <sw/kpu/models/temporal/datamovement/combiner.hpp>
 #include <stdexcept>
 #include <cstring>
+#include <utility>
 
 namespace sw::kpu {
 
@@ -51,6 +52,13 @@ void Combiner::preload_bias(const float* bias_data, Size count) {
 // ============================================================================
 
 void Combiner::enqueue_operation(const CombinerOperation& op) {
+    if (op.scale != 1.0f || op.format != CombinerBlockFormat::None)
+        throw std::invalid_argument("Combiner: scaling and block-format conversion are not built yet (#427)");
+    if (op.merge == CombinerMerge::Accumulate && (op.bias_enabled || op.activation != ActivationType::NONE))
+        throw std::invalid_argument("Combiner: an accumulating merge takes no bias or activation; the epilogue "
+                                    "applies to the final merge (#427)");
+    if (op.merge == CombinerMerge::Accumulate && op.element_size != sizeof(float))
+        throw std::invalid_argument("Combiner: an accumulating merge adds float32 rows");
     op_queue_.push(op);
 
     // If idle, start processing immediately
@@ -64,6 +72,10 @@ void Combiner::enqueue_operation(const CombinerOperation& op) {
 // ============================================================================
 
 bool Combiner::update(Cycle cycle, L1ReadFunc l1_read, L2WriteFunc l2_write) {
+    return update(cycle, std::move(l1_read), std::move(l2_write), nullptr);
+}
+
+bool Combiner::update(Cycle cycle, L1ReadFunc l1_read, L2WriteFunc l2_write, L2ReadFunc l2_read) {
     if (!config_.enabled) {
         stats_.cycles_idle++;
         return false;
@@ -88,7 +100,7 @@ bool Combiner::update(Cycle cycle, L1ReadFunc l1_read, L2WriteFunc l2_write) {
 
         case State::PROCESSING:
             // Process one row per cycle (pipelined)
-            process_row(l1_read, l2_write);
+            process_row(l1_read, l2_write, l2_read);
             stats_.cycles_active++;
 
             current_row_++;
@@ -136,7 +148,7 @@ void Combiner::start_operation() {
     current_row_ = 0;
 }
 
-void Combiner::process_row(L1ReadFunc l1_read, L2WriteFunc l2_write) {
+void Combiner::process_row(L1ReadFunc l1_read, L2WriteFunc l2_write, const L2ReadFunc& l2_read) {
     // Calculate addresses for current row
     Address l1_addr = current_op_.l1_base_addr +
                       current_row_ * (current_op_.row_stride ? current_op_.row_stride :
@@ -166,6 +178,16 @@ void Combiner::process_row(L1ReadFunc l1_read, L2WriteFunc l2_write) {
     } else {
         // No activation, just copy
         std::memcpy(output_buffer_.data(), input_buffer_.data(), row_bytes);
+    }
+
+    // Accumulate: the merge of partials, a read-modify-write of the row in L2 (#429).
+    if (current_op_.merge == CombinerMerge::Accumulate) {
+        if (!l2_read)
+            throw std::logic_error("Combiner: an accumulating merge reads L2; update() was given no L2 read");
+        merge_buffer_.resize(current_op_.width);
+        l2_read(current_op_.l2_bank_id, l2_addr, merge_buffer_.data(), row_bytes);
+        for (Size col = 0; col < current_op_.width; ++col) output_buffer_[col] += merge_buffer_[col];
+        stats_.elements_merged += current_op_.width;
     }
 
     // Write row to L2

@@ -51,7 +51,8 @@ inline TileWork tile_work_of(const TileProgram& p, const TileOp& op, double elem
     TileWork w;
     Dim r = 0, c = 0, r2 = 0, c2 = 0;
     switch (op.kind) {
-        case TileOpKind::MatMulAccum: {
+        case TileOpKind::MatMulAccum:
+        case TileOpKind::MatMulMerge: {                 // the merge is the Combiner's, not the fabric's
             tile_extent(p, op.outputs[0], r, c);        // m x n
             tile_extent(p, op.inputs[0], r2, c2);       // m x k
             w.macs = double(r) * c * c2;                // m*n*k
@@ -133,7 +134,7 @@ inline double lumped_duration(const TileWork& w, double macs_per_cycle, double b
 inline double l1_duration(const TileProgram& prog, const TileOp& op, std::size_t idx,
                           double fallback, const stream::StreamProgram& l1) {
     if (is_l3(op.kind)) return 0.0;                     // placement, not the compute schedule
-    if (op.kind == TileOpKind::MatMulAccum) {
+    if (op.kind == TileOpKind::MatMulAccum || op.kind == TileOpKind::MatMulMerge) {
         auto it = l1.computes.find(idx);
         return it != l1.computes.end() ? static_cast<double>(it->second.latency()) : fallback;
     }

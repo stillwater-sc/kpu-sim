@@ -181,6 +181,12 @@ enum class TileOpKind {
     // rows), or Y := 0 with no input (a clear). outputs = {Y}; inputs = {} or {X}. The value enters
     // the fabric as one more edge stream, before the accumulator's first MatMulAccum.
     AccInit,
+    // A partial merged by the Combiner (opset 1.5; #429, #430): P := alpha * (A . B), computed from
+    // zero in the fabric, then Y := P (merge overwrite: the first K block) or Y := Y + P (merge
+    // accumulate), in Y's number system. The weight- and input-stationary schedules reduce across
+    // K blocks this way: Y's partial lives in an L2 slot and the Combiner merges each block into
+    // it (docs/01-architecture/combiner.md). inputs = {A, B}; outputs = {Y}; `overwrite`.
+    MatMulMerge,
 };
 
 // An L3 transaction: carries an L3 address and one tile (outputs[0]); computes nothing.
@@ -220,6 +226,7 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::L2Stage:        return "L2_STAGE";
         case TileOpKind::L2Release:      return "L2_RELEASE";
         case TileOpKind::AccInit:        return "ACC_INIT";
+        case TileOpKind::MatMulMerge:    return "MATMUL_MERGE";
     }
     return "?";
 }
@@ -259,6 +266,10 @@ struct TileOp {
 
     // MatMulAccum: out += alpha * (A . B). alpha = -1 gives the LU trailing update.
     float alpha = 1.0f;
+
+    // MatMulMerge: the Combiner's merge of the partial into Y -- overwrite (Y := P, the first K
+    // block) or accumulate (Y := Y + P).
+    bool overwrite = false;
 
     // Feed/Drain: which logical port the tile streams through.
     PortKind port_kind = PortKind::Input;
@@ -360,8 +371,9 @@ inline std::string TileProgram::disassemble() const {
                 s += " <-";
                 for (const auto& in : op.inputs) s += " " + in.to_string();
             }
-            if (op.kind == TileOpKind::MatMulAccum && op.alpha != 1.0f)
+            if ((op.kind == TileOpKind::MatMulAccum || op.kind == TileOpKind::MatMulMerge) && op.alpha != 1.0f)
                 s += " (alpha=" + std::to_string(op.alpha) + ")";
+            if (op.kind == TileOpKind::MatMulMerge) s += op.overwrite ? " (merge overwrite)" : " (merge accumulate)";
             if (op.pivot_slot >= 0) s += " {pivot#" + std::to_string(op.pivot_slot) + "}";
             if (op.kind == TileOpKind::Activation) s += std::string(" (") + to_string(op.act) + ")";
         }

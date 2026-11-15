@@ -160,6 +160,15 @@ struct TileDescriptor {
     uint32_t l2_slot_turn = 0;
     bool l2_held = false;
 
+    // A Drain into an L2 accumulator's partial (#429, #430): the Combiner merges the drained
+    // partial into the program's L2 slot (`l2_slot`). kMergeOverwrite is the tile's first merge:
+    // it takes the slot at its turn, with an L2 credit, as a staging Move does. kMergeAccumulate
+    // is every later one: a read-modify-write of the entry already in the slot, which takes no
+    // credit. A Writeback of the partial is `l2_held`: it reads the slot and leaves it for the
+    // program's L2Release.
+    static constexpr uint8_t kMergeNone = 0, kMergeOverwrite = 1, kMergeAccumulate = 2;
+    uint8_t merge = kMergeNone;
+
     // L3 residency decided by a CSP program (docs/plans/csp-language.md step 1c.2): the program
     // releases this LOAD's L3 entry with an explicit Release (schedule_release), so the entry
     // holds one reference that Moves out of L3 do not consume. false = the legacy schedule path:

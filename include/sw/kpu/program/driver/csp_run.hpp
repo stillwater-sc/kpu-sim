@@ -118,12 +118,14 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
     // The tile functions L-CA computes: gemm (alpha 1) and the epilogue. An accumulator's init
     // (acc ... init X) is one more edge stream, fed as the operands are (#406 step 2).
     std::optional<std::string> refused;
+    int merge_line = 0;                             // the first L2 accumulator: the Combiner merges its partials
     std::set<std::string> inits;                    // operands only an accumulator's init reads
     std::set<std::string> used;                     // operands anything else names
     auto scan = [&](const std::vector<csp::lang::Stmt>& body, auto&& self) -> void {
         for (const auto& s : body) {
             if (refused) return;
             if (s.kind == csp::lang::Stmt::Kind::Acc && s.init) inits.insert(s.init->name);
+            if (s.kind == csp::lang::Stmt::Kind::Acc && s.in_l2 && merge_line == 0) merge_line = s.line;
             if (s.kind == csp::lang::Stmt::Kind::Call) {
                 for (const auto& r : s.tiles) used.insert(r.name);
                 used.insert(s.out.name);
@@ -147,6 +149,9 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
     std::string why;
     const auto cfg = timing::csp_config_from(*device, &why);
     if (!cfg) return why;
+    if (merge_line > 0 && cfg->config.combiner_lanes * cfg->config.combiner_rate <= 0.0)
+        return "the program's L2 accumulator (csp line " + std::to_string(merge_line) + ") merges its partials on the "
+               "Combiner, which the machine does not declare (the deployment's `combiner` block)";
     if (cfg->config.l3_tiles != 1)
         return "the machine has " + std::to_string(cfg->config.l3_tiles) +
                " L3 tiles; a level-1 program addresses one (level 2 distributes)";
@@ -180,7 +185,11 @@ struct CspLevelOutcome {
     // L-T1 with L2 staging: each staged copy's L2 slot, credit to L2Release, with its Feeds.
     std::vector<csp::TransactionalInterpreter::L2Slot> l2_slots;
     std::size_t peak_l2 = 0;                // L-T1: staged copies held at once, in time
-    std::size_t l2_bound = 0;               // L-T1: stage Moves whose start their L2 slot decided
+    // With an L2 accumulator (#429, #430): the Combiner's merges of partials into L2 slots and
+    // the read-modify-writes among them (L-T1, L-CA), and the L2 bytes they read and write (L-T1).
+    std::size_t merges = 0, merge_accumulates = 0;
+    std::uint64_t merge_l2_read_bytes = 0, merge_l2_write_bytes = 0;
+    std::size_t l2_bound = 0;               // L-T1: stage Moves and first merges whose start their L2 slot decided
     std::uint64_t l2_wait_cycles = 0;       //        and what those waits cost
     // L-T1 with a declared fabric: each accumulator's gemm chain as a systolic stream, and the
     // calls timed as one leg instead, by why (docs/plans/l2-reuse-and-fabric-pipeline-view.md).
@@ -368,6 +377,10 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.slots = lt.slots();
         o.l2_slots = lt.l2_slots();
         o.peak_l2 = st.peak_l2;
+        o.merges = st.merges;
+        o.merge_accumulates = st.merge_accumulates;
+        o.merge_l2_read_bytes = st.merge_l2_read_bytes;
+        o.merge_l2_write_bytes = st.merge_l2_write_bytes;
         o.l2_bound = st.l2_bound;
         o.l2_wait_cycles = st.l2_wait_cycles;
         o.chains = lt.chains();
@@ -401,6 +414,8 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.cf_busy = r.cf_busy;
         o.ve = r.ve;
         o.staged_feeds = r.staged_feeds;
+        o.merges = r.merges;
+        o.merge_accumulates = r.merge_accumulates;
         o.l3_placement = r.l3_placement;
         o.l2_placement = r.l2_placement;
     }

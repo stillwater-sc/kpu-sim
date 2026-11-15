@@ -38,6 +38,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Weight- and input-stationary matmul programs, and the Combiner's merge of partials** (#430,
+  #429's merge). `kpu-csp-gen --algo matmul --dataflow os|ws|is` (default `os`, unchanged).
+  - WS holds B's tile stationary, staged in L2 across the i loop; IS holds A's, across the j
+    loop. Each stationary tile leaves L3 once per reuse loop: 16 Moves against 64 for the 64³
+    matmul in 16-tiles. Both need L3 = tiles-per-panel + 1 and declare `l2 = tiles-per-panel + 1`.
+    Neither takes `--orient`, `--stage-a` or `--init`.
+  - The language: `acc C[:, j] in l2 { ... }` is an L2 accumulator. Each tile's partial lives in
+    an L2 slot, and each call `+->` into it drains a fresh partial that the Combiner merges into
+    the slot: overwrite for the first K block, accumulate after. The validator and the walker
+    check L2 capacity with the stage blocks, and that the target has a Combiner. They refuse an
+    `init`, a late store, a `retain`, and a fabric or combiner stage on the store.
+  - The IR: a Drain carries `merge` (`Merge::Overwrite`, `Merge::Accumulate`); a partial is a
+    `Staging` with `partial` set and its `merges` counted; `ReuseReport` counts partials and
+    merges.
+  - L0 opset 1.5: `MATMUL_MERGE` (`merge=overwrite|accumulate l2= slot=`). It computes the
+    partial from zero, then overwrites or adds, in the tile's number system (`merge_tile`). The
+    replay checks the partial's L2 slot.
+  - Every level executes it. L-B merges into the addressed L2 slot. L-T1 holds the slot from the
+    first merge to its L2Release, serializes the read-modify-writes, and counts merges and their
+    L2 bytes. L-CA claims the slot at its turn, times each merge as one add on the Combiner, and
+    retires the slot after the store's Writeback. On the 64³ matmul, WS and IS match OS per tile
+    at L-B, and L-T1 and L-CA match L-B bit for bit, in fp32 and int8 -> int32.
+  - Not yet: an epilogue on the final merge, an init through the Combiner, and a
+    weight-stationary timing of the array (each merge's gemm is timed as a one-call chain). These
+    are #427's. `lang::print` refuses a program with an L2 accumulator; `lang::format` prints it.
+
 - **Docs: the Combiner** (#427, 2026-11-14). A new concept for the KPU tile, defined for the
   KPU RTL generator (branes-ai/embodied-ai-soc-generator#68) and not modelled in kpu-sim
   yet. The Combiner sits on the result path between L1 and L2. It merges intermediate
