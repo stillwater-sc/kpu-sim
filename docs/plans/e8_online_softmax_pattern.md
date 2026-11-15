@@ -51,7 +51,7 @@ primitive in its standalone (materialized-row) form, and E12 fuses it.
 
 The stats pass is a P3 streaming reduction whose accumulator is the pair
 `(m, l)` — a two-lane compute-resident state, exactly the E3 accumulator
-shape (`VE_REDUCE` moment-triplet machinery generalizes: E8 needs lanes
+shape (`CMB_REDUCE` moment-triplet machinery generalizes: E8 needs lanes
 `[m, l]`). The stats pass therefore inherits E3's constant working set of
 2 for its own streaming.
 
@@ -127,7 +127,7 @@ value tiers:
   The apply op reads the row tile and resident `[m, l]` and emits
   `exp(x - m)/l`.
 - **Behavioral ISA:** softmax on the behavioral tier is a *program* of
-  the existing `VE_REDUCE` (running max/sum) and `VE_ELEMENTWISE`
+  the existing `CMB_REDUCE` (running max/sum) and `CMB_ELEMENTWISE`
   (sub/exp/div) ops — the `KernelCompiler` already emits one — not a new
   single op. (This is the T2 refinement of the T1 design: the genuinely
   new capability is the schedule-tier resident dependency, Section 2, not
@@ -150,7 +150,7 @@ value tiers:
 
 | Task | Content |
 |---|---|
-| T2 #155 (ISA/executor closure) | `ScheduleOperation::resident_tiles`; `ConcurrentTimingExecutor::schedule_compute(tile, feed, resident)`; `ScheduleExecutor` routing + binder mapping; resident-ordering validation test. (No new behavioral ISA op: softmax on the behavioral tier composes existing `VE_REDUCE` + `VE_ELEMENTWISE`, per Section 3; the `[m, l]` rescale semantics live in the CSP binder, T3/T4.) |
+| T2 #155 (ISA/executor closure) | `ScheduleOperation::resident_tiles`; `ConcurrentTimingExecutor::schedule_compute(tile, feed, resident)`; `ScheduleExecutor` routing + binder mapping; resident-ordering validation test. (No new behavioral ISA op: softmax on the behavioral tier composes existing `CMB_REDUCE` + `CMB_ELEMENTWISE`, per Section 3; the `[m, l]` rescale semantics live in the CSP binder, T3/T4.) |
 | T3 #156 (generator) | `OnlineSoftmaxScheduleGenerator` (row-resident / re-streamed realization, executable COMPUTEs, `(m,l)` resident hand-off); supersedes the 4-pass `SoftmaxScheduleGenerator`; resolves #139 for softmax |
 | T4 #157 (functional + oracle) | Value-producing online softmax on the CSP executor vs a host safe-softmax oracle (max-subtracted), default + constrained envelopes; behavioral ISA path |
 | T5 #158 (regression) | shape × envelope matrix, credit/stall invariants, and a single-pass-vs-multi-pass DRAM-traffic comparison (the payoff); characterization on the epic; closes the epic |

@@ -335,8 +335,8 @@ Kernel KernelCompiler::compile_mlp(Size M, Size N, Size K,
 
     // Step 3: Generate program
     // Note: For now, we generate the same program as matmul.
-    // The VE configuration is stored in the kernel metadata.
-    // Future: Modify OutputStationaryProgramBuilder to emit VE-enabled drain ops.
+    // The Combiner configuration is stored in the kernel metadata.
+    // Future: Modify OutputStationaryProgramBuilder to emit Combiner-enabled drain ops.
     isa::OutputStationaryProgramBuilder builder(prog_config);
     isa::DMProgram program = builder.build();
 
@@ -368,7 +368,7 @@ Kernel KernelCompiler::compile_mlp(Size M, Size N, Size K,
     Size C_bytes = M * N * elem_size;
     Size bias_bytes = has_bias ? N * elem_size : 0;
 
-    // With VE fusion, we avoid extra memory passes for bias+activation
+    // With Combiner fusion, we avoid extra memory passes for bias+activation
     last_stats_.estimated_external_bytes = A_bytes + B_bytes + C_bytes + bias_bytes;
     last_stats_.estimated_l3_bytes = last_stats_.estimated_external_bytes;
 
@@ -557,7 +557,7 @@ void KernelCompiler::count_operations(const isa::DMProgram& program,
 
 namespace {
 
-isa::DMInstruction ve_marker(isa::DMOpcode opcode, std::string label) {
+isa::DMInstruction cmb_marker(isa::DMOpcode opcode, std::string label) {
     isa::DMInstruction instr;
     instr.opcode = opcode;
     instr.operands = std::monostate{};
@@ -614,8 +614,8 @@ isa::DMProgram KernelCompiler::emit_streaming_program(
                 isa::DMInstruction::bm_move_auto(isa::MatrixID::A, 0),
                 isa::DMInstruction::str_feed_rows_auto(0),
             };
-            if (pass.ve_opcode != isa::DMOpcode::NOP) {
-                body.push_back(ve_marker(pass.ve_opcode, pass.label));
+            if (pass.cmb_opcode != isa::DMOpcode::NOP) {
+                body.push_back(cmb_marker(pass.cmb_opcode, pass.label));
             }
             append_tile_loop(program, loop_id, pass.input_tiles, body);
             loop_id = static_cast<uint8_t>(loop_id + 1);
@@ -660,14 +660,14 @@ Kernel KernelCompiler::compile_softmax(const SoftmaxConfig& config,
     // Numerically stable multi-pass softmax (the online single-pass form
     // is the E8 pattern epic)
     std::vector<StreamingPass> passes = {
-        {"softmax P1: running row max (VE_REDUCE MAX)",
-         isa::DMOpcode::VE_REDUCE, data_tiles, stat_tiles},
-        {"softmax P2: exp(x - max) (VE_ELEMENTWISE SUB,EXP)",
-         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
-        {"softmax P3: row sum of exp (VE_REDUCE SUM)",
-         isa::DMOpcode::VE_REDUCE, data_tiles, stat_tiles},
-        {"softmax P4: normalize by sum (VE_ELEMENTWISE DIV)",
-         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+        {"softmax P1: running row max (CMB_REDUCE MAX)",
+         isa::DMOpcode::CMB_REDUCE, data_tiles, stat_tiles},
+        {"softmax P2: exp(x - max) (CMB_ELEMENTWISE SUB,EXP)",
+         isa::DMOpcode::CMB_ELEMENTWISE, data_tiles, data_tiles},
+        {"softmax P3: row sum of exp (CMB_REDUCE SUM)",
+         isa::DMOpcode::CMB_REDUCE, data_tiles, stat_tiles},
+        {"softmax P4: normalize by sum (CMB_ELEMENTWISE DIV)",
+         isa::DMOpcode::CMB_ELEMENTWISE, data_tiles, data_tiles},
     };
 
     uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
@@ -685,12 +685,12 @@ Kernel KernelCompiler::compile_layernorm(const LayerNormConfig& config,
     Size group_tiles = ceil_div_sz(config.num_groups(), tile_elems);
 
     std::vector<StreamingPass> passes = {
-        {"layernorm P1: per-group mean (VE_REDUCE SUM)",
-         isa::DMOpcode::VE_REDUCE, data_tiles, group_tiles},
-        {"layernorm P2: per-group variance (VE_ELEMENTWISE SUB,SQ + VE_REDUCE SUM)",
-         isa::DMOpcode::VE_REDUCE, data_tiles, group_tiles},
-        {"layernorm P3: normalize + affine (VE_ELEMENTWISE)",
-         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+        {"layernorm P1: per-group mean (CMB_REDUCE SUM)",
+         isa::DMOpcode::CMB_REDUCE, data_tiles, group_tiles},
+        {"layernorm P2: per-group variance (CMB_ELEMENTWISE SUB,SQ + CMB_REDUCE SUM)",
+         isa::DMOpcode::CMB_REDUCE, data_tiles, group_tiles},
+        {"layernorm P3: normalize + affine (CMB_ELEMENTWISE)",
+         isa::DMOpcode::CMB_ELEMENTWISE, data_tiles, data_tiles},
     };
 
     uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
@@ -709,10 +709,10 @@ Kernel KernelCompiler::compile_rmsnorm(const RMSNormConfig& config,
 
     // RMSNorm skips mean centering: one reduction pass, one scale pass
     std::vector<StreamingPass> passes = {
-        {"rmsnorm P1: per-group mean of squares (VE_REDUCE SUMSQ)",
-         isa::DMOpcode::VE_REDUCE, data_tiles, group_tiles},
-        {"rmsnorm P2: x * rsqrt(ms + eps) * gamma (VE_ELEMENTWISE)",
-         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+        {"rmsnorm P1: per-group mean of squares (CMB_REDUCE SUMSQ)",
+         isa::DMOpcode::CMB_REDUCE, data_tiles, group_tiles},
+        {"rmsnorm P2: x * rsqrt(ms + eps) * gamma (CMB_ELEMENTWISE)",
+         isa::DMOpcode::CMB_ELEMENTWISE, data_tiles, data_tiles},
     };
 
     uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
@@ -733,10 +733,10 @@ Kernel KernelCompiler::compile_batchnorm(const BatchNormConfig& config,
         ceil_div_sz(params_per_channel * config.num_features, tile_elems);
 
     std::vector<StreamingPass> passes = {
-        {"batchnorm P0: preload per-channel params (no VE)",
+        {"batchnorm P0: preload per-channel params (no Combiner)",
          isa::DMOpcode::NOP, param_tiles, 0},
-        {"batchnorm P1: (x - mean) * rsqrt(var + eps) * gamma + beta (VE_ELEMENTWISE)",
-         isa::DMOpcode::VE_ELEMENTWISE, data_tiles, data_tiles},
+        {"batchnorm P1: (x - mean) * rsqrt(var + eps) * gamma + beta (CMB_ELEMENTWISE)",
+         isa::DMOpcode::CMB_ELEMENTWISE, data_tiles, data_tiles},
     };
 
     uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
@@ -754,8 +754,8 @@ Kernel KernelCompiler::compile_elementwise(const ElementwiseConfig& config,
     Size input_streams = (config.is_unary || config.is_scalar_b) ? 1 : 2;
 
     std::vector<StreamingPass> passes = {
-        {"elementwise: apply op per tile (VE_ELEMENTWISE)",
-         isa::DMOpcode::VE_ELEMENTWISE, input_streams * data_tiles, data_tiles},
+        {"elementwise: apply op per tile (CMB_ELEMENTWISE)",
+         isa::DMOpcode::CMB_ELEMENTWISE, input_streams * data_tiles, data_tiles},
     };
 
     uint64_t bytes = static_cast<uint64_t>(config.total_elements()) * elem_size;
@@ -773,8 +773,8 @@ Kernel KernelCompiler::compile_pool2d(const Pool2DConfig& config,
     Size out_tiles = ceil_div_sz(config.output_elements(), tile_elems);
 
     std::vector<StreamingPass> passes = {
-        {"pool2d: windowed reduction (VE_REDUCE MAX/AVG)",
-         isa::DMOpcode::VE_REDUCE, in_tiles, out_tiles},
+        {"pool2d: windowed reduction (CMB_REDUCE MAX/AVG)",
+         isa::DMOpcode::CMB_REDUCE, in_tiles, out_tiles},
     };
 
     uint64_t in_bytes = static_cast<uint64_t>(config.input_elements()) * elem_size;

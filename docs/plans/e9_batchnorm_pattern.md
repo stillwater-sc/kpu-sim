@@ -67,7 +67,7 @@ Rationale:
 The `scale/shift` fold is a host-side / param-prep step (fp32, once), exactly as
 the conv+BN weight-prep is. The generator then loads `scale[c]`, `shift[c]`
 (two `[C]` vectors) instead of the four raw params. This is the recommended M2
-route; the four-param in-VE form (compute the full `gamma*(x-mean)*rsqrt(var+eps)
+route; the four-param in-Combiner form (compute the full `gamma*(x-mean)*rsqrt(var+eps)
 +beta` expression per element) is retained as an option (Section 5) but is not
 the default — it carries 2× the resident params for no functional gain at
 inference.
@@ -75,7 +75,7 @@ inference.
 ## 3. The #139 defect and the value path
 
 `BatchNormScheduleGenerator::generate_inference_mode` today emits, per spatial
-tile, `LOAD → MOVE → FEED → DRAIN → WRITEBACK → STORE` with a comment *"VE
+tile, `LOAD → MOVE → FEED → DRAIN → WRITEBACK → STORE` with a comment *"Combiner
 performs (x-mean)*rsqrt(var+eps)*gamma+beta"* — **but no COMPUTE is emitted**, so
 the DRAIN has no producer. This is the batchnorm instance of #139 (the same
 defect class fixed for conv2d in T3, #121). T3 fixes it by emitting a COMPUTE
@@ -102,7 +102,7 @@ DRAIN/writeback/store then move the result out.
 
 ## 5. Alternative realizations (not the M2 default)
 
-1. **Four-param in-VE expression.** Feed `gamma/beta/mean/var` and compute
+1. **Four-param in-Combiner expression.** Feed `gamma/beta/mean/var` and compute
    `gamma*(x-mean)*rsqrt(var+eps)+beta` per element. Matches the current
    generator's four-load structure but keeps `4*C+1` resident params and
    recomputes `rsqrt(var+eps)` per element instead of once at prep. Kept as an
@@ -154,7 +154,7 @@ it out of the M2 critical path).
   tractable — the four-param form would be `4C+1`.)
 - **`rsqrt(var+eps)` numerics.** Computed once at fold time in fp32; reuses the
   E3/E8 clamped-variance discipline (`var+eps > 0`), so no per-element
-  divide-by-zero. `eps` is carried in the fold, not the VE.
+  divide-by-zero. `eps` is carried in the fold, not the Combiner.
 - **Reusing the broadcast path** means BN inherits E2's correctness — the
   broadcast-affine value plane is verified (E2 functional tests), so the risk is
   in the *fold* (param prep) and the *binding* (resident scalar per channel),

@@ -10,7 +10,7 @@
 //   gap:      y[n,c]       = mean_{h,w} x[n,c,h,w]   (global average)
 //
 // The M2 realization is a per-channel im2col window unfold [Hout*Wout, Kh*Kw]
-// reduced along the window axis by the existing VE_REDUCE (MAX / MEAN). This
+// reduced along the window axis by the existing CMB_REDUCE (MAX / MEAN). This
 // header provides the window patchify (with the pooling-specific fill: -inf for
 // MAX so padding never wins, 0 + a valid-count for AVG so the mean excludes
 // padding, matching ref_pool2d) and direct pooling reference oracles. Pooling is
@@ -130,7 +130,7 @@ pool_window_channel(const std::vector<float>& input, const Pool2DGeometry& geom,
 }
 
 /**
- * @brief Reduce one window row to its pooled value (the VE_REDUCE the executor
+ * @brief Reduce one window row to its pooled value (the CMB_REDUCE the executor
  *        applies): MAX -> max element, AVG -> sum / valid-count.
  */
 [[nodiscard]] inline float

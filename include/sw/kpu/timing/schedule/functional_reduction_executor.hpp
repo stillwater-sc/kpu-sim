@@ -21,7 +21,7 @@ namespace sw::kpu::timing::schedule {
 /**
  * @brief Reduce a set of streamed tile payloads to a finalized statistic
  *
- * Matches the VE_REDUCE behavioral ABI (issue #105): population variance,
+ * Matches the CMB_REDUCE behavioral ABI (issue #105): population variance,
  * clamped so cancellation never yields a negative value; empty -> NaN. The
  * result rides lane 0 of a payload sized to the stat tile footprint.
  */

@@ -348,7 +348,7 @@ public:
      * @return Compiled kernel
      *
      * Generates C = activation(A @ B + bias) as a fused operation.
-     * The Vector Engine applies bias and activation inline during
+     * The Combiner applies bias and activation inline during
      * the output drain phase.
      */
     Kernel compile_mlp(Size M, Size N, Size K,
@@ -364,9 +364,9 @@ public:
     // Each produces an op-faithful DMProgram: loop-based streaming of the
     // real tile traffic (DMA_LOAD -> BM_MOVE -> STR_FEED per input tile,
     // STR_DRAIN -> BM_WRITEBACK -> DMA_STORE per output tile) with
-    // VE_ELEMENTWISE / VE_REDUCE instructions marking the per-pass compute.
+    // CMB_ELEMENTWISE / CMB_REDUCE instructions marking the per-pass compute.
     // These replace the matmul-piggyback placeholders that made a "softmax
-    // kernel" execute a matmul. The VE opcodes are structural markers today
+    // kernel" execute a matmul. The Combiner opcodes are structural markers today
     // (operand encoding and functional semantics land with the
     // broadcast/elementwise and online-reduction pattern epics, E2/E3);
     // the movement, tiling, memory traffic, and FLOP accounting are real.
@@ -480,13 +480,13 @@ private:
      * @brief One pass of a streaming operator
      *
      * A pass streams input_tiles through the pipeline, applies the marked
-     * VE compute per tile, and (when output_tiles > 0) drains/stores that
-     * many result tiles. ve_opcode NOP means pure data movement (e.g. a
+     * Combiner compute per tile, and (when output_tiles > 0) drains/stores that
+     * many result tiles. cmb_opcode NOP means pure data movement (e.g. a
      * parameter preload pass).
      */
     struct StreamingPass {
         std::string label;            ///< Human-readable pass description
-        isa::DMOpcode ve_opcode;      ///< VE_ELEMENTWISE, VE_REDUCE, or NOP
+        isa::DMOpcode cmb_opcode;      ///< CMB_ELEMENTWISE, CMB_REDUCE, or NOP
         Size input_tiles = 0;         ///< Tiles streamed in
         Size output_tiles = 0;        ///< Result tiles drained/stored
     };

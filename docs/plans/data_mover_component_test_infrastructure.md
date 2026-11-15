@@ -77,7 +77,7 @@ struct StreamerHarnessConfig : HarnessConfig {
     size_t l2_banks = 16;
     size_t l1_depth = 4;                  // Pipeline depth
     size_t systolic_size = 16;
-    bool enable_vector_engine = true;
+    bool enable_combiner = true;
 };
 
 // Full pipeline config

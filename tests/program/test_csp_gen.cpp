@@ -91,7 +91,7 @@ TEST_CASE("csp-gen: linear, every placement and orientation, computes the same v
     // A fused epilogue computes with the unfused one's element functions, so every placement and
     // both orientations of one activation agree bit for bit.
     std::map<std::string, std::vector<float>> first;       // activation -> the first schedule's C
-    for (const char* place : {"fabric", "str.drain", "bm.egress", "unfused"})
+    for (const char* place : {"fabric", "combiner", "bm.egress", "unfused"})
         for (ActivationFn act : {ActivationFn::Relu, ActivationFn::Gelu, ActivationFn::Silu, ActivationFn::Atan})
             for (const char* orient : {"col", "row"}) {
                 gen::Options o;
@@ -146,7 +146,7 @@ TEST_CASE("csp-gen: a schedule that does not fit the L3 is refused, with its slo
 TEST_CASE("csp-gen: placement is checked against the target", "[program][csp][gen]") {
     lang::Target t;
     t.bm = std::set<VeOp>{VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu};
-    t.str = std::set<VeOp>{VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu, VeOp::Atan};
+    t.combiner = std::set<VeOp>{VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu, VeOp::Atan};
     gen::Options o;
     o.algo = "linear";
     o.size = 64;
@@ -156,7 +156,7 @@ TEST_CASE("csp-gen: placement is checked against the target", "[program][csp][ge
     o.place = "bm.egress";
     CHECK_THROWS_WITH(gen::generate(o, &t), ContainsSubstring("atan @ bm.egress: the target's BlockMover vector unit "
                                                               "runs add, relu, gelu, silu, not atan"));
-    o.place = "str.drain";
+    o.place = "combiner";
     CHECK_NOTHROW(gen::generate(o, &t));
     o.place = "fabric";
     CHECK_THROWS_WITH(gen::generate(o, &t), ContainsSubstring("atan @ fabric"));

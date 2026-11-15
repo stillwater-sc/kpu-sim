@@ -1,21 +1,21 @@
 // ============================================================================
-// src/models/behavioral/compute/vector_engine.cpp
-// Behavioral Vector Engine implementation
+// src/models/behavioral/compute/combiner.cpp
+// Behavioral Combiner implementation
 // ============================================================================
 
-#include <sw/kpu/models/behavioral/compute/vector_engine.hpp>
+#include <sw/kpu/models/behavioral/compute/combiner.hpp>
 #include <stdexcept>
 
 namespace sw::kpu::behavioral {
 
-BehavioralVectorEngine::BehavioralVectorEngine()
+BehavioralCombiner::BehavioralCombiner()
     : sfu_()
 {
     // Default SFU configuration
     sfu_.configure(ActivationType::NONE);
 }
 
-void BehavioralVectorEngine::apply_bias_activation(
+void BehavioralCombiner::apply_bias_activation(
     BehavioralMemoryModel* memory,
     Address data_addr,
     uint32_t height,
@@ -24,7 +24,7 @@ void BehavioralVectorEngine::apply_bias_activation(
     ActivationType activation)
 {
     if (!memory) {
-        throw std::invalid_argument("BehavioralVectorEngine: memory is null");
+        throw std::invalid_argument("BehavioralCombiner: memory is null");
     }
 
     // Get data pointer
@@ -40,7 +40,7 @@ void BehavioralVectorEngine::apply_bias_activation(
     process_inplace(data, height, width, bias, activation);
 }
 
-void BehavioralVectorEngine::apply_activation(
+void BehavioralCombiner::apply_activation(
     BehavioralMemoryModel* memory,
     Address data_addr,
     uint32_t height,
@@ -50,7 +50,7 @@ void BehavioralVectorEngine::apply_activation(
     apply_bias_activation(memory, data_addr, height, width, 0, activation);
 }
 
-void BehavioralVectorEngine::apply_bias(
+void BehavioralCombiner::apply_bias(
     BehavioralMemoryModel* memory,
     Address data_addr,
     uint32_t height,
@@ -60,7 +60,7 @@ void BehavioralVectorEngine::apply_bias(
     apply_bias_activation(memory, data_addr, height, width, bias_addr, ActivationType::NONE);
 }
 
-void BehavioralVectorEngine::process_inplace(
+void BehavioralCombiner::process_inplace(
     float* data,
     uint32_t height,
     uint32_t width,
@@ -68,7 +68,7 @@ void BehavioralVectorEngine::process_inplace(
     ActivationType activation)
 {
     if (!data) {
-        throw std::invalid_argument("BehavioralVectorEngine: data is null");
+        throw std::invalid_argument("BehavioralCombiner: data is null");
     }
 
     // Configure SFU for the activation
@@ -98,13 +98,13 @@ void BehavioralVectorEngine::process_inplace(
     stats_.elements_processed += static_cast<uint64_t>(height) * width;
 }
 
-void BehavioralVectorEngine::apply_activation_1d(
+void BehavioralCombiner::apply_activation_1d(
     float* data,
     uint32_t count,
     ActivationType activation)
 {
     if (!data) {
-        throw std::invalid_argument("BehavioralVectorEngine: data is null");
+        throw std::invalid_argument("BehavioralCombiner: data is null");
     }
 
     if (activation == ActivationType::NONE) {

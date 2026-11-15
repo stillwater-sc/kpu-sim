@@ -59,10 +59,10 @@ stream_compute:
     BARRIER
 
 ; ============================================================
-; Drain output with fused ReLU activation via Vector Engine
+; Drain output with fused ReLU activation via Combiner
 ; ============================================================
 drain_with_relu:
-    STR_DRAIN_OUTPUT (0,0,0), 2, 0, 0, 0, 36, 8, 16, BUF_0, VE_ENABLE RELU
+    STR_DRAIN_OUTPUT (0,0,0), 2, 0, 0, 0, 36, 8, 16, BUF_0, CMB_ENABLE RELU
     BARRIER
 
 ; ============================================================

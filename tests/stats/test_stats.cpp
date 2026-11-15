@@ -372,7 +372,7 @@ TEST_CASE("Resource Utilization (v0.3.4)", "[stats][utilization][v034]") {
 
     SECTION("Resource type to_string") {
         REQUIRE(std::string(to_string(ResourceType::SYSTOLIC_ARRAY)) == "systolic_array");
-        REQUIRE(std::string(to_string(ResourceType::VECTOR_ENGINE)) == "vector_engine");
+        REQUIRE(std::string(to_string(ResourceType::COMBINER)) == "combiner");
         REQUIRE(std::string(to_string(ResourceType::MEMORY_CONTROLLER)) == "memory_controller");
         REQUIRE(std::string(to_string(ResourceType::DMA_ENGINE)) == "dma_engine");
     }

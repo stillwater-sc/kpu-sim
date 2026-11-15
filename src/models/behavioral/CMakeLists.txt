@@ -10,7 +10,7 @@ set(BEHAVIORAL_SOURCES
     memory/l3_tile.cpp
     # Compute models
     compute/compute_fabric.cpp
-    compute/vector_engine.cpp
+    compute/combiner.cpp
     # Data movement models
     datamovement/dma_engine.cpp
     datamovement/block_mover.cpp
@@ -27,7 +27,7 @@ set(BEHAVIORAL_HEADERS
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/memory/memory_controller.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/memory/l3_tile.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/compute/compute_fabric.hpp
-    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/compute/vector_engine.hpp
+    ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/compute/combiner.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/datamovement/block_mover.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/datamovement/dma_engine.hpp
     ${CMAKE_SOURCE_DIR}/include/sw/kpu/models/behavioral/noc/noc.hpp

@@ -269,7 +269,7 @@ private:
                     result.operations.push_back(ScheduleOperation::feed(scale_tile));
                     result.operations.push_back(ScheduleOperation::feed(shift_tile));
 
-                    // y = x * scale[c] + shift[c] (a Vector Engine affine).
+                    // y = x * scale[c] + shift[c] (a Combiner affine).
                     auto output_tile = make_output_tile(n, c, si);
                     result.operations.push_back(ScheduleOperation::compute(
                         output_tile, {input_tile.tile_id, scale_tile.tile_id,
@@ -304,7 +304,7 @@ private:
                     result.operations.push_back(ScheduleOperation::load(tile));
                     result.operations.push_back(ScheduleOperation::move(tile));
                     result.operations.push_back(ScheduleOperation::feed(tile));
-                    // VE accumulates sum
+                    // Combiner accumulates sum
                 }
             }
 
@@ -322,7 +322,7 @@ private:
                     result.operations.push_back(ScheduleOperation::load(tile));
                     result.operations.push_back(ScheduleOperation::move(tile));
                     result.operations.push_back(ScheduleOperation::feed(tile));
-                    // VE computes: (x - mean)^2, accumulates
+                    // Combiner computes: (x - mean)^2, accumulates
                 }
             }
 

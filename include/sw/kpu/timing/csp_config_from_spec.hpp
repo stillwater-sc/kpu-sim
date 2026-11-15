@@ -19,7 +19,7 @@
 //   movers.streamers         split over the row and column streamer pools, at least one each
 //   noc.port.output_queue_blocks   dma_store_buffer_blocks, when declared (0 = derived: noted)
 //   dma.window               dma_window: bursts each engine keeps in flight (needs memory.dram)
-//   movers.vector.{bm,str}   bm_ve_lanes/rate, str_ve_lanes/rate: the vector units a tile
+//   movers.vector.bm, combiner   bm_ve_lanes/rate, combiner_lanes/rate: the vector units a tile
 //                            context's stages run on (absent = 0 lanes: the site has none)
 //
 // NOT MAPPED, listed in `unmapped`: the spec's rates (dma.bytes_per_cycle and the movers'
@@ -130,9 +130,9 @@ inline std::optional<CspDeviceConfig> csp_config_from(
         c.bm_ve_lanes = d.movers.bm_vector->lanes;
         c.bm_ve_rate = d.movers.bm_vector->rate;
     }
-    if (d.movers.str_vector) {
-        c.str_ve_lanes = d.movers.str_vector->lanes;
-        c.str_ve_rate = d.movers.str_vector->rate;
+    if (d.combiner) {
+        c.combiner_lanes = d.combiner->lanes;
+        c.combiner_rate = d.combiner->rate;
     }
 
     if (d.fabric.pe_rows)

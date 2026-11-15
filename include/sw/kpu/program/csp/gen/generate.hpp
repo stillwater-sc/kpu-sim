@@ -19,7 +19,7 @@
 //           step 3).
 //   linear  matmul plus the epilogue act(C + b): the bias vector b[j] is resident with B's
 //           panel, and `place` writes the context -- `via add(b[j]) @ P, act @ P` for
-//           P = fabric | str.drain | bm.egress -- or "unfused": a second pass that reads C
+//           P = fabric | combiner | bm.egress -- or "unfused": a second pass that reads C
 //           back and applies add and act as calls. L3: the matmul's + 1 (fused), and 2 for the
 //           unfused pass.
 //   lu      right-looking tile LU, A resident whole: getrf, laswp across the row block, the
@@ -57,7 +57,7 @@ struct Options {
     std::size_t l3 = 0;                     // the machine's L3, in tiles (required)
     std::string orient = "col";             // matmul, linear: col | row
     ActivationFn act = ActivationFn::Relu;  // linear
-    std::string place = "fabric";           // linear: fabric | str.drain | bm.egress | unfused
+    std::string place = "fabric";           // linear: fabric | combiner | bm.egress | unfused
     bool stage_a = false;                   // matmul, orient row: stage A's row panel in L2
     // matmul: where each accumulator starts (docs/plans/accumulator-init-stream.md). none: zero;
     // bias: C = A . B + D, D tiled as C; bias-row: C = A . B + b, b broadcast down C's rows;
@@ -97,9 +97,9 @@ inline void check(const Options& o) {
     if (o.l3 == 0) throw GenError("csp-gen: the machine's L3 capacity (tiles) is required");
     if (o.algo != "lu" && o.orient != "col" && o.orient != "row")
         throw GenError("csp-gen: orient '" + o.orient + "' (col | row)");
-    if (o.algo == "linear" && o.place != "fabric" && o.place != "str.drain" && o.place != "bm.egress" &&
+    if (o.algo == "linear" && o.place != "fabric" && o.place != "combiner" && o.place != "bm.egress" &&
         o.place != "unfused")
-        throw GenError("csp-gen: place '" + o.place + "' (fabric | str.drain | bm.egress | unfused)");
+        throw GenError("csp-gen: place '" + o.place + "' (fabric | combiner | bm.egress | unfused)");
     if (o.stage_a && o.algo != "matmul") throw GenError("csp-gen: stage_a is matmul's; --algo is '" + o.algo + "'");
     if (o.init != "none" && o.init != "bias" && o.init != "bias-row" && o.init != "accumulate")
         throw GenError("csp-gen: init '" + o.init + "' (none | bias | bias-row | accumulate)");

@@ -198,10 +198,10 @@ private:
      * @brief Generate multi-pass softmax schedule
      *
      * Pass structure:
-     * 1. LOAD input tiles, compute running max (FEED -> Vector Engine MAX reduce)
-     * 2. LOAD input tiles again, subtract max and exp (FEED -> VE SUB, EXP)
-     * 3. Compute sum of exponentials (VE SUM reduce)
-     * 4. Divide by sum to normalize (VE DIV)
+     * 1. LOAD input tiles, compute running max (FEED -> Combiner MAX reduce)
+     * 2. LOAD input tiles again, subtract max and exp (FEED -> Combiner SUB, EXP)
+     * 3. Compute sum of exponentials (Combiner SUM reduce)
+     * 4. Divide by sum to normalize (Combiner DIV)
      * 5. DRAIN and STORE output tiles
      */
     void generate_multi_pass(ScheduleResult& result) {
@@ -218,7 +218,7 @@ private:
                 result.operations.push_back(ScheduleOperation::load(tile));
                 result.operations.push_back(ScheduleOperation::move(tile));
                 result.operations.push_back(ScheduleOperation::feed(tile));
-                // VE would perform MAX reduction - modeled as compute
+                // Combiner would perform MAX reduction - modeled as compute
             }
 
             // Drain max result to scratch
@@ -234,7 +234,7 @@ private:
                 result.operations.push_back(ScheduleOperation::load(tile));
                 result.operations.push_back(ScheduleOperation::move(tile));
                 result.operations.push_back(ScheduleOperation::feed(tile));
-                // VE performs: SUB max, then EXP
+                // Combiner performs: SUB max, then EXP
             }
 
             // Drain exp results to intermediate storage
@@ -252,7 +252,7 @@ private:
                 result.operations.push_back(ScheduleOperation::load(exp_tile));
                 result.operations.push_back(ScheduleOperation::move(exp_tile));
                 result.operations.push_back(ScheduleOperation::feed(exp_tile));
-                // VE performs SUM reduction
+                // Combiner performs SUM reduction
             }
 
             // Drain sum to scratch
@@ -269,7 +269,7 @@ private:
                 result.operations.push_back(ScheduleOperation::load(exp_tile));
                 result.operations.push_back(ScheduleOperation::move(exp_tile));
                 result.operations.push_back(ScheduleOperation::feed(exp_tile));
-                // VE performs DIV by sum
+                // Combiner performs DIV by sum
 
                 // Output normalized tile
                 auto out_tile = make_output_tile(bi, ri);

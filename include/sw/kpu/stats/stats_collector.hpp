@@ -262,8 +262,8 @@ public:
         total_flops_.fetch_add(flops, std::memory_order_relaxed);
     }
 
-    void record_vector_engine_busy(uint64_t cycles, uint32_t instance = 0) {
-        utilization_.record_busy(ResourceType::VECTOR_ENGINE, instance, cycles);
+    void record_combiner_busy(uint64_t cycles, uint32_t instance = 0) {
+        utilization_.record_busy(ResourceType::COMBINER, instance, cycles);
     }
 
     void record_memory_controller_busy(uint64_t cycles, uint32_t instance = 0) {

@@ -162,10 +162,10 @@ Do we have what the PLASMA methodology needs? Per primitive family:
 | # | Primitive | Needed by | KPU status | Gap / action |
 |---|---|---|---|---|
 | **P1** | MAC / GEMM array | all | **Have** — the compute fabric is a systolic MAC array; L0 `MATMUL_ACCUM` proven | none |
-| **P2** | Triangular substitution (dependent MAC + divide) | TRSM, GESSM, POTRF, GETRF | **Partial** — functional reference has TRSM; fabric support for a substitution *dataflow* (vs. GEMM) is unmodeled | Model a TRSM fabric configuration / decide it runs on the VE; needs P3 divide |
-| **P3** | Scalar divide / reciprocal / **sqrt** | GETRF, TRSM (divide); POTRF, QR (sqrt) | **Gap** ([#242](https://github.com/stillwater-sc/kpu-sim/issues/242)) — the fabric is MAC-only; no divide/sqrt unit is modeled | Add a scalar/special-function capability (fabric or VE); required before Cholesky/QR |
-| **P4** | Reductions: sum-of-squares, **argmax-with-index** | QR norms (sum); pivoting (argmax) | **Partial** — `VE_REDUCE` exists (sum/max); argmax **with index** for pivoting is unconfirmed | Confirm/add index-returning argmax reduction |
-| **P5** | Data-dependent row permute (pivot swap) | GETRF, LASWP, TSTRF | **Gap** ([#243](https://github.com/stillwater-sc/kpu-sim/issues/243)) — no row-exchange primitive; movers do tile moves, not value-selected row swaps | Decide: BlockMover-driven row swap vs. VE permute; model it (incl. P4 argmax-with-index) |
+| **P2** | Triangular substitution (dependent MAC + divide) | TRSM, GESSM, POTRF, GETRF | **Partial** — functional reference has TRSM; fabric support for a substitution *dataflow* (vs. GEMM) is unmodeled | Model a TRSM fabric configuration / decide it runs on the Combiner; needs P3 divide |
+| **P3** | Scalar divide / reciprocal / **sqrt** | GETRF, TRSM (divide); POTRF, QR (sqrt) | **Gap** ([#242](https://github.com/stillwater-sc/kpu-sim/issues/242)) — the fabric is MAC-only; no divide/sqrt unit is modeled | Add a scalar/special-function capability (fabric or Combiner); required before Cholesky/QR |
+| **P4** | Reductions: sum-of-squares, **argmax-with-index** | QR norms (sum); pivoting (argmax) | **Partial** — `CMB_REDUCE` exists (sum/max); argmax **with index** for pivoting is unconfirmed | Confirm/add index-returning argmax reduction |
+| **P5** | Data-dependent row permute (pivot swap) | GETRF, LASWP, TSTRF | **Gap** ([#243](https://github.com/stillwater-sc/kpu-sim/issues/243)) — no row-exchange primitive; movers do tile moves, not value-selected row swaps | Decide: BlockMover-driven row swap vs. Combiner permute; model it (incl. P4 argmax-with-index) |
 | **P6** | On-chip tile residency + reuse moves (L3↔L3 / L2) | all factor kernels (diagonal reused across row/col) | **Gap** ([#244](https://github.com/stillwater-sc/kpu-sim/issues/244)) — timing tier is single-compute-tile; L3/L2 are credit pools, no inter-tile reuse move | The separate multi-compute-tile executor issue (§4a of the program model) |
 | **P7** | In-place tile RMW + DAG scheduling on tile deps | all | **Partial** — L0 reference does in-place RMW; DAG recovery/placement is the driver-JIT pass (§4a), not yet built | Increment 3 (placement pass) |
 
@@ -183,7 +183,7 @@ of leverage:
 4. **P2 triangular-substitution fabric mode** — gates hardware-faithful TRSM timing.
 
 These are hardware-capability questions the simulator must answer (which fidelity
-tier models each; whether the fabric or a vector engine owns P3/P4/P5). The L0
+tier models each; whether the fabric or a Combiner owns P3/P4/P5). The L0
 functional layer can *represent and validate the math* of every kernel ahead of the
 hardware model — which is what the test plan below drives.
 
@@ -232,16 +232,16 @@ rows so a milestone can't over-claim linear-algebra support.
 A capability matrix asserting the simulator/ISA actually provides each primitive a
 kernel needs — this is the "do we have the HW requirements" gate. For each
 (kernel × primitive) cell, a probe test that either exercises the primitive on the
-compute fabric / VE / mover, or is marked an explicit **gap** with an issue:
+compute fabric / Combiner / mover, or is marked an explicit **gap** with an issue:
 
 - **P1 MAC:** already covered by the matmul timing tests.
 - **P2 TRSM mode:** probe that a triangular-substitution schedule runs on the fabric
-  (or is declared VE-owned).
+  (or is declared Combiner-owned).
 - **P3 divide/sqrt:** probe the compute ISA for a reciprocal/sqrt op; **gap →
   [#242](https://github.com/stillwater-sc/kpu-sim/issues/242)** (scalar special-functions).
-- **P4 argmax-with-index:** probe `VE_REDUCE` for index-returning max; tracked with
+- **P4 argmax-with-index:** probe `CMB_REDUCE` for index-returning max; tracked with
   P5 in [#243](https://github.com/stillwater-sc/kpu-sim/issues/243).
-- **P5 row-swap:** probe a value-selected row exchange (BlockMover or VE); **gap →
+- **P5 row-swap:** probe a value-selected row exchange (BlockMover or Combiner); **gap →
   [#243](https://github.com/stillwater-sc/kpu-sim/issues/243)** (pivoting).
 - **P6 multi-CF residency/reuse:** blocked on the multi-compute-tile executor issue
   **[#244](https://github.com/stillwater-sc/kpu-sim/issues/244)**.

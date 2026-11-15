@@ -174,10 +174,10 @@ void disassemble_instruction(const DMInstruction& instr, size_t index, bool verb
                       << " L2[" << (int)arg.l2_bank_id << "]:" << format_address(arg.l2_addr)
                       << " <-> L1[" << (int)arg.l1_buffer_id << "]:" << format_address(arg.l1_addr)
                       << " (" << arg.height << "x" << arg.width << ")";
-            if (arg.ve_enabled) {
-                std::cout << " [VE: " << activation_type_name(arg.ve_activation);
-                if (arg.ve_bias_enabled) {
-                    std::cout << "+bias@" << format_address(arg.ve_bias_addr);
+            if (arg.cmb_enabled) {
+                std::cout << " [Combiner: " << activation_type_name(arg.cmb_activation);
+                if (arg.cmb_bias_enabled) {
+                    std::cout << "+bias@" << format_address(arg.cmb_bias_addr);
                 }
                 std::cout << "]";
             }

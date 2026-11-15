@@ -229,11 +229,11 @@ static Kernel create_pool2d(
 
 **Implementation notes:**
 
-Pooling is typically memory-bound and can be fused with adjacent convolutions. The Vector Engine could handle this inline during drain operations.
+Pooling is typically memory-bound and can be fused with adjacent convolutions. The Combiner could handle this inline during drain operations.
 
 **Files to modify:**
 - `include/sw/kpu/kernel.hpp` - Add factory method
-- `include/sw/kpu/components/sfu.hpp` - Add pooling to Vector Engine
+- `include/sw/kpu/components/sfu.hpp` - Add pooling to Combiner
 - ISA may need new opcodes for strided reads
 
 **Estimated effort:** 2-3 days
@@ -306,7 +306,7 @@ static Kernel create_elementwise(
 
 **Files to modify:**
 - `include/sw/kpu/kernel.hpp` - Add factory method
-- Vector Engine can handle simple element-wise ops inline
+- Combiner can handle simple element-wise ops inline
 
 **Estimated effort:** 2 days
 

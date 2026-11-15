@@ -2,7 +2,7 @@
  * @file softmax_schedule.hpp
  * @brief Softmax schedule: y[b,i] = exp(x[b,i] - max) / sum(exp(x[b,i] - max))
  *
- * Three-pass reduction + elementwise kernel using the Vector Engine.
+ * Three-pass reduction + elementwise kernel using the Combiner.
  */
 
 #pragma once
@@ -12,7 +12,7 @@
 namespace sw::kpu::schedules {
 
 /**
- * @brief Create a softmax schedule (multi-pass VE kernel).
+ * @brief Create a softmax schedule (multi-pass Combiner kernel).
  *
  * Pass 1: Find max per row (reduction over D)
  * Pass 2: Compute exp(x - max) (elementwise over D)

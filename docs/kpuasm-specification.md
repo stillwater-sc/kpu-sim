@@ -163,15 +163,15 @@ STR_FEED_COLS matrix, tile_coord, l2_bank, l1_buffer, l2_addr, l1_addr, height, 
 
 **STR_DRAIN_OUTPUT** - Drain output from systolic array (C matrix)
 ```asm
-STR_DRAIN_OUTPUT tile_coord, l2_bank, l1_buffer, l2_addr, l1_addr, height, width, fabric_size, buffer [, VE options]
-; VE options (optional):
-;   VE_ENABLE activation [, BIAS bias_addr]
+STR_DRAIN_OUTPUT tile_coord, l2_bank, l1_buffer, l2_addr, l1_addr, height, width, fabric_size, buffer [, Combiner options]
+; Combiner options (optional):
+;   CMB_ENABLE activation [, BIAS bias_addr]
 ;   activation: NONE | RELU | GELU | SIGMOID | TANH | SWISH
 
 ; Examples:
 STR_DRAIN_OUTPUT (0,0,0), 0, 0, 0, 0, 16, 16, 16, BUF_0
-STR_DRAIN_OUTPUT (0,0,0), 0, 0, 0, 0, 16, 16, 16, BUF_0, VE_ENABLE RELU
-STR_DRAIN_OUTPUT (0,0,0), 0, 0, 0, 0, 16, 16, 16, BUF_0, VE_ENABLE RELU, BIAS 0x3000
+STR_DRAIN_OUTPUT (0,0,0), 0, 0, 0, 0, 16, 16, 16, BUF_0, CMB_ENABLE RELU
+STR_DRAIN_OUTPUT (0,0,0), 0, 0, 0, 0, 16, 16, 16, BUF_0, CMB_ENABLE RELU, BIAS 0x3000
 ```
 
 **STR_BROADCAST_ROW** - Broadcast row to all PE columns
@@ -184,17 +184,20 @@ STR_BROADCAST_ROW matrix, tile_coord, l2_bank, l1_buffer, l2_addr, l1_addr, heig
 STR_BROADCAST_COL matrix, tile_coord, l2_bank, l1_buffer, l2_addr, l1_addr, height, width, fabric_size, buffer
 ```
 
-### Vector Engine Operations
+### Combiner Operations
 
-**VE_ELEMENTWISE** - Elementwise operation
+> **Renamed in #429.** The Combiner was called the Vector Engine. Its mnemonics were `VE_ELEMENTWISE`, `VE_REDUCE` and `VE_ENABLE`; the assembler still accepts them as deprecated aliases for one release, and they assemble to the same binary. Program JSON written with the `ve_*` drain fields still loads.
+
+
+**CMB_ELEMENTWISE** - Elementwise operation
 ```asm
-VE_ELEMENTWISE operation
+CMB_ELEMENTWISE operation
 ; operation: ADD | SUB | MUL | DIV | EXP | LOG | SQRT | ABS | NEG
 ```
 
-**VE_REDUCE** - Reduction operation
+**CMB_REDUCE** - Reduction operation
 ```asm
-VE_REDUCE operation
+CMB_REDUCE operation
 ; operation: MAX | MIN | SUM | MEAN
 ```
 

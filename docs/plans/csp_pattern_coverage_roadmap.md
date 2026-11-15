@@ -37,7 +37,7 @@ Status today: P1 exists (matmul generators, envelope-aware per #67, with
 value-producing execution per #66). P3 exists in multi-pass form (softmax /
 layernorm / batchnorm generators). P4, P5, P6 have ISA opcodes that are
 **annotation-only** (`DMA_LOAD_GATHER/STORE_SCATTER`, `STR_BROADCAST_*`,
-`VE_ELEMENTWISE/REDUCE` — no-ops in the executors); P7 has opcodes
+`CMB_ELEMENTWISE/REDUCE` — no-ops in the executors); P7 has opcodes
 (`BM_TRANSPOSE/RESHAPE`) exercised only for B-matrix transpose. P2, P8, P9
 do not exist.
 
@@ -73,8 +73,8 @@ epics; operator epics then compose them.
 |---|---|---|---|
 | E0 | Pattern infrastructure hardening: PartitionedCreditPool wiring, envelope for all existing generators, envelope-mismatch warning in ScheduleExecutor (absorbs #67 follow-ups, #18) | — | everything |
 | E1 | Gather/scatter movement (indirect addressing, functional `DMA_LOAD_GATHER`/`STORE_SCATTER`) | P4 | embedding, KV-cache, JEPA masking |
-| E2 | Broadcast + two-operand aligned streaming (functional `STR_BROADCAST_*`, `VE_ELEMENTWISE`) | P5, P6 | bias, residual, gating, RoPE |
-| E3 | Streaming/online reductions (functional `VE_REDUCE`, running max/sum/mean/var in compute) | P3 | online softmax, norms, flash attention |
+| E2 | Broadcast + two-operand aligned streaming (functional `STR_BROADCAST_*`, `CMB_ELEMENTWISE`) | P5, P6 | bias, residual, gating, RoPE |
+| E3 | Streaming/online reductions (functional `CMB_REDUCE`, running max/sum/mean/var in compute) | P3 | online softmax, norms, flash attention |
 | E4 | Layout transforms in flight (functional `BM_TRANSPOSE`/`BM_RESHAPE` beyond B-transpose; patchify; head split/merge) | P7 | ViT, attention, im2col |
 
 ### Wave 1 — Dense compute operators

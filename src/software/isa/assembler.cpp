@@ -293,8 +293,9 @@ DMProgram Assembler::assemble(const std::string& source, const std::string& file
                 else if (id.text == "STR_DRAIN_OUTPUT") { instr = parse_str_drain_output(); }
                 else if (id.text == "STR_BROADCAST_ROW") { instr = parse_str_broadcast_row(); }
                 else if (id.text == "STR_BROADCAST_COL") { instr = parse_str_broadcast_col(); }
-                else if (id.text == "VE_ELEMENTWISE") { instr = parse_ve_elementwise(); }
-                else if (id.text == "VE_REDUCE") { instr = parse_ve_reduce(); }
+                // VE_* are the pre-Combiner mnemonics (#429), deprecated for one release.
+                else if (id.text == "CMB_ELEMENTWISE" || id.text == "VE_ELEMENTWISE") { instr = parse_cmb_elementwise(); }
+                else if (id.text == "CMB_REDUCE" || id.text == "VE_REDUCE") { instr = parse_cmb_reduce(); }
                 else if (id.text == "BARRIER") { instr = parse_barrier(); }
                 else if (id.text == "WAIT_DMA") { instr = parse_wait_dma(); }
                 else if (id.text == "WAIT_BM") { instr = parse_wait_bm(); }
@@ -726,25 +727,25 @@ DMInstruction Assembler::parse_str_drain_output() {
     match(TokenType::COMMA);
     ops.buffer = parse_buffer_slot();
 
-    // Check for optional VE options
+    // Check for optional Combiner options
     if (match(TokenType::COMMA)) {
-        Token tok = consume(TokenType::IDENTIFIER, "VE_ENABLE or end of operands");
-        if (tok.text == "VE_ENABLE") {
-            ops.ve_enabled = true;
-            ops.ve_activation = parse_activation_type();
+        Token tok = consume(TokenType::IDENTIFIER, "CMB_ENABLE or end of operands");
+        if (tok.text == "CMB_ENABLE" || tok.text == "VE_ENABLE") {   // VE_ENABLE: deprecated (#429)
+            ops.cmb_enabled = true;
+            ops.cmb_activation = parse_activation_type();
 
             // Check for optional BIAS
             if (match(TokenType::COMMA)) {
                 Token bias_tok = consume(TokenType::IDENTIFIER, "BIAS");
                 if (bias_tok.text == "BIAS") {
-                    ops.ve_bias_enabled = true;
-                    ops.ve_bias_addr = parse_address();
+                    ops.cmb_bias_enabled = true;
+                    ops.cmb_bias_addr = parse_address();
                 } else {
-                    error("expected 'BIAS' after VE_ENABLE activation");
+                    error("expected 'BIAS' after CMB_ENABLE activation");
                 }
             }
         } else {
-            error("expected 'VE_ENABLE'");
+            error("expected 'CMB_ENABLE'");
         }
     }
 
@@ -764,28 +765,28 @@ DMInstruction Assembler::parse_str_broadcast_col() {
     return instr;
 }
 
-DMInstruction Assembler::parse_ve_elementwise() {
+DMInstruction Assembler::parse_cmb_elementwise() {
     // Syntax (issue #100):
-    //   binary:  VE_ELEMENTWISE <OP>, <l1_src_a>, <l1_src_b>, <l1_dst>
-    //   unary:   VE_ELEMENTWISE <OP>, <l1_src>, <l1_dst>
-    //   scalar:  VE_ELEMENTWISE <OP_S> <scalar>, <l1_src>, <l1_dst>
+    //   binary:  CMB_ELEMENTWISE <OP>, <l1_src_a>, <l1_src_b>, <l1_dst>
+    //   unary:   CMB_ELEMENTWISE <OP>, <l1_src>, <l1_dst>
+    //   scalar:  CMB_ELEMENTWISE <OP_S> <scalar>, <l1_src>, <l1_dst>
     DMInstruction instr;
-    instr.opcode = DMOpcode::VE_ELEMENTWISE;
+    instr.opcode = DMOpcode::CMB_ELEMENTWISE;
 
     Token op_tok = consume(TokenType::IDENTIFIER, "elementwise operation");
-    VEOp op;
-    if (!ve_op_from_string(op_tok.text, op)) {
-        error("Unknown VE elementwise operation: " + op_tok.text);
+    CMBOp op;
+    if (!cmb_op_from_string(op_tok.text, op)) {
+        error("Unknown Combiner elementwise operation: " + op_tok.text);
     }
 
-    VEOperands ops;
+    CMBOperands ops;
     ops.op = op;
 
     const bool scalar_form =
-        op == VEOp::ADD_S || op == VEOp::MUL_S || op == VEOp::POW_S;
+        op == CMBOp::ADD_S || op == CMBOp::MUL_S || op == CMBOp::POW_S;
     const bool unary_form =
-        scalar_form || op == VEOp::NEG || op == VEOp::ABS ||
-        op == VEOp::SQRT || op == VEOp::EXP || op == VEOp::LOG;
+        scalar_form || op == CMBOp::NEG || op == CMBOp::ABS ||
+        op == CMBOp::SQRT || op == CMBOp::EXP || op == CMBOp::LOG;
 
     if (scalar_form) {
         ops.scalar = static_cast<float>(parse_number());
@@ -807,21 +808,21 @@ DMInstruction Assembler::parse_ve_elementwise() {
     return instr;
 }
 
-DMInstruction Assembler::parse_ve_reduce() {
-    // VE_REDUCE <OP>, <l1_src>, <l1_acc> [, INIT] [, FINALIZE]
+DMInstruction Assembler::parse_cmb_reduce() {
+    // CMB_REDUCE <OP>, <l1_src>, <l1_acc> [, INIT] [, FINALIZE]
     // ACCUMULATE is implied; INIT and FINALIZE are optional phase flags.
     DMInstruction instr;
-    instr.opcode = DMOpcode::VE_REDUCE;
+    instr.opcode = DMOpcode::CMB_REDUCE;
 
     Token op_tok = consume(TokenType::IDENTIFIER, "reduction operation");
-    VEReduceOp op;
-    if (!ve_reduce_op_from_string(op_tok.text, op)) {
-        error("Unknown VE reduction operation: " + op_tok.text);
+    CMBReduceOp op;
+    if (!cmb_reduce_op_from_string(op_tok.text, op)) {
+        error("Unknown Combiner reduction operation: " + op_tok.text);
     }
 
-    VEReduceOperands ops;
+    CMBReduceOperands ops;
     ops.op = op;
-    ops.phase = VEReducePhase::ACCUMULATE;
+    ops.phase = CMBReducePhase::ACCUMULATE;
 
     match(TokenType::COMMA);
     ops.l1_src = static_cast<uint8_t>(parse_number());
@@ -831,11 +832,11 @@ DMInstruction Assembler::parse_ve_reduce() {
     while (match(TokenType::COMMA)) {
         Token flag = consume(TokenType::IDENTIFIER, "phase flag (INIT or FINALIZE)");
         if (flag.text == "INIT") {
-            ops.phase |= VEReducePhase::INIT;
+            ops.phase |= CMBReducePhase::INIT;
         } else if (flag.text == "FINALIZE") {
-            ops.phase |= VEReducePhase::FINALIZE;
+            ops.phase |= CMBReducePhase::FINALIZE;
         } else {
-            error("Unknown VE_REDUCE phase flag: " + flag.text);
+            error("Unknown CMB_REDUCE phase flag: " + flag.text);
         }
     }
 
@@ -1127,10 +1128,10 @@ DMInstruction Assembler::parse_str_feed_rows_auto() {
     ops.l1_buffer = static_cast<uint8_t>(parse_number());
     match(TokenType::COMMA);
     ops.buffer = parse_buffer_slot();
-    ops.ve_enabled = false;
-    ops.ve_activation = ActivationType::NONE;
-    ops.ve_bias_enabled = false;
-    ops.ve_bias_addr = 0;
+    ops.cmb_enabled = false;
+    ops.cmb_activation = ActivationType::NONE;
+    ops.cmb_bias_enabled = false;
+    ops.cmb_bias_addr = 0;
     instr.operands = ops;
     return instr;
 }
@@ -1142,10 +1143,10 @@ DMInstruction Assembler::parse_str_feed_cols_auto() {
     ops.l1_buffer = static_cast<uint8_t>(parse_number());
     match(TokenType::COMMA);
     ops.buffer = parse_buffer_slot();
-    ops.ve_enabled = false;
-    ops.ve_activation = ActivationType::NONE;
-    ops.ve_bias_enabled = false;
-    ops.ve_bias_addr = 0;
+    ops.cmb_enabled = false;
+    ops.cmb_activation = ActivationType::NONE;
+    ops.cmb_bias_enabled = false;
+    ops.cmb_bias_addr = 0;
     instr.operands = ops;
     return instr;
 }
@@ -1157,19 +1158,19 @@ DMInstruction Assembler::parse_str_drain_auto() {
     ops.l1_buffer = static_cast<uint8_t>(parse_number());  // l2_bank stored in l1_buffer
     match(TokenType::COMMA);
     ops.buffer = parse_buffer_slot();
-    ops.ve_enabled = false;
-    ops.ve_activation = ActivationType::NONE;
-    ops.ve_bias_enabled = false;
-    ops.ve_bias_addr = 0;
+    ops.cmb_enabled = false;
+    ops.cmb_activation = ActivationType::NONE;
+    ops.cmb_bias_enabled = false;
+    ops.cmb_bias_addr = 0;
 
-    // Check for optional VE configuration
+    // Check for optional Combiner configuration
     if (match(TokenType::COMMA)) {
-        Token tok = consume(TokenType::IDENTIFIER, "VE_ENABLE");
-        if (tok.text == "VE_ENABLE") {
-            ops.ve_enabled = true;
-            ops.ve_activation = parse_activation_type();
+        Token tok = consume(TokenType::IDENTIFIER, "CMB_ENABLE");
+        if (tok.text == "CMB_ENABLE" || tok.text == "VE_ENABLE") {   // VE_ENABLE: deprecated (#429)
+            ops.cmb_enabled = true;
+            ops.cmb_activation = parse_activation_type();
         } else {
-            error("expected 'VE_ENABLE'");
+            error("expected 'CMB_ENABLE'");
         }
     }
 

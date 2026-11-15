@@ -202,7 +202,7 @@ Each instruction type has specialized operand formatting:
 
 - **DMA**: Shows external address, L3 tile ID, offset, and transfer size
 - **Block Mover**: Shows source/destination locations, dimensions, and transform
-- **Streamer**: Shows L2 bank, L1 buffer, dimensions, and VE configuration
+- **Streamer**: Shows L2 bank, L1 buffer, dimensions, and Combiner configuration
 
 ---
 
@@ -435,15 +435,15 @@ Arguments (4):
 - `Has Bias: yes` confirms bias addition is enabled
 - Arguments include `bias` as the third input
 
-**Check VE-enabled drain instructions** (verbose mode):
+**Check Combiner-enabled drain instructions** (verbose mode):
 
 ```bash
 ./build/tools/analysis/kpu-kpubin-disasm mlp_gelu.kpukernel --verbose | grep STR_DRAIN
 ```
 
-If Vector Engine fusion is enabled, you'll see:
+If Combiner fusion is enabled, you'll see:
 ```
-STR_DRAIN_OUTPUT  C[0,0,0] L2[0]:0x0 <-> L1[2]:0x0 (64x80) [VE: gelu, bias@0x5000]
+STR_DRAIN_OUTPUT  C[0,0,0] L2[0]:0x0 <-> L1[2]:0x0 (64x80) [Combiner: gelu, bias@0x5000]
 ```
 
 ---

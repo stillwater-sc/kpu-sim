@@ -92,7 +92,7 @@ prog::platform::DeviceSpecification s1(std::size_t lanes = 16) {
     auto d = prog::platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
     using VU = prog::platform::DeviceSpecification::Movers::VectorUnit;
     d.movers.bm_vector = VU{static_cast<prog::Dim>(lanes), 1.0, {"add", "relu", "gelu", "silu"}};
-    d.movers.str_vector = VU{static_cast<prog::Dim>(lanes), 1.0, {"add", "relu", "gelu", "silu", "atan"}};
+    d.combiner = VU{static_cast<prog::Dim>(lanes), 1.0, {"add", "relu", "gelu", "silu", "atan"}};
     return d;
 }
 
@@ -127,15 +127,15 @@ TEST_CASE("Linear at L-CA: every placement computes the reference; the placement
     struct Case { const char* name; prog::ActivationFn act; std::string src; };
     const std::vector<Case> cases = {
         {"fabric", prog::ActivationFn::Relu, linear_source(" via add(b[j]) @ fabric, relu @ fabric")},
-        {"str.drain", prog::ActivationFn::Relu, linear_source(" via add(b[j]) @ str.drain, relu @ str.drain")},
+        {"combiner", prog::ActivationFn::Relu, linear_source(" via add(b[j]) @ combiner, relu @ combiner")},
         {"bm.egress", prog::ActivationFn::Relu, linear_source(" via add(b[j]) @ bm.egress, relu @ bm.egress")},
         {"unfused", prog::ActivationFn::Relu, linear_source("", unfused_epilogue("relu"))},
         // atan where the machine has it: the streamers' unit (the BlockMovers' lacks it).
-        {"atan@str", prog::ActivationFn::Atan, linear_source(" via add(b[j]) @ str.drain, atan @ str.drain")},
+        {"atan@cmb", prog::ActivationFn::Atan, linear_source(" via add(b[j]) @ combiner, atan @ combiner")},
         {"gelu split", prog::ActivationFn::Gelu, linear_source(" via add(b[j]) @ fabric, gelu @ bm.egress")},
     };
-    std::printf("linear 128^3/32^3 on S1 (VE 16 lanes): placement, cycles, DRAM bytes, cf busy, "
-                "fabric epilogue, str VE busy/bound, bm VE busy/bound\n");
+    std::printf("linear 128^3/32^3 on S1 (vector units 16 lanes): placement, cycles, DRAM bytes, cf busy, "
+                "fabric epilogue, combiner busy/bound, bm vector busy/bound\n");
     std::uint64_t fused_bytes = 0;
     Cycle fused_cycles = 0;
     std::map<prog::ActivationFn, prog::TileProgram> by_act;     // the first placement's values, per activation
@@ -151,31 +151,31 @@ TEST_CASE("Linear at L-CA: every placement computes the reference; the placement
         std::printf("  %-10s %7llu  %7llu  %6llu  %4llu  %5llu/%-4llu  %5llu/%-4llu\n", c.name,
                     static_cast<unsigned long long>(x.r.cycles), static_cast<unsigned long long>(x.r.dram_bytes),
                     static_cast<unsigned long long>(x.r.cf_busy), static_cast<unsigned long long>(x.r.ve.fabric),
-                    static_cast<unsigned long long>(x.r.ve.str_busy), static_cast<unsigned long long>(x.r.ve.str_bound),
+                    static_cast<unsigned long long>(x.r.ve.combiner_busy), static_cast<unsigned long long>(x.r.ve.combiner_bound),
                     static_cast<unsigned long long>(x.r.ve.bm_busy), static_cast<unsigned long long>(x.r.ve.bm_bound));
         const std::string name = c.name;
         // 16 result tiles of 32 x 32, two stages each.
         if (name == "fabric") {
             CHECK(x.r.ve.fabric == 16 * 2 * 1);           // 1024 elements at 8192 per cycle
-            CHECK(x.r.ve.str_busy == 0);
+            CHECK(x.r.ve.combiner_busy == 0);
             CHECK(x.r.ve.bm_busy == 0);
             fused_bytes = x.r.dram_bytes;
             fused_cycles = x.r.cycles;
         }
-        if (name == "str.drain") {
-            CHECK(x.r.ve.str_busy == 16 * 2 * 64);        // 1024 elements at 16 per cycle
+        if (name == "combiner") {
+            CHECK(x.r.ve.combiner_busy == 16 * 2 * 64);        // 1024 elements at 16 per cycle
             CHECK(x.r.ve.bm_busy == 0);
             CHECK(x.r.dram_bytes == fused_bytes);
         }
         if (name == "bm.egress") {
             CHECK(x.r.ve.bm_busy == 16 * 2 * 64);
-            CHECK(x.r.ve.str_busy == 0);
+            CHECK(x.r.ve.combiner_busy == 0);
             CHECK(x.r.dram_bytes == fused_bytes);
         }
         if (name == "unfused") {
             // C makes a second DRAM round trip: 16 tiles of 4 KiB read back and written again.
             CHECK(x.r.dram_bytes == fused_bytes + 2 * 16 * 4096);
-            CHECK(x.r.ve.str_busy + x.r.ve.bm_busy + x.r.ve.fabric == 0);
+            CHECK(x.r.ve.combiner_busy + x.r.ve.bm_busy + x.r.ve.fabric == 0);
             CHECK(x.r.cycles > fused_cycles);           // the round trip costs time as well as bytes
         }
     }
@@ -185,7 +185,7 @@ TEST_CASE("Linear at L-CA: the stream runs it too, in a window", "[timing][csp][
     const auto d = s1();
     const lang::Target target = lang::target_from(d);
     std::optional<prog::TileProgram> first;
-    for (const std::string& src : {linear_source(" via add(b[j]) @ str.drain, silu @ bm.egress"),
+    for (const std::string& src : {linear_source(" via add(b[j]) @ combiner, silu @ bm.egress"),
                                    linear_source("", unfused_epilogue("silu"))}) {
         const prog::TileProgram in = linear_inputs(src);
         const prog::TileProgram ref = reference(src);

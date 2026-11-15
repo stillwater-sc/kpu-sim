@@ -435,7 +435,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
             continue;
         }
-        std::cout << "        VE    str " << o.ve.str_busy << "/" << o.ve.str_bound << "  bm " << o.ve.bm_busy << "/"
+        std::cout << "        vector  combiner " << o.ve.combiner_busy << "/" << o.ve.combiner_bound << "  bm " << o.ve.bm_busy << "/"
                   << o.ve.bm_bound << "  fabric " << o.ve.fabric << "   (busy/bound)   window " << window << "\n";
         for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
     }

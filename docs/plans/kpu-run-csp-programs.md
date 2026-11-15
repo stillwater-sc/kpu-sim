@@ -62,7 +62,7 @@ separate tool's job.
     panel per i, an accumulator per C tile. Schedule options choose the panel orientation and
     how much stays resident within `--l3`.
   - **linear:** matmul plus the epilogue. `--act relu|gelu|silu|atan` and
-    `--place fabric|str.drain|bm.egress|unfused` write the `via` list, or the unfused calls.
+    `--place fabric|combiner|bm.egress|unfused` write the `via` list, or the unfused calls.
   - **LU:** right-looking tile LU (getrf, laswp, trsm, gemm), with explicit residency per step.
 - **The generator validates what it writes.** It runs `lang::validate` before emitting, and
   `--target spec.json` also checks placement against a machine. A schedule that does not fit
@@ -163,7 +163,7 @@ platform have moved (§5 step 4). Then it is retired (done in 4e).
      1 refused, 2 usage.
    - **Schedules:**
      - matmul: column- or row-panel, 2nt + 1 slots;
-     - linear: + b[j], 2nt + 2 slots, with the epilogue `via` @ fabric, str.drain or bm.egress,
+     - linear: + b[j], 2nt + 2 slots, with the epilogue `via` @ fabric, combiner or bm.egress,
        or unfused as a second pass;
      - LU: right-looking, A resident whole, nt^2 slots, in the derivation's op order.
    - **Found on the way: the trace's L0 left out a fused epilogue.** A tile context lives on the

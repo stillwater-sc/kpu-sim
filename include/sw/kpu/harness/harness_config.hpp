@@ -237,8 +237,8 @@ struct StreamerHarnessConfig : HarnessConfig {
     /// Systolic array size
     uint32_t systolic_size = 16;
 
-    /// Enable vector engine operations
-    bool enable_vector_engine = true;
+    /// Enable Combiner operations
+    bool enable_combiner = true;
 
     /// Bandwidth L2->L1 per Streamer (GB/s)
     double l2_l1_bandwidth_gbps = 256.0;

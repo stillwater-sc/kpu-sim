@@ -21,8 +21,8 @@ Beyond the MobileNetV2 milestone, EfficientNet-B0 adds:
   project: `GAP → FC_reduce → ReLU → FC_expand → sigmoid → channel-broadcast
   multiply` scales the block activation by its per-channel gate. This reuses GAP +
   matmul (with a ReLU epilogue) + two new CSP runners: **`run_sigmoid`** (the
-  Vector Engine has no sigmoid, so `1/(1+e^-x)` is composed from four unary/scalar
-  VE ops) and **`run_channel_broadcast_mul`** (the SE scale, a per-channel `[N,C]`
+  Combiner has no sigmoid, so `1/(1+e^-x)` is composed from four unary/scalar
+  Combiner ops) and **`run_channel_broadcast_mul`** (the SE scale, a per-channel `[N,C]`
   gate × `[N,C,H,W]` activation).
 - **SiLU/swish activation** (`x·sigmoid(x)`) — the real EfficientNet activation,
   on the CSP value path via `run_silu` (`run_sigmoid` then a binary multiply);
@@ -47,8 +47,8 @@ executed by **`GraphCspExecutor`**, reusing the M2/M3 bridge:
 
 The bridge folds each BatchNorm into its conv, dispatches pointwise/expand/project
 `1×1` convs to im2col→GEMM and depthwise convs (`groups == Cin`) to the
-pooling-window path, runs the SE `sigmoid` and channel-broadcast `MUL` as VE ops,
-and joins the identity residuals. Because the SE `sigmoid` alone is four VE ops
+pooling-window path, runs the SE `sigmoid` and channel-broadcast `MUL` as Combiner ops,
+and joins the identity residuals. Because the SE `sigmoid` alone is four Combiner ops
 and each `SiLU` is five (sigmoid + multiply), the CSP op count can exceed the
 graph node count.
 

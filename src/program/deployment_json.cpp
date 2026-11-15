@@ -32,7 +32,8 @@ const std::set<std::string>& device_keys() {
                                             "dma",           "l3",       "l2",
                                             "l1",            "movers",   "analytical",
                                             "array",         "memory",   "cpu",
-                                            "noc",           "fabric",   "systolic"};
+                                            "noc",           "fabric",   "systolic",
+                                            "combiner"};
     return k;
 }
 const std::set<std::string>& systolic_keys() {
@@ -167,6 +168,23 @@ std::string read_string(const json& obj, const char* key, const std::string& fal
     return v.get<std::string>();
 }
 
+// A vector unit's object: {lanes, rate, ops}, at movers.vector.bm or combiner.
+DeviceSpecification::Movers::VectorUnit read_vector_unit(const json& u, const std::string& wu) {
+    reject_unknown(u, vector_unit_keys(), wu);
+    DeviceSpecification::Movers::VectorUnit unit;
+    unit.lanes = read_dim(u, "lanes", unit.lanes, wu);
+    unit.rate = read_double(u, "rate", unit.rate, wu);
+    if (u.contains("ops")) {
+        const json& ops = u.at("ops");
+        if (!ops.is_array()) throw SpecError("deployment: " + wu + ".ops must be an array of names");
+        for (const json& op : ops) {
+            if (!op.is_string()) throw SpecError("deployment: " + wu + ".ops must be an array of names");
+            unit.ops.push_back(op.get<std::string>());
+        }
+    }
+    return unit;
+}
+
 // A 64-bit count. Capacities pass 4 GiB, so read_dim's 32-bit range is not enough; the
 // representability limit is 2^53, past which a JSON number is no longer an exact integer for
 // every reader (the same bound the tile-flow record keeps).
@@ -252,26 +270,17 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
             const json& v = s.at("vector");
             const std::string wv = w + ".vector";
             reject_unknown(v, vector_site_keys(), wv);
-            for (const char* site : {"bm", "str"}) {
-                if (!v.contains(site)) continue;
-                const json& u = v.at(site);
-                const std::string wu = wv + "." + site;
-                reject_unknown(u, vector_unit_keys(), wu);
-                DeviceSpecification::Movers::VectorUnit unit;
-                unit.lanes = read_dim(u, "lanes", unit.lanes, wu);
-                unit.rate = read_double(u, "rate", unit.rate, wu);
-                if (u.contains("ops")) {
-                    const json& ops = u.at("ops");
-                    if (!ops.is_array()) throw SpecError("deployment: " + wu + ".ops must be an array of names");
-                    for (const json& op : ops) {
-                        if (!op.is_string()) throw SpecError("deployment: " + wu + ".ops must be an array of names");
-                        unit.ops.push_back(op.get<std::string>());
-                    }
-                }
-                (std::string(site) == "bm" ? d.movers.bm_vector : d.movers.str_vector) = unit;
+            if (v.contains("bm")) d.movers.bm_vector = read_vector_unit(v.at("bm"), wv + ".bm");
+            // movers.vector.str is the Combiner's spelling before #429 (deprecated).
+            if (v.contains("str")) {
+                if (obj.contains("combiner"))
+                    throw SpecError("deployment: " + where + " declares both combiner and " + wv +
+                                    ".str (its deprecated spelling); keep combiner");
+                d.combiner = read_vector_unit(v.at("str"), wv + ".str");
             }
         }
     }
+    if (obj.contains("combiner")) d.combiner = read_vector_unit(obj.at("combiner"), where + ".combiner");
     if (obj.contains("systolic")) {
         const json& s = obj.at("systolic");
         const std::string w = where + ".systolic";
@@ -426,13 +435,12 @@ json write_device(const DeviceSpecification& d) {
     movers["str_bytes_per_cycle"] = d.movers.str_bytes_per_cycle;
     movers["noc_links"] = d.movers.noc_links;
     movers["noc_bytes_per_cycle"] = d.movers.noc_bytes_per_cycle;
-    if (d.movers.bm_vector || d.movers.str_vector) {
-        json vec = json::object();
-        for (const auto& [site, v] : {std::pair{"bm", &d.movers.bm_vector}, std::pair{"str", &d.movers.str_vector}})
-            if (*v) vec[site] = json{{"lanes", (*v)->lanes}, {"rate", (*v)->rate}, {"ops", (*v)->ops}};
-        movers["vector"] = vec;
-    }
+    const auto unit_json = [](const DeviceSpecification::Movers::VectorUnit& u) {
+        return json{{"lanes", u.lanes}, {"rate", u.rate}, {"ops", u.ops}};
+    };
+    if (d.movers.bm_vector) movers["vector"] = json{{"bm", unit_json(*d.movers.bm_vector)}};
     o["movers"] = movers;
+    if (d.combiner) o["combiner"] = unit_json(*d.combiner);
 
     // The physical shape, each object written only when something in it is declared -- so a
     // spec that never mentions one keeps its canonical bytes, and every existing

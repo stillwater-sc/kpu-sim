@@ -56,8 +56,8 @@ std::string get_opcode_name(sw::kpu::isa::DMOpcode op) {
         case DMOpcode::SET_STRIDE: return "SET_STRIDE";
         case DMOpcode::LOOP_BEGIN: return "LOOP_BEGIN";
         case DMOpcode::LOOP_END: return "LOOP_END";
-        case DMOpcode::VE_ELEMENTWISE: return "VE_ELEMENTWISE";
-        case DMOpcode::VE_REDUCE: return "VE_REDUCE";
+        case DMOpcode::CMB_ELEMENTWISE: return "CMB_ELEMENTWISE";
+        case DMOpcode::CMB_REDUCE: return "CMB_REDUCE";
         case DMOpcode::L2_SCRATCH_WRITE: return "L2_SCRATCH_WRITE";
         case DMOpcode::L2_SCRATCH_READ: return "L2_SCRATCH_READ";
         case DMOpcode::NOP: return "NOP";

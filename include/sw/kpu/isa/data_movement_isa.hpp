@@ -106,9 +106,9 @@ enum class DMOpcode : uint8_t {
     DMA_LOAD_GATHER,        // Strided gather from external memory to L3
     DMA_STORE_SCATTER,      // Strided scatter from L3 to external memory
 
-    // Vector Engine operations (via Streamer datapath)
-    VE_ELEMENTWISE,         // Elementwise op on L1 data (SUB, EXP, DIV, etc.)
-    VE_REDUCE,              // Reduction op on L1 data (MAX, SUM)
+    // Combiner operations (via Streamer datapath)
+    CMB_ELEMENTWISE,         // Elementwise op on L1 data (SUB, EXP, DIV, etc.)
+    CMB_REDUCE,              // Reduction op on L1 data (MAX, SUM)
 
     // L2 scratch management
     L2_SCRATCH_WRITE,       // Write scalar/vector to L2 scratch region
@@ -240,12 +240,12 @@ struct StreamerOperands {
     Size fabric_size;           // Systolic array size
     BufferSlot buffer;          // Buffer slot
 
-    // Vector Engine configuration (for STR_DRAIN_OUTPUT)
-    // VE processes data inline during L1→L2 transfer
-    bool ve_enabled = false;                        ///< Route through Vector Engine
-    ActivationType ve_activation = ActivationType::NONE;  ///< Activation function
-    bool ve_bias_enabled = false;                   ///< Apply bias addition
-    Address ve_bias_addr = 0;                       ///< Bias vector address in L1
+    // Combiner configuration (for STR_DRAIN_OUTPUT)
+    // Combiner processes data inline during L1→L2 transfer
+    bool cmb_enabled = false;                        ///< Route through Combiner
+    ActivationType cmb_activation = ActivationType::NONE;  ///< Activation function
+    bool cmb_bias_enabled = false;                   ///< Apply bias addition
+    Address cmb_bias_addr = 0;                       ///< Bias vector address in L1
 };
 
 /**
@@ -378,11 +378,11 @@ struct AutoStreamerOperands {
     uint8_t l1_buffer;          // L1 buffer ID
     BufferSlot buffer;          // Double-buffer selection
 
-    // Vector Engine configuration (for STR_DRAIN_AUTO)
-    bool ve_enabled = false;
-    ActivationType ve_activation = ActivationType::NONE;
-    bool ve_bias_enabled = false;
-    Address ve_bias_addr = 0;
+    // Combiner configuration (for STR_DRAIN_AUTO)
+    bool cmb_enabled = false;
+    ActivationType cmb_activation = ActivationType::NONE;
+    bool cmb_bias_enabled = false;
+    Address cmb_bias_addr = 0;
 };
 
 // ============================================================================
@@ -390,17 +390,17 @@ struct AutoStreamerOperands {
 // ============================================================================
 
 // ============================================================================
-// Vector Engine Operands (issue #100, epic E2 #71)
+// Combiner Operands (issue #100, epic E2 #71)
 // ============================================================================
 
 /**
- * @brief Vector Engine elementwise operation kinds
+ * @brief Combiner elementwise operation kinds
  *
  * Binary forms consume two L1 operands; unary forms one; *_S forms apply
  * a scalar broadcast to one operand. Reduction kinds (running max/sum/
- * mean/var) belong to VE_REDUCE and are designed in epic E3.
+ * mean/var) belong to CMB_REDUCE and are designed in epic E3.
  */
-enum class VEOp : uint8_t {
+enum class CMBOp : uint8_t {
     // Binary (num_inputs = 2)
     ADD = 0, SUB, MUL, DIV, MAX, MIN,
     // Unary (num_inputs = 1)
@@ -410,13 +410,13 @@ enum class VEOp : uint8_t {
 };
 
 /**
- * @brief Vector Engine elementwise operands (VE_ELEMENTWISE)
+ * @brief Combiner elementwise operands (CMB_ELEMENTWISE)
  *
- * Gives VE_ELEMENTWISE real semantics (previously a monostate structural
+ * Gives CMB_ELEMENTWISE real semantics (previously a monostate structural
  * marker): apply `op` over the addressed L1 buffers, elementwise.
  */
-struct VEOperands {
-    VEOp op = VEOp::ADD;        // Operation kind
+struct CMBOperands {
+    CMBOp op = CMBOp::ADD;        // Operation kind
     uint8_t num_inputs = 2;     // 1 (unary / scalar forms), 2 (binary)
     float scalar = 0.0f;        // Operand for ADD_S / MUL_S / POW_S
     uint8_t l1_src_a = 0;       // L1 buffer of operand A
@@ -425,41 +425,41 @@ struct VEOperands {
 };
 
 /**
- * @brief Vector Engine reduction operation kinds (VE_REDUCE)
+ * @brief Combiner reduction operation kinds (CMB_REDUCE)
  *
  * MAX/MIN/SUM carry a single scalar accumulator lane; MEAN/VAR carry a
  * moment triplet [count, sum, sumsq]. See the accumulator ABI in
  * docs/plans/e3_online_reduction_pattern.md (epic E3, issue #105).
  */
-enum class VEReduceOp : uint8_t {
+enum class CMBReduceOp : uint8_t {
     MAX = 0, MIN, SUM, MEAN, VAR
 };
 
 /**
- * @brief VE_REDUCE phase flags (a set, not an enum)
+ * @brief CMB_REDUCE phase flags (a set, not an enum)
  *
  * A streamed reduction is INIT|ACCUMULATE on the first tile, ACCUMULATE
  * on the middle tiles, and FINALIZE (alone or fused) on the last; a
  * single-tile reduction is INIT|ACCUMULATE|FINALIZE in one instruction.
  */
-namespace VEReducePhase {
+namespace CMBReducePhase {
 constexpr uint8_t INIT       = 0x1;  // write the op identity into the state lanes
 constexpr uint8_t ACCUMULATE = 0x2;  // combine l1_src into the state
 constexpr uint8_t FINALIZE   = 0x4;  // convert state -> finalized stat lanes
-} // namespace VEReducePhase
+} // namespace CMBReducePhase
 
 /**
- * @brief Vector Engine reduction operands (VE_REDUCE)
+ * @brief Combiner reduction operands (CMB_REDUCE)
  *
- * Gives VE_REDUCE real semantics (previously a monostate structural
+ * Gives CMB_REDUCE real semantics (previously a monostate structural
  * marker): fold `l1_src` into the 3-lane fp32 accumulator at offset 0 of
  * `l1_acc` per `op`, gated by `phase`. The element count of l1_src rides
- * the SET_TILE_DIM auto state, like VE_ELEMENTWISE; the accumulator is
+ * the SET_TILE_DIM auto state, like CMB_ELEMENTWISE; the accumulator is
  * always three fp32 lanes regardless of the source element width.
  */
-struct VEReduceOperands {
-    VEReduceOp op = VEReduceOp::SUM;
-    uint8_t phase = VEReducePhase::INIT | VEReducePhase::ACCUMULATE;
+struct CMBReduceOperands {
+    CMBReduceOp op = CMBReduceOp::SUM;
+    uint8_t phase = CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE;
     uint8_t l1_src = 0;         // L1 buffer of the tile being consumed
     uint8_t l1_acc = 0;         // L1 buffer holding the accumulator state
 };
@@ -493,10 +493,10 @@ struct DMInstruction {
         AutoDMAOperands,            // DMA_*_AUTO
         AutoBlockMoverOperands,     // BM_*_AUTO
         AutoStreamerOperands,       // STR_*_AUTO
-        // Vector Engine operands (issue #100)
-        VEOperands,                 // VE_ELEMENTWISE
-        // Vector Engine reduction operands (issue #105)
-        VEReduceOperands            // VE_REDUCE
+        // Combiner operands (issue #100)
+        CMBOperands,                 // CMB_ELEMENTWISE
+        // Combiner reduction operands (issue #105)
+        CMBReduceOperands            // CMB_REDUCE
     > operands;
 
     // Timing hints (from SURE analysis)
@@ -538,7 +538,7 @@ struct DMInstruction {
      * @brief Broadcast a resident operand from L2 into an L1 buffer
      *
      * Delivers the operand ONCE for consumption by any number of subsequent
-     * compute/VE operations (the ISA-level counterpart of the CSP tier's
+     * compute/Combiner operations (the ISA-level counterpart of the CSP tier's
      * 1:1:k seeded delivery, issues #100/#102). Unlike str_feed_rows/cols,
      * a broadcast does not participate in feed pairing - it never triggers
      * a compute by itself.
@@ -557,10 +557,10 @@ struct DMInstruction {
                                    uint8_t l2_bank, uint8_t l1_buf,
                                    Address l2_addr, Address l1_addr,
                                    Size height, Size width, Size fabric_size,
-                                   bool ve_enabled = false,
-                                   ActivationType ve_activation = ActivationType::NONE,
-                                   bool ve_bias_enabled = false,
-                                   Address ve_bias_addr = 0);
+                                   bool cmb_enabled = false,
+                                   ActivationType cmb_activation = ActivationType::NONE,
+                                   bool cmb_bias_enabled = false,
+                                   Address cmb_bias_addr = 0);
 
     static DMInstruction barrier();
     static DMInstruction wait(uint32_t op_mask);
@@ -598,45 +598,45 @@ struct DMInstruction {
                                             BufferSlot buf = BufferSlot::BUF_0);
     static DMInstruction str_drain_auto(uint8_t l2_bank,
                                         BufferSlot buf = BufferSlot::BUF_0,
-                                        bool ve_enabled = false,
-                                        ActivationType ve_act = ActivationType::NONE);
+                                        bool cmb_enabled = false,
+                                        ActivationType cmb_act = ActivationType::NONE);
 
-    // Vector Engine factory methods (issue #100)
-    static DMInstruction ve_elementwise(VEOp op,
+    // Combiner factory methods (issue #100)
+    static DMInstruction cmb_elementwise(CMBOp op,
                                         uint8_t l1_src_a, uint8_t l1_src_b,
                                         uint8_t l1_dst);
-    static DMInstruction ve_elementwise_unary(VEOp op,
+    static DMInstruction cmb_elementwise_unary(CMBOp op,
                                               uint8_t l1_src, uint8_t l1_dst);
-    static DMInstruction ve_elementwise_scalar(VEOp op, float scalar,
+    static DMInstruction cmb_elementwise_scalar(CMBOp op, float scalar,
                                                uint8_t l1_src, uint8_t l1_dst);
 
-    // Vector Engine reduction factory (issue #105)
-    static DMInstruction ve_reduce(
-        VEReduceOp op, uint8_t l1_src, uint8_t l1_acc,
-        uint8_t phase = VEReducePhase::INIT | VEReducePhase::ACCUMULATE);
+    // Combiner reduction factory (issue #105)
+    static DMInstruction cmb_reduce(
+        CMBReduceOp op, uint8_t l1_src, uint8_t l1_acc,
+        uint8_t phase = CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE);
 };
 
 /**
- * @brief Name of a Vector Engine operation (for labels/assembly)
+ * @brief Name of a Combiner operation (for labels/assembly)
  */
-const char* to_string(VEOp op);
+const char* to_string(CMBOp op);
 
 /**
- * @brief Parse a Vector Engine operation name (inverse of to_string)
+ * @brief Parse a Combiner operation name (inverse of to_string)
  * @return true and sets op on success
  */
-bool ve_op_from_string(const std::string& name, VEOp& op);
+bool cmb_op_from_string(const std::string& name, CMBOp& op);
 
 /**
- * @brief Name of a Vector Engine reduction operation (for labels/assembly)
+ * @brief Name of a Combiner reduction operation (for labels/assembly)
  */
-const char* to_string(VEReduceOp op);
+const char* to_string(CMBReduceOp op);
 
 /**
- * @brief Parse a Vector Engine reduction operation name (inverse of to_string)
+ * @brief Parse a Combiner reduction operation name (inverse of to_string)
  * @return true and sets op on success
  */
-bool ve_reduce_op_from_string(const std::string& name, VEReduceOp& op);
+bool cmb_reduce_op_from_string(const std::string& name, CMBReduceOp& op);
 
 // ============================================================================
 // Data Movement Program

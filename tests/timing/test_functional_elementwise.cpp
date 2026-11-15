@@ -4,7 +4,7 @@
 // elementwise against an independent host oracle (issue #102, epic E2).
 //
 // The oracle is computed with a plain host loop - a deliberately separate
-// path from apply_ve_op - so a semantic error in the simulator kernel cannot
+// path from apply_cmb_op - so a semantic error in the simulator kernel cannot
 // hide by matching itself.
 //
 // SPDX-License-Identifier: MIT
@@ -22,7 +22,7 @@
 
 using namespace sw::kpu::timing;
 using namespace sw::kpu::timing::schedule;
-using sw::kpu::isa::VEOp;
+using sw::kpu::isa::CMBOp;
 
 namespace {
 
@@ -77,16 +77,16 @@ TEST_CASE("Binary elementwise CSP execution matches the host oracle",
     auto b = make_tensor(n, 2.0f, -0.125f);
 
     struct Case {
-        VEOp op;
+        CMBOp op;
         float (*oracle)(float, float);
     };
     const Case cases[] = {
-        {VEOp::ADD, [](float x, float y) { return x + y; }},
-        {VEOp::SUB, [](float x, float y) { return x - y; }},
-        {VEOp::MUL, [](float x, float y) { return x * y; }},
-        {VEOp::DIV, [](float x, float y) { return x / y; }},
-        {VEOp::MAX, [](float x, float y) { return x > y ? x : y; }},
-        {VEOp::MIN, [](float x, float y) { return x < y ? x : y; }},
+        {CMBOp::ADD, [](float x, float y) { return x + y; }},
+        {CMBOp::SUB, [](float x, float y) { return x - y; }},
+        {CMBOp::MUL, [](float x, float y) { return x * y; }},
+        {CMBOp::DIV, [](float x, float y) { return x / y; }},
+        {CMBOp::MAX, [](float x, float y) { return x > y ? x : y; }},
+        {CMBOp::MIN, [](float x, float y) { return x < y ? x : y; }},
     };
 
     for (const auto& c : cases) {
@@ -111,7 +111,7 @@ TEST_CASE("Broadcast-B CSP execution matches the host oracle",
 
     FunctionalElementwiseExecutor executor(
         make_generator_config(n, Form::BROADCAST_B), make_executor_config());
-    auto result = executor.run(VEOp::ADD, a, bias);
+    auto result = executor.run(CMBOp::ADD, a, bias);
     REQUIRE(result.execution.success);
     REQUIRE_FALSE(result.execution.livelock_detected);
 
@@ -129,15 +129,15 @@ TEST_CASE("Unary and scalar CSP execution matches the host oracle",
 
     SECTION("unary chain ops") {
         struct Case {
-            VEOp op;
+            CMBOp op;
             float (*oracle)(float);
         };
         const Case cases[] = {
-            {VEOp::NEG,  [](float x) { return -x; }},
-            {VEOp::ABS,  [](float x) { return std::fabs(x); }},
-            {VEOp::SQRT, [](float x) { return std::sqrt(x); }},
-            {VEOp::EXP,  [](float x) { return std::exp(x); }},
-            {VEOp::LOG,  [](float x) { return std::log(x); }},
+            {CMBOp::NEG,  [](float x) { return -x; }},
+            {CMBOp::ABS,  [](float x) { return std::fabs(x); }},
+            {CMBOp::SQRT, [](float x) { return std::sqrt(x); }},
+            {CMBOp::EXP,  [](float x) { return std::exp(x); }},
+            {CMBOp::LOG,  [](float x) { return std::log(x); }},
         };
         for (const auto& c : cases) {
             INFO("op=" << static_cast<int>(c.op));
@@ -156,7 +156,7 @@ TEST_CASE("Unary and scalar CSP execution matches the host oracle",
         const float scalar = 1.75f;
         FunctionalElementwiseExecutor executor(
             make_generator_config(n, Form::UNARY), make_executor_config());
-        auto result = executor.run(VEOp::MUL_S, a, {}, scalar);
+        auto result = executor.run(CMBOp::MUL_S, a, {}, scalar);
         REQUIRE(result.execution.success);
 
         std::vector<float> expected(n);
@@ -173,7 +173,7 @@ TEST_CASE("Non-aligned functional elementwise clamps the trailing tile",
 
     FunctionalElementwiseExecutor executor(
         make_generator_config(n, Form::BINARY), make_executor_config());
-    auto result = executor.run(VEOp::MUL, a, b);
+    auto result = executor.run(CMBOp::MUL, a, b);
     REQUIRE(result.execution.success);
 
     std::vector<float> expected(n);
@@ -193,7 +193,7 @@ TEST_CASE("Functional elementwise under partitioned credits",
 
     FunctionalElementwiseExecutor executor(
         make_generator_config(n, Form::BINARY), exec_config);
-    auto result = executor.run(VEOp::MAX, a, b);
+    auto result = executor.run(CMBOp::MAX, a, b);
     REQUIRE(result.execution.success);
     REQUIRE_FALSE(result.execution.livelock_detected);
 
@@ -210,18 +210,18 @@ TEST_CASE("Functional elementwise input contract is enforced",
     SECTION("wrong A size") {
         FunctionalElementwiseExecutor executor(
             make_generator_config(n, Form::UNARY), make_executor_config());
-        REQUIRE_THROWS_AS(executor.run(VEOp::NEG, std::vector<float>(n - 1)),
+        REQUIRE_THROWS_AS(executor.run(CMBOp::NEG, std::vector<float>(n - 1)),
                           std::invalid_argument);
     }
     SECTION("binary op on unary form") {
         FunctionalElementwiseExecutor executor(
             make_generator_config(n, Form::UNARY), make_executor_config());
-        REQUIRE_THROWS_AS(executor.run(VEOp::ADD, a), std::invalid_argument);
+        REQUIRE_THROWS_AS(executor.run(CMBOp::ADD, a), std::invalid_argument);
     }
     SECTION("broadcast B must be one tile") {
         FunctionalElementwiseExecutor executor(
             make_generator_config(n, Form::BROADCAST_B), make_executor_config());
-        REQUIRE_THROWS_AS(executor.run(VEOp::ADD, a, std::vector<float>(n)),
+        REQUIRE_THROWS_AS(executor.run(CMBOp::ADD, a, std::vector<float>(n)),
                           std::invalid_argument);
     }
 }

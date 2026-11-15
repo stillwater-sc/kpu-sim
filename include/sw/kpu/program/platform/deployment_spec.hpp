@@ -135,8 +135,13 @@ struct DeviceSpecification {
             std::vector<std::string> ops;
         };
         std::optional<VectorUnit> bm_vector;    // on each BlockMover: bm.egress, bm.ingress
-        std::optional<VectorUnit> str_vector;   // on each streamer: str.drain
     } movers;
+
+    // The COMBINER (docs/01-architecture/combiner.md, #429): the vector unit on the tile's
+    // L1 -> L2 result path, where a program's `@ combiner` stages run. Absent = the machine has
+    // none, and a program that places a stage there is refused. Before #429 it was the
+    // streamer's vector unit, `movers.vector.str`, which the reader still accepts (deprecated).
+    std::optional<Movers::VectorUnit> combiner;
 
     // The PHYSICAL SHAPE (#286 step 1; array_layout.hpp). All optional, all additive (R8):
     // absent means "not declared", and a deployment without them is exactly as valid as
@@ -462,9 +467,9 @@ inline std::string DeploymentSpec::validate() const {
             return where + ": movers.str_bytes_per_cycle" + kFinitePos;
         if (!finite_positive(d.movers.noc_bytes_per_cycle))
             return where + ": movers.noc_bytes_per_cycle" + kFinitePos;
-        for (const auto& [site, v] : {std::pair{"bm", &d.movers.bm_vector}, std::pair{"str", &d.movers.str_vector}}) {
+        for (const auto& [site, v] : {std::pair{"movers.vector.bm", &d.movers.bm_vector}, std::pair{"combiner", &d.combiner}}) {
             if (!*v) continue;
-            const std::string at = where + ": movers.vector." + site;
+            const std::string at = where + ": " + site;
             if ((*v)->lanes == 0) return at + ".lanes must be non-zero";
             if (!finite_positive((*v)->rate)) return at + ".rate" + kFinitePos;
             for (const std::string& op : (*v)->ops)

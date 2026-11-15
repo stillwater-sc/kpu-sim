@@ -14,7 +14,7 @@
 //             single COMPUTE reduces it to one value (mean).
 //
 // The pool op (MAX/MEAN) rides in Config/metadata; the reduce itself is the
-// existing VE_REDUCE bound at execution (no new executor kernel). Movement is
+// existing CMB_REDUCE bound at execution (no new executor kernel). Movement is
 // pool-op-agnostic.
 //
 // SPDX-License-Identifier: MIT

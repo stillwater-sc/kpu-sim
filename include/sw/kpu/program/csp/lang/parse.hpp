@@ -445,7 +445,7 @@ private:
                 expect(")");
             }
             expect("@");
-            s.place = ident("a place: fabric, str.drain, bm.egress or bm.ingress");
+            s.place = ident("a place: fabric, combiner, bm.egress or bm.ingress");
             v.push_back(s);
         } while (sym(","));
         return v;

@@ -14,7 +14,7 @@ The RTL can start an output tile's accumulation from something other than zero:
 It writes padding with `CLEAR`, which reads nothing from L3.
 
 kpu-sim's accumulator (`acc C[i, j] in fabric { ... }`) always starts at zero. A bias exists only
-as an epilogue, applied on the way out (`store C via add(b) @ str.drain`). Nothing starts an
+as an epilogue, applied on the way out (`store C via add(b) @ combiner`). Nothing starts an
 accumulator from a value.
 
 ## 2. The model: one more edge stream

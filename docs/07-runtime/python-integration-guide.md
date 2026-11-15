@@ -56,7 +56,7 @@ The KPU is a specialized processor architecture designed for efficient execution
                     │   │    2 GHz, 1024 GFLOPS FP32      │   │
                     │   └─────────────────────────────────┘   │
                     │   ┌─────────────────────────────────┐   │
-                    │   │    Vector Engine (VE)           │   │
+                    │   │    Combiner           │   │
                     │   │    Bias + Activation Fusion     │   │
                     │   └─────────────────────────────────┘   │
                     └─────────────────────────────────────────┘
@@ -67,7 +67,7 @@ The KPU is a specialized processor architecture designed for efficient execution
 | Component | Description | Python Class |
 |-----------|-------------|--------------|
 | **Systolic Array** | 16x16 PE array for matrix multiplication | Part of `ConcurrentExecutor` |
-| **Vector Engine** | Fused bias addition and activation functions | Controlled via `ActivationType` |
+| **Combiner** | Fused bias addition and activation functions | Controlled via `ActivationType` |
 | **Memory Hierarchy** | 5-level: Host → External → L3 → L2 → L1 | Configured via `ResourceConfig` |
 | **DMA Engines** | Async data transfer between memory levels | Part of `ResourceConfig` |
 | **Block Movers** | L3↔L2 tile movement | Part of `ResourceConfig` |
@@ -139,7 +139,7 @@ kpu.dtype_name(kpu.DataType.FLOAT32)  # Returns "float32"
 ### Activation Functions
 
 ```python
-# Supported activations (fused in Vector Engine)
+# Supported activations (fused in Combiner)
 kpu.ActivationType.NONE        # Pass-through
 kpu.ActivationType.RELU        # max(0, x)
 kpu.ActivationType.GELU        # Gaussian Error Linear Unit

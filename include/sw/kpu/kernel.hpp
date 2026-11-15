@@ -711,7 +711,7 @@ public:
      * @return Compiled kernel
      *
      * Creates C = activation(A @ B + bias) in a single fused operation.
-     * The Vector Engine applies bias and activation inline during
+     * The Combiner applies bias and activation inline during
      * the output drain phase, avoiding extra memory passes.
      *
      * Arguments:

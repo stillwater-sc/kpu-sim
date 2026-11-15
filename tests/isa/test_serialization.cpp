@@ -84,7 +84,7 @@ TEST_CASE("ProgramSerializer binary serialization", "[serialization][binary]") {
         REQUIRE(loaded.instructions[4].opcode == DMOpcode::HALT);
     }
 
-    SECTION("Serialize program with VE-enabled drain") {
+    SECTION("Serialize program with Combiner-enabled drain") {
         DMProgram program;
         program.name = "mlp_test";
         program.version = 1;
@@ -97,7 +97,7 @@ TEST_CASE("ProgramSerializer binary serialization", "[serialization][binary]") {
         program.L1_Ki = 16;
         program.dataflow = DMProgram::Dataflow::OUTPUT_STATIONARY;
 
-        // Add VE-enabled drain instruction
+        // Add Combiner-enabled drain instruction
         program.instructions.push_back(
             DMInstruction::str_drain({0, 0, 0}, 0, 0, 0, 0, 16, 16, 16,
                                      true, ActivationType::GELU, true, 0x3000));
@@ -110,10 +110,10 @@ TEST_CASE("ProgramSerializer binary serialization", "[serialization][binary]") {
         REQUIRE(loaded.instructions[0].opcode == DMOpcode::STR_DRAIN_OUTPUT);
 
         const auto& ops = std::get<StreamerOperands>(loaded.instructions[0].operands);
-        REQUIRE(ops.ve_enabled == true);
-        REQUIRE(ops.ve_activation == ActivationType::GELU);
-        REQUIRE(ops.ve_bias_enabled == true);
-        REQUIRE(ops.ve_bias_addr == 0x3000);
+        REQUIRE(ops.cmb_enabled == true);
+        REQUIRE(ops.cmb_activation == ActivationType::GELU);
+        REQUIRE(ops.cmb_bias_enabled == true);
+        REQUIRE(ops.cmb_bias_addr == 0x3000);
     }
 
     SECTION("Serialize program with memory map") {
@@ -667,21 +667,21 @@ TEST_CASE("Serialization round-trip integrity", "[serialization][roundtrip]") {
 }
 
 // ============================================================================
-// VEOperands round-trip (issue #100, format v2)
+// CMBOperands round-trip (issue #100, format v2)
 // ============================================================================
 
-TEST_CASE("ProgramSerializer round-trips VEOperands", "[serialization][ve]") {
+TEST_CASE("ProgramSerializer round-trips CMBOperands", "[serialization][combiner]") {
     ProgramSerializer serializer;
 
     DMProgram program;
-    program.name = "ve_roundtrip";
+    program.name = "cmb_roundtrip";
     program.Ti = 16; program.Tj = 16; program.Tk = 1;
     program.instructions.push_back(
-        DMInstruction::ve_elementwise(VEOp::SUB, 3, 4, 5));
+        DMInstruction::cmb_elementwise(CMBOp::SUB, 3, 4, 5));
     program.instructions.push_back(
-        DMInstruction::ve_elementwise_unary(VEOp::EXP, 1, 2));
+        DMInstruction::cmb_elementwise_unary(CMBOp::EXP, 1, 2));
     program.instructions.push_back(
-        DMInstruction::ve_elementwise_scalar(VEOp::POW_S, 0.5f, 6, 7));
+        DMInstruction::cmb_elementwise_scalar(CMBOp::POW_S, 0.5f, 6, 7));
     program.instructions.push_back(DMInstruction::halt());
 
     auto buffer = serializer.serialize(program);
@@ -689,48 +689,48 @@ TEST_CASE("ProgramSerializer round-trips VEOperands", "[serialization][ve]") {
 
     REQUIRE(loaded.instructions.size() == 4);
 
-    const auto& binary = std::get<VEOperands>(loaded.instructions[0].operands);
-    REQUIRE(binary.op == VEOp::SUB);
+    const auto& binary = std::get<CMBOperands>(loaded.instructions[0].operands);
+    REQUIRE(binary.op == CMBOp::SUB);
     REQUIRE(binary.num_inputs == 2);
     REQUIRE(binary.l1_src_a == 3);
     REQUIRE(binary.l1_src_b == 4);
     REQUIRE(binary.l1_dst == 5);
 
-    const auto& unary = std::get<VEOperands>(loaded.instructions[1].operands);
-    REQUIRE(unary.op == VEOp::EXP);
+    const auto& unary = std::get<CMBOperands>(loaded.instructions[1].operands);
+    REQUIRE(unary.op == CMBOp::EXP);
     REQUIRE(unary.num_inputs == 1);
     REQUIRE(unary.l1_src_a == 1);
     REQUIRE(unary.l1_dst == 2);
 
-    const auto& scalar = std::get<VEOperands>(loaded.instructions[2].operands);
-    REQUIRE(scalar.op == VEOp::POW_S);
+    const auto& scalar = std::get<CMBOperands>(loaded.instructions[2].operands);
+    REQUIRE(scalar.op == CMBOp::POW_S);
     REQUIRE(scalar.scalar == 0.5f);
     REQUIRE(scalar.l1_src_a == 6);
     REQUIRE(scalar.l1_dst == 7);
 }
 
 // ============================================================================
-// VEReduceOperands round-trip (issue #105, format v3)
+// CMBReduceOperands round-trip (issue #105, format v3)
 // ============================================================================
 
-TEST_CASE("ProgramSerializer round-trips VEReduceOperands", "[serialization][ve][reduce]") {
+TEST_CASE("ProgramSerializer round-trips CMBReduceOperands", "[serialization][combiner][reduce]") {
     ProgramSerializer serializer;
 
     DMProgram program;
-    program.name = "ve_reduce_roundtrip";
+    program.name = "cmb_reduce_roundtrip";
     program.Ti = 16; program.Tj = 16; program.Tk = 1;
     // Streaming SUM: first tile INIT|ACCUMULATE, then a FINALIZE
-    program.instructions.push_back(DMInstruction::ve_reduce(
-        VEReduceOp::SUM, 0, 3,
-        VEReducePhase::INIT | VEReducePhase::ACCUMULATE));
-    program.instructions.push_back(DMInstruction::ve_reduce(
-        VEReduceOp::SUM, 0, 3, VEReducePhase::ACCUMULATE));
-    program.instructions.push_back(DMInstruction::ve_reduce(
-        VEReduceOp::SUM, 0, 3, VEReducePhase::FINALIZE));
+    program.instructions.push_back(DMInstruction::cmb_reduce(
+        CMBReduceOp::SUM, 0, 3,
+        CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE));
+    program.instructions.push_back(DMInstruction::cmb_reduce(
+        CMBReduceOp::SUM, 0, 3, CMBReducePhase::ACCUMULATE));
+    program.instructions.push_back(DMInstruction::cmb_reduce(
+        CMBReduceOp::SUM, 0, 3, CMBReducePhase::FINALIZE));
     // Single-shot VAR: all three phases fused
-    program.instructions.push_back(DMInstruction::ve_reduce(
-        VEReduceOp::VAR, 2, 5,
-        VEReducePhase::INIT | VEReducePhase::ACCUMULATE | VEReducePhase::FINALIZE));
+    program.instructions.push_back(DMInstruction::cmb_reduce(
+        CMBReduceOp::VAR, 2, 5,
+        CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE | CMBReducePhase::FINALIZE));
     program.instructions.push_back(DMInstruction::halt());
 
     auto buffer = serializer.serialize(program);
@@ -738,57 +738,113 @@ TEST_CASE("ProgramSerializer round-trips VEReduceOperands", "[serialization][ve]
 
     REQUIRE(loaded.instructions.size() == 5);
 
-    const auto& first = std::get<VEReduceOperands>(loaded.instructions[0].operands);
-    REQUIRE(first.op == VEReduceOp::SUM);
-    REQUIRE(first.phase == (VEReducePhase::INIT | VEReducePhase::ACCUMULATE));
+    const auto& first = std::get<CMBReduceOperands>(loaded.instructions[0].operands);
+    REQUIRE(first.op == CMBReduceOp::SUM);
+    REQUIRE(first.phase == (CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE));
     REQUIRE(first.l1_src == 0);
     REQUIRE(first.l1_acc == 3);
 
-    const auto& fin = std::get<VEReduceOperands>(loaded.instructions[2].operands);
-    REQUIRE(fin.op == VEReduceOp::SUM);
-    REQUIRE(fin.phase == VEReducePhase::FINALIZE);
+    const auto& fin = std::get<CMBReduceOperands>(loaded.instructions[2].operands);
+    REQUIRE(fin.op == CMBReduceOp::SUM);
+    REQUIRE(fin.phase == CMBReducePhase::FINALIZE);
 
-    const auto& var = std::get<VEReduceOperands>(loaded.instructions[3].operands);
-    REQUIRE(var.op == VEReduceOp::VAR);
+    const auto& var = std::get<CMBReduceOperands>(loaded.instructions[3].operands);
+    REQUIRE(var.op == CMBReduceOp::VAR);
     REQUIRE(var.phase ==
-            (VEReducePhase::INIT | VEReducePhase::ACCUMULATE | VEReducePhase::FINALIZE));
+            (CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE | CMBReducePhase::FINALIZE));
     REQUIRE(var.l1_src == 2);
     REQUIRE(var.l1_acc == 5);
 }
 
-TEST_CASE("Assembler parses VE_REDUCE with phase flags", "[serialization][ve][reduce][asm]") {
+TEST_CASE("Assembler parses CMB_REDUCE with phase flags", "[serialization][combiner][reduce][asm]") {
     Assembler assembler;
     const std::string source =
-        "VE_REDUCE SUM, 0, 1, INIT\n"       // streaming first tile
-        "VE_REDUCE SUM, 0, 1\n"             // ACCUMULATE implied
-        "VE_REDUCE MEAN, 0, 1, FINALIZE\n"  // finalize only
-        "VE_REDUCE VAR, 2, 3, INIT, FINALIZE\n"
+        "CMB_REDUCE SUM, 0, 1, INIT\n"       // streaming first tile
+        "CMB_REDUCE SUM, 0, 1\n"             // ACCUMULATE implied
+        "CMB_REDUCE MEAN, 0, 1, FINALIZE\n"  // finalize only
+        "CMB_REDUCE VAR, 2, 3, INIT, FINALIZE\n"
         "HALT\n";
 
     DMProgram program = assembler.assemble(source, "reduce_asm.kpuasm");
 
-    // Locate the four VE_REDUCE instructions (directives produce none)
-    std::vector<VEReduceOperands> reds;
+    // Locate the four CMB_REDUCE instructions (directives produce none)
+    std::vector<CMBReduceOperands> reds;
     for (const auto& instr : program.instructions) {
-        if (instr.opcode == DMOpcode::VE_REDUCE) {
-            reds.push_back(std::get<VEReduceOperands>(instr.operands));
+        if (instr.opcode == DMOpcode::CMB_REDUCE) {
+            reds.push_back(std::get<CMBReduceOperands>(instr.operands));
         }
     }
     REQUIRE(reds.size() == 4);
 
-    REQUIRE(reds[0].op == VEReduceOp::SUM);
-    REQUIRE(reds[0].phase == (VEReducePhase::INIT | VEReducePhase::ACCUMULATE));
+    REQUIRE(reds[0].op == CMBReduceOp::SUM);
+    REQUIRE(reds[0].phase == (CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE));
     REQUIRE(reds[0].l1_src == 0);
     REQUIRE(reds[0].l1_acc == 1);
 
-    REQUIRE(reds[1].phase == VEReducePhase::ACCUMULATE);  // no flags -> accumulate only
+    REQUIRE(reds[1].phase == CMBReducePhase::ACCUMULATE);  // no flags -> accumulate only
 
-    REQUIRE(reds[2].op == VEReduceOp::MEAN);
-    REQUIRE(reds[2].phase == (VEReducePhase::ACCUMULATE | VEReducePhase::FINALIZE));
+    REQUIRE(reds[2].op == CMBReduceOp::MEAN);
+    REQUIRE(reds[2].phase == (CMBReducePhase::ACCUMULATE | CMBReducePhase::FINALIZE));
 
-    REQUIRE(reds[3].op == VEReduceOp::VAR);
+    REQUIRE(reds[3].op == CMBReduceOp::VAR);
     REQUIRE(reds[3].phase ==
-            (VEReducePhase::INIT | VEReducePhase::ACCUMULATE | VEReducePhase::FINALIZE));
+            (CMBReducePhase::INIT | CMBReducePhase::ACCUMULATE | CMBReducePhase::FINALIZE));
     REQUIRE(reds[3].l1_src == 2);
     REQUIRE(reds[3].l1_acc == 3);
+}
+
+// #429: the Vector Engine is the Combiner. The mnemonics from before the rename (VE_ELEMENTWISE,
+// VE_REDUCE, VE_ENABLE) and the JSON keys (ve_*) are deprecated aliases for one release: an old
+// .kpuasm assembles to the same binary, and an old .kpujson loads to the same program.
+TEST_CASE("Combiner: the VE mnemonics and keys are deprecated aliases", "[serialization][combiner][asm]") {
+    const std::string now =
+        "CMB_ELEMENTWISE EXP, 0, 1\n"
+        "CMB_ELEMENTWISE ADD, 0, 1, 2\n"
+        "CMB_REDUCE SUM, 0, 1, INIT\n"
+        "STR_DRAIN_OUTPUT (0,0,0), 2, 0, 0, 0, 36, 8, 16, BUF_0, CMB_ENABLE RELU\n"
+        "HALT\n";
+    std::string before = now;
+    for (const auto& [from, to] : {std::pair<std::string, std::string>{"CMB_ELEMENTWISE", "VE_ELEMENTWISE"},
+                                   {"CMB_REDUCE", "VE_REDUCE"},
+                                   {"CMB_ENABLE", "VE_ENABLE"}})
+        for (std::size_t at = before.find(from); at != std::string::npos; at = before.find(from, at + to.size()))
+            before.replace(at, from.size(), to);
+    REQUIRE(before.find("CMB_") == std::string::npos);
+
+    Assembler a_now, a_before;
+    const DMProgram p_now = a_now.assemble(now, "now.kpuasm");
+    const DMProgram p_before = a_before.assemble(before, "before.kpuasm");
+    ProgramSerializer serializer;
+    const std::vector<uint8_t> bin = serializer.serialize(p_now);
+    CHECK(serializer.serialize(p_before) == bin);
+
+    std::size_t drains = 0;
+    for (const auto& instr : p_now.instructions)
+        if (instr.opcode == DMOpcode::STR_DRAIN_OUTPUT) {
+            ++drains;
+            const auto& ops = std::get<StreamerOperands>(instr.operands);
+            CHECK(ops.cmb_enabled);
+            CHECK(ops.cmb_activation == ActivationType::RELU);
+        }
+    CHECK(drains == 1);
+
+    // JSON: the drain's fields are written cmb_*, and a file that spells them ve_* still loads.
+    DMProgram drain_program;
+    drain_program.name = "combiner_json";   // no "cmb_ prefix: the key rewrite below must not touch it
+    drain_program.instructions.push_back(
+        DMInstruction::str_drain({0, 0, 0}, 0, 0, 0, 0, 16, 16, 16, true, ActivationType::GELU, true, 0x3000));
+    drain_program.instructions.push_back(DMInstruction::halt());
+    const std::string json = serializer.to_json(drain_program, false);
+    REQUIRE(json.find("\"cmb_enabled\"") != std::string::npos);
+    REQUIRE(json.find("\"ve_") == std::string::npos);
+    std::string legacy = json;
+    for (std::size_t at = legacy.find("\"cmb_"); at != std::string::npos; at = legacy.find("\"cmb_", at))
+        legacy.replace(at, 5, "\"ve_");
+    const DMProgram loaded = serializer.from_json(legacy);
+    const auto& ops = std::get<StreamerOperands>(loaded.instructions.at(0).operands);
+    CHECK(ops.cmb_enabled);
+    CHECK(ops.cmb_activation == ActivationType::GELU);
+    CHECK(ops.cmb_bias_enabled);
+    CHECK(ops.cmb_bias_addr == 0x3000);
+    CHECK(serializer.serialize(loaded) == serializer.serialize(serializer.from_json(json)));
 }

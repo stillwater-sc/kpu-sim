@@ -3,7 +3,7 @@
 // Behavioral Orchestrator - coordinates data flow for MLP execution
 //
 // The orchestrator manages the complete data flow pipeline:
-//   Host -> DMA -> L3 -> BlockMover -> L2 -> Compute -> VectorEngine
+//   Host -> DMA -> L3 -> BlockMover -> L2 -> Compute -> Combiner
 //   -> L2 -> BlockMover -> L3 -> DMA -> Host
 //
 // In behavioral mode, all operations are instant (no timing simulation).
@@ -13,7 +13,7 @@
 
 #include <sw/kpu/models/behavioral/memory/memory_model.hpp>
 #include <sw/kpu/models/behavioral/datamovement/block_mover.hpp>
-#include <sw/kpu/models/behavioral/compute/vector_engine.hpp>
+#include <sw/kpu/models/behavioral/compute/combiner.hpp>
 #include <sw/kpu/models/temporal/compute/sfu.hpp>
 #include <cstdint>
 #include <memory>
@@ -152,9 +152,9 @@ public:
     BehavioralBlockMover& block_mover() { return block_mover_; }
     const BehavioralBlockMover& block_mover() const { return block_mover_; }
 
-    /// Get the vector engine
-    BehavioralVectorEngine& vector_engine() { return vector_engine_; }
-    const BehavioralVectorEngine& vector_engine() const { return vector_engine_; }
+    /// Get the Combiner
+    BehavioralCombiner& combiner() { return combiner_; }
+    const BehavioralCombiner& combiner() const { return combiner_; }
 
     // ========================================================================
     // Configuration
@@ -170,7 +170,7 @@ public:
     void reset_stats() {
         stats_.reset();
         block_mover_.reset_stats();
-        vector_engine_.reset_stats();
+        combiner_.reset_stats();
     }
 
 private:
@@ -180,7 +180,7 @@ private:
     // Components
     std::unique_ptr<BehavioralMemoryModel> memory_;
     BehavioralBlockMover block_mover_;
-    BehavioralVectorEngine vector_engine_;
+    BehavioralCombiner combiner_;
 
     // L3/L2 allocation tracking (simple bump allocator, reset per operation)
     struct BufferAllocator {

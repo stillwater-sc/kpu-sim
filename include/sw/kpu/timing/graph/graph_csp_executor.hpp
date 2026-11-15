@@ -197,15 +197,15 @@ public:
                         auto ins = edge_inputs(g, id, out);
                         const std::vector<float>& a = ins.empty() ? input : *ins[0];
                         const std::vector<float>& b = ins.size() > 1 ? *ins[1] : input;
-                        out[id] = run_elementwise(sw::kpu::isa::VEOp::ADD, a, b, result.stats);
+                        out[id] = run_elementwise(sw::kpu::isa::CMBOp::ADD, a, b, result.stats);
                     } else if (op == ElementwiseOp::RELU) {
                         out[id] = run_relu(input_of(g, id, out, input), result.stats);
                     } else if (op == ElementwiseOp::RELU6) {
                         // MobileNetV2 activation clamp min(max(x,0),6), run as a
-                        // standalone VE op (the design's permitted clamp form).
+                        // standalone Combiner op (the design's permitted clamp form).
                         out[id] = run_relu6(input_of(g, id, out, input), result.stats);
                     } else if (op == ElementwiseOp::SIGMOID) {
-                        // EfficientNet SE gate: 1/(1+e^-x) composed from VE ops.
+                        // EfficientNet SE gate: 1/(1+e^-x) composed from Combiner ops.
                         out[id] = run_sigmoid(input_of(g, id, out, input), result.stats);
                     } else if (op == ElementwiseOp::SILU) {
                         // EfficientNet activation: x * sigmoid(x).
@@ -221,7 +221,7 @@ public:
                         const std::vector<float>& a = *ins[0];
                         const std::vector<float>& b = *ins[1];
                         if (a.size() == b.size()) {
-                            out[id] = run_elementwise(sw::kpu::isa::VEOp::MUL, a, b, result.stats);
+                            out[id] = run_elementwise(sw::kpu::isa::CMBOp::MUL, a, b, result.stats);
                         } else {
                             const std::vector<float>& act  = a.size() >= b.size() ? a : b;
                             const std::vector<float>& gate = a.size() >= b.size() ? b : a;

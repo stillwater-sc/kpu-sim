@@ -1,10 +1,10 @@
-// Test suite for Vector Engine (VE)
+// Test suite for Combiner
 // Tests inline bias+activation processing
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include <sw/kpu/models/temporal/datamovement/vector_engine.hpp>
+#include <sw/kpu/models/temporal/datamovement/combiner.hpp>
 #include <cmath>
 #include <vector>
 #include <cstring>
@@ -13,50 +13,50 @@ using namespace sw::kpu;
 using Catch::Approx;
 
 // ============================================================================
-// VectorEngine Configuration Tests
+// Combiner Configuration Tests
 // ============================================================================
 
-TEST_CASE("VectorEngine construction", "[ve]") {
+TEST_CASE("Combiner construction", "[combiner]") {
     SECTION("Default construction") {
-        VectorEngine ve(0);
-        REQUIRE(ve.id() == 0);
-        REQUIRE(ve.is_enabled() == true);
-        REQUIRE(ve.is_busy() == false);
+        Combiner cmb(0);
+        REQUIRE(cmb.id() == 0);
+        REQUIRE(cmb.is_enabled() == true);
+        REQUIRE(cmb.is_busy() == false);
     }
 
     SECTION("Construction with custom config") {
-        VectorEngineConfig config;
+        CombinerConfig config;
         config.vector_width = 16;
         config.bias_buffer_size = 2048;
         config.enabled = true;
 
-        VectorEngine ve(1, config);
-        REQUIRE(ve.id() == 1);
-        REQUIRE(ve.config().vector_width == 16);
-        REQUIRE(ve.config().bias_buffer_size == 2048);
+        Combiner cmb(1, config);
+        REQUIRE(cmb.id() == 1);
+        REQUIRE(cmb.config().vector_width == 16);
+        REQUIRE(cmb.config().bias_buffer_size == 2048);
     }
 }
 
-TEST_CASE("VectorEngine configuration", "[ve]") {
-    VectorEngine ve(0);
+TEST_CASE("Combiner configuration", "[combiner]") {
+    Combiner cmb(0);
 
     SECTION("Enable/disable") {
-        ve.disable();
-        REQUIRE(ve.is_enabled() == false);
+        cmb.disable();
+        REQUIRE(cmb.is_enabled() == false);
 
-        ve.enable();
-        REQUIRE(ve.is_enabled() == true);
+        cmb.enable();
+        REQUIRE(cmb.is_enabled() == true);
     }
 
     SECTION("Set activation") {
-        ve.set_activation(ActivationType::GELU);
-        REQUIRE(ve.sfu().activation() == ActivationType::GELU);
+        cmb.set_activation(ActivationType::GELU);
+        REQUIRE(cmb.sfu().activation() == ActivationType::GELU);
     }
 
     SECTION("Reset clears state") {
-        ve.reset();
-        REQUIRE(ve.is_busy() == false);
-        REQUIRE(ve.has_pending_operations() == false);
+        cmb.reset();
+        REQUIRE(cmb.is_busy() == false);
+        REQUIRE(cmb.has_pending_operations() == false);
     }
 }
 
@@ -64,19 +64,19 @@ TEST_CASE("VectorEngine configuration", "[ve]") {
 // Bias Preloading Tests
 // ============================================================================
 
-TEST_CASE("VectorEngine bias preloading", "[ve][bias]") {
-    VectorEngine ve(0);
+TEST_CASE("Combiner bias preloading", "[combiner][bias]") {
+    Combiner cmb(0);
 
     SECTION("Preload bias vector") {
         std::vector<float> bias = {0.1f, 0.2f, 0.3f, 0.4f};
-        ve.preload_bias(bias.data(), bias.size());
+        cmb.preload_bias(bias.data(), bias.size());
         // Bias should be loaded without error
     }
 
     SECTION("Large bias vector") {
-        VectorEngineConfig config;
+        CombinerConfig config;
         config.bias_buffer_size = 1024;
-        VectorEngine ve2(0, config);
+        Combiner ve2(0, config);
 
         std::vector<float> bias(1024, 0.5f);
         ve2.preload_bias(bias.data(), bias.size());
@@ -87,14 +87,14 @@ TEST_CASE("VectorEngine bias preloading", "[ve][bias]") {
 // Immediate Processing Tests (Synchronous)
 // ============================================================================
 
-TEST_CASE("VectorEngine immediate processing - RELU only", "[ve][immediate]") {
-    VectorEngine ve(0);
-    ve.set_activation(ActivationType::RELU);
+TEST_CASE("Combiner immediate processing - RELU only", "[combiner][immediate]") {
+    Combiner cmb(0);
+    cmb.set_activation(ActivationType::RELU);
 
     std::vector<float> input = {-2.0f, -1.0f, 0.0f, 1.0f, 2.0f};
     std::vector<float> output(input.size());
 
-    ve.process_row_immediate(input.data(), output.data(), input.size());
+    cmb.process_row_immediate(input.data(), output.data(), input.size());
 
     REQUIRE(output[0] == 0.0f);
     REQUIRE(output[1] == 0.0f);
@@ -103,18 +103,18 @@ TEST_CASE("VectorEngine immediate processing - RELU only", "[ve][immediate]") {
     REQUIRE(output[4] == 2.0f);
 }
 
-TEST_CASE("VectorEngine immediate processing - bias + RELU", "[ve][immediate]") {
-    VectorEngine ve(0);
-    ve.set_activation(ActivationType::RELU);
+TEST_CASE("Combiner immediate processing - bias + RELU", "[combiner][immediate]") {
+    Combiner cmb(0);
+    cmb.set_activation(ActivationType::RELU);
 
     // Preload bias
     std::vector<float> bias = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};  // Add 1 to all
-    ve.preload_bias(bias.data(), bias.size());
+    cmb.preload_bias(bias.data(), bias.size());
 
     std::vector<float> input = {-2.0f, -1.0f, 0.0f, 1.0f, 2.0f};
     std::vector<float> output(input.size());
 
-    ve.process_row_immediate(input.data(), output.data(), input.size());
+    cmb.process_row_immediate(input.data(), output.data(), input.size());
 
     // After bias: -1, 0, 1, 2, 3
     // After RELU: 0, 0, 1, 2, 3
@@ -125,14 +125,14 @@ TEST_CASE("VectorEngine immediate processing - bias + RELU", "[ve][immediate]") 
     REQUIRE(output[4] == 3.0f);
 }
 
-TEST_CASE("VectorEngine immediate processing - GELU", "[ve][immediate]") {
-    VectorEngine ve(0);
-    ve.set_activation(ActivationType::GELU);
+TEST_CASE("Combiner immediate processing - GELU", "[combiner][immediate]") {
+    Combiner cmb(0);
+    cmb.set_activation(ActivationType::GELU);
 
     std::vector<float> input = {-2.0f, 0.0f, 2.0f};
     std::vector<float> output(input.size());
 
-    ve.process_row_immediate(input.data(), output.data(), input.size());
+    cmb.process_row_immediate(input.data(), output.data(), input.size());
 
     // Compare with SFU reference
     for (size_t i = 0; i < input.size(); ++i) {
@@ -141,9 +141,9 @@ TEST_CASE("VectorEngine immediate processing - GELU", "[ve][immediate]") {
     }
 }
 
-TEST_CASE("VectorEngine tile processing", "[ve][tile]") {
-    VectorEngine ve(0);
-    ve.set_activation(ActivationType::SIGMOID);
+TEST_CASE("Combiner tile processing", "[combiner][tile]") {
+    Combiner cmb(0);
+    cmb.set_activation(ActivationType::SIGMOID);
 
     // 3x4 tile
     Size height = 3;
@@ -155,7 +155,7 @@ TEST_CASE("VectorEngine tile processing", "[ve][tile]") {
     };
     std::vector<float> output(input.size());
 
-    ve.process_tile_immediate(input.data(), output.data(), height, width);
+    cmb.process_tile_immediate(input.data(), output.data(), height, width);
 
     // Verify all outputs are valid sigmoid values
     for (size_t i = 0; i < output.size(); ++i) {
@@ -171,38 +171,38 @@ TEST_CASE("VectorEngine tile processing", "[ve][tile]") {
 // Operation Queue Tests
 // ============================================================================
 
-TEST_CASE("VectorEngine operation queue", "[ve][queue]") {
-    VectorEngine ve(0);
+TEST_CASE("Combiner operation queue", "[combiner][queue]") {
+    Combiner cmb(0);
 
     SECTION("Initially empty") {
-        REQUIRE(ve.has_pending_operations() == false);
-        REQUIRE(ve.pending_operation_count() == 0);
+        REQUIRE(cmb.has_pending_operations() == false);
+        REQUIRE(cmb.pending_operation_count() == 0);
     }
 
     SECTION("Enqueue operation") {
-        VEOperation op;
+        CombinerOperation op;
         op.height = 16;
         op.width = 32;
         op.activation = ActivationType::RELU;
 
-        ve.enqueue_operation(op);
+        cmb.enqueue_operation(op);
 
         // Operation starts immediately if idle
-        REQUIRE(ve.is_busy() == true);
+        REQUIRE(cmb.is_busy() == true);
     }
 
     SECTION("Multiple operations queue up") {
-        VEOperation op1, op2;
+        CombinerOperation op1, op2;
         op1.height = 16;
         op1.width = 32;
         op2.height = 8;
         op2.width = 16;
 
-        ve.enqueue_operation(op1);
-        ve.enqueue_operation(op2);
+        cmb.enqueue_operation(op1);
+        cmb.enqueue_operation(op2);
 
         // One is executing, one is pending
-        REQUIRE(ve.pending_operation_count() == 1);
+        REQUIRE(cmb.pending_operation_count() == 1);
     }
 }
 
@@ -210,22 +210,22 @@ TEST_CASE("VectorEngine operation queue", "[ve][queue]") {
 // Statistics Tests
 // ============================================================================
 
-TEST_CASE("VectorEngine statistics", "[ve][stats]") {
-    VectorEngine ve(0);
-    ve.set_activation(ActivationType::RELU);
+TEST_CASE("Combiner statistics", "[combiner][stats]") {
+    Combiner cmb(0);
+    cmb.set_activation(ActivationType::RELU);
 
     // Process some data
     std::vector<float> input = {-1.0f, 0.0f, 1.0f, 2.0f};
     std::vector<float> output(input.size());
 
-    ve.process_row_immediate(input.data(), output.data(), input.size());
+    cmb.process_row_immediate(input.data(), output.data(), input.size());
 
-    [[maybe_unused]] const VEStats& stats = ve.stats();
+    [[maybe_unused]] const CombinerStats& stats = cmb.stats();
     // Stats track operations (may be 0 for immediate mode depending on impl)
 
     SECTION("Reset statistics") {
-        ve.reset_stats();
-        const VEStats& new_stats = ve.stats();
+        cmb.reset_stats();
+        const CombinerStats& new_stats = cmb.stats();
         REQUIRE(new_stats.elements_processed == 0);
         REQUIRE(new_stats.operations_completed == 0);
     }
@@ -235,15 +235,15 @@ TEST_CASE("VectorEngine statistics", "[ve][stats]") {
 // Timing Estimation Tests
 // ============================================================================
 
-TEST_CASE("VectorEngine timing", "[ve][timing]") {
-    VectorEngine ve(0);
+TEST_CASE("Combiner timing", "[combiner][timing]") {
+    Combiner cmb(0);
 
     SECTION("Latency") {
-        REQUIRE(ve.get_latency_cycles() == 3);  // Default pipeline depth
+        REQUIRE(cmb.get_latency_cycles() == 3);  // Default pipeline depth
     }
 
     SECTION("Throughput") {
-        REQUIRE(ve.get_throughput() == 8);  // Default vector width
+        REQUIRE(cmb.get_throughput() == 8);  // Default vector width
     }
 
     SECTION("Cycle estimate for tile") {
@@ -251,7 +251,7 @@ TEST_CASE("VectorEngine timing", "[ve][timing]") {
         // Rows: 32, chunks per row: ceil(64/8) = 8
         // Total chunks: 32 * 8 = 256
         // Cycles: 256 + pipeline_depth
-        Cycle estimated = ve.estimate_cycles(32, 64);
+        Cycle estimated = cmb.estimate_cycles(32, 64);
         REQUIRE(estimated == 256 + 3);
     }
 }
@@ -260,9 +260,9 @@ TEST_CASE("VectorEngine timing", "[ve][timing]") {
 // Cycle-Accurate Update Tests
 // ============================================================================
 
-TEST_CASE("VectorEngine cycle-accurate update", "[ve][cycle]") {
-    VectorEngine ve(0);
-    ve.set_activation(ActivationType::RELU);
+TEST_CASE("Combiner cycle-accurate update", "[combiner][cycle]") {
+    Combiner cmb(0);
+    cmb.set_activation(ActivationType::RELU);
 
     // Mock memory for testing
     std::vector<float> l1_data = {-2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
@@ -278,7 +278,7 @@ TEST_CASE("VectorEngine cycle-accurate update", "[ve][cycle]") {
     };
 
     SECTION("Operation completes after cycles") {
-        VEOperation op;
+        CombinerOperation op;
         op.l1_scratchpad_id = 0;
         op.l1_base_addr = 0;
         op.l2_bank_id = 0;
@@ -288,13 +288,13 @@ TEST_CASE("VectorEngine cycle-accurate update", "[ve][cycle]") {
         op.element_size = sizeof(float);
         op.activation = ActivationType::RELU;
 
-        ve.enqueue_operation(op);
+        cmb.enqueue_operation(op);
 
         // Run until completion
         Cycle cycle = 0;
         bool completed = false;
         while (cycle < 100 && !completed) {
-            completed = ve.update(cycle, l1_read, l2_write);
+            completed = cmb.update(cycle, l1_read, l2_write);
             cycle++;
         }
 
@@ -307,18 +307,18 @@ TEST_CASE("VectorEngine cycle-accurate update", "[ve][cycle]") {
 // SFU Access Tests
 // ============================================================================
 
-TEST_CASE("VectorEngine SFU access", "[ve][sfu]") {
-    VectorEngine ve(0);
+TEST_CASE("Combiner SFU access", "[combiner][sfu]") {
+    Combiner cmb(0);
 
     SECTION("SFU is accessible") {
-        SFU& sfu = ve.sfu();
+        SFU& sfu = cmb.sfu();
         sfu.configure(ActivationType::TANH);
         REQUIRE(sfu.activation() == ActivationType::TANH);
     }
 
     SECTION("Const SFU access") {
-        const VectorEngine& const_ve = ve;
-        const SFU& sfu = const_ve.sfu();
+        const Combiner& const_cmb = cmb;
+        const SFU& sfu = const_cmb.sfu();
         REQUIRE(sfu.activation() == ActivationType::NONE);  // Default
     }
 }

@@ -409,12 +409,12 @@ void ConcurrentExecutor::schedule_instruction(const DMInstruction& instr) {
             break;
         }
 
-        // Vector Engine ops (issue #92): timing envelope of one element per
+        // Combiner ops (issue #92): timing envelope of one element per
         // fabric lane-cycle over the current tile; functional semantics land
         // with the pattern epics (E2/E3). compute_fabric_'s bus_width is an
         // elements-per-cycle throughput, so pass the ELEMENT count, not bytes
-        case DMOpcode::VE_ELEMENTWISE:
-        case DMOpcode::VE_REDUCE: {
+        case DMOpcode::CMB_ELEMENTWISE:
+        case DMOpcode::CMB_REDUCE: {
             Size tile_elems = auto_elem_size_ > 0
                 ? auto_tile_bytes_ / auto_elem_size_ : auto_tile_bytes_;
             completion = compute_fabric_.schedule_op(

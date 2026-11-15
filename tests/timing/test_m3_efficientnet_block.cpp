@@ -3,7 +3,7 @@
 // M3 (#131): an EfficientNet MBConv block with squeeze-and-excitation, expressed
 // as a KernelGraph DFG and executed on the CSP value path through
 // GraphCspExecutor, validated vs a composed host oracle. Exercises the SE gate
-// additions - a sigmoid runner (composed from VE ops) and the channel-broadcast
+// additions - a sigmoid runner (composed from Combiner ops) and the channel-broadcast
 // multiply (per-channel [N,C] gate x [N,C,H,W] activation) - on top of the
 // inverted-residual (expand / depthwise / project / residual) path.
 //

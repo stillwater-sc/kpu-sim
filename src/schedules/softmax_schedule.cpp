@@ -2,8 +2,8 @@
  * @file softmax_schedule.cpp
  * @brief Softmax schedule: y[b,i] = exp(x[b,i] - max) / sum(exp(x[b,i] - max))
  *
- * Three-pass reduction + elementwise kernel using the Vector Engine.
- * No systolic array — all compute via VE.
+ * Three-pass reduction + elementwise kernel using the Combiner.
+ * No systolic array — all compute via Combiner.
  */
 
 #include <sw/kpu/schedules/softmax_schedule.hpp>
@@ -25,7 +25,7 @@ Schedule softmax(Size B, Size D, Size Tb) {
     sched.dataflow(DMProgram::Dataflow::OUTPUT_STATIONARY);
 
     /**
-     * Softmax Schedule (3-pass VE kernel):
+     * Softmax Schedule (3-pass Combiner kernel):
      *
      * for tb in 0..B/Tb:
      *   // PASS 1: Find max per row

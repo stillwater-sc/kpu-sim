@@ -10,7 +10,7 @@
 //   run_conv2d_fused: conv (im2col -> GEMM) with an OPTIONAL folded BatchNorm and
 //     an OPTIONAL bias + activation applied in-compute (the fused epilogue) - so
 //     conv+BN+ReLU is one GEMM, no DRAM round-trip for the intermediate.
-//   run_elementwise: a binary VE op (ADD for the residual join, MAX for ReLU).
+//   run_elementwise: a binary Combiner op (ADD for the residual join, MAX for ReLU).
 //
 // Tensors are row-major NCHW fp32. Tile size T divides M / Cout / K; the M2 demo
 // picks aligned shapes (documented in docs/plans/m2_resnet_dfg.md).
@@ -334,7 +334,7 @@ run_conv2d_fused(const std::vector<float>& input, const std::vector<float>& filt
  * For ReLU pass op = MAX and b = zeros. Both operands must be the same length.
  */
 [[nodiscard]] inline std::vector<float>
-run_elementwise(sw::kpu::isa::VEOp op, const std::vector<float>& a,
+run_elementwise(sw::kpu::isa::CMBOp op, const std::vector<float>& a,
                 const std::vector<float>& b, RunStats& stats) {
     using schedule::ElementwiseScheduleGenerator;
     using schedule::FunctionalElementwiseExecutor;
@@ -362,16 +362,16 @@ run_elementwise(sw::kpu::isa::VEOp op, const std::vector<float>& a,
 /// ReLU as MAX(x, 0) on the CSP executor.
 [[nodiscard]] inline std::vector<float>
 run_relu(const std::vector<float>& x, RunStats& stats) {
-    return run_elementwise(sw::kpu::isa::VEOp::MAX, x,
+    return run_elementwise(sw::kpu::isa::CMBOp::MAX, x,
                            std::vector<float>(x.size(), 0.0f), stats);
 }
 
 /**
- * @brief Run a unary/scalar VE op (NEG/EXP/... or ADD_S/MUL_S/POW_S) on the CSP
+ * @brief Run a unary/scalar Combiner op (NEG/EXP/... or ADD_S/MUL_S/POW_S) on the CSP
  *        executor via the value-producing functional path (UNARY form).
  */
 [[nodiscard]] inline std::vector<float>
-run_ve_unary(sw::kpu::isa::VEOp op, const std::vector<float>& x, float scalar,
+run_cmb_unary(sw::kpu::isa::CMBOp op, const std::vector<float>& x, float scalar,
              RunStats& stats) {
     using schedule::ElementwiseScheduleGenerator;
     using schedule::FunctionalElementwiseExecutor;
@@ -388,7 +388,7 @@ run_ve_unary(sw::kpu::isa::VEOp op, const std::vector<float>& x, float scalar,
     FunctionalElementwiseExecutor exec(gcfg, ecfg);
     auto result = exec.run(op, x, {}, scalar);
     if (!result.execution.success)
-        throw std::runtime_error("run_ve_unary: execution failed: " +
+        throw std::runtime_error("run_cmb_unary: execution failed: " +
                                  result.execution.error_message);
     detail::accumulate(stats, result.execution.stats);
     return result.values;
@@ -397,28 +397,28 @@ run_ve_unary(sw::kpu::isa::VEOp op, const std::vector<float>& x, float scalar,
 /**
  * @brief Sigmoid = 1/(1 + e^-x) on the CSP executor (EfficientNet SE gate).
  *
- * The Vector Engine has no sigmoid op, so it is composed from four unary/scalar
- * VE ops on the value path: POW_S(ADD_S(EXP(NEG(x)), 1), -1).
+ * The Combiner has no sigmoid op, so it is composed from four unary/scalar
+ * Combiner ops on the value path: POW_S(ADD_S(EXP(NEG(x)), 1), -1).
  */
 [[nodiscard]] inline std::vector<float>
 run_sigmoid(const std::vector<float>& x, RunStats& stats) {
-    using VEOp = sw::kpu::isa::VEOp;
-    auto t = run_ve_unary(VEOp::NEG, x, 0.0f, stats);          // -x
-    t = run_ve_unary(VEOp::EXP, t, 0.0f, stats);               // e^-x
-    t = run_ve_unary(VEOp::ADD_S, t, 1.0f, stats);             // 1 + e^-x
-    return run_ve_unary(VEOp::POW_S, t, -1.0f, stats);         // 1/(1 + e^-x)
+    using CMBOp = sw::kpu::isa::CMBOp;
+    auto t = run_cmb_unary(CMBOp::NEG, x, 0.0f, stats);          // -x
+    t = run_cmb_unary(CMBOp::EXP, t, 0.0f, stats);               // e^-x
+    t = run_cmb_unary(CMBOp::ADD_S, t, 1.0f, stats);             // 1 + e^-x
+    return run_cmb_unary(CMBOp::POW_S, t, -1.0f, stats);         // 1/(1 + e^-x)
 }
 
 /**
  * @brief SiLU / swish = x * sigmoid(x) on the CSP executor (EfficientNet activation).
  *
- * Composed on the value path: sigmoid(x) (four VE ops, run_sigmoid) then a binary
- * multiply against x - five VE ops total.
+ * Composed on the value path: sigmoid(x) (four Combiner ops, run_sigmoid) then a binary
+ * multiply against x - five Combiner ops total.
  */
 [[nodiscard]] inline std::vector<float>
 run_silu(const std::vector<float>& x, RunStats& stats) {
     auto sig = run_sigmoid(x, stats);
-    return run_elementwise(sw::kpu::isa::VEOp::MUL, x, sig, stats);
+    return run_elementwise(sw::kpu::isa::CMBOp::MUL, x, sig, stats);
 }
 
 /**
@@ -441,7 +441,7 @@ run_channel_broadcast_mul(const std::vector<float>& activation,
     std::vector<float> gate_full(activation.size());
     for (std::size_t i = 0; i < activation.size(); ++i)
         gate_full[i] = gate[i / plane];
-    return run_elementwise(sw::kpu::isa::VEOp::MUL, activation, gate_full, stats);
+    return run_elementwise(sw::kpu::isa::CMBOp::MUL, activation, gate_full, stats);
 }
 
 /**
@@ -662,8 +662,8 @@ run_depthwise_conv(const std::vector<float>& input,
 /// ReLU6 = min(max(x, 0), 6) on the CSP executor (two elementwise ops).
 [[nodiscard]] inline std::vector<float>
 run_relu6(const std::vector<float>& x, RunStats& stats) {
-    auto r = run_elementwise(sw::kpu::isa::VEOp::MAX, x, std::vector<float>(x.size(), 0.0f), stats);
-    return run_elementwise(sw::kpu::isa::VEOp::MIN, r, std::vector<float>(x.size(), 6.0f), stats);
+    auto r = run_elementwise(sw::kpu::isa::CMBOp::MAX, x, std::vector<float>(x.size(), 0.0f), stats);
+    return run_elementwise(sw::kpu::isa::CMBOp::MIN, r, std::vector<float>(x.size(), 6.0f), stats);
 }
 
 /**

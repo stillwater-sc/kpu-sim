@@ -1,5 +1,5 @@
 #pragma once
-// Vector Engine (VE) for inline bias addition and activation functions
+// Combiner for inline bias addition and activation functions
 // Processes data during L1→L2 transfer for operator fusion
 
 #include <sw/concepts.hpp>
@@ -25,23 +25,23 @@
 namespace sw::kpu {
 
 /**
- * @brief Vector Engine Configuration
+ * @brief Combiner Configuration
  */
-struct VectorEngineConfig {
+struct CombinerConfig {
     Size vector_width = 8;              ///< Elements processed per cycle
     Size bias_buffer_size = 4096;       ///< Max bias vector elements
     SFUConfig sfu_config;               ///< SFU configuration
-    bool enabled = true;                ///< Enable/disable VE
+    bool enabled = true;                ///< Enable/disable Combiner
     Size pipeline_depth = 3;            ///< Total pipeline latency (bias + SFU)
 };
 
 /**
- * @brief Operation descriptor for Vector Engine
+ * @brief Operation descriptor for Combiner
  *
  * Describes a single bias + activation operation on a tile of data.
- * The VE processes data row by row as it flows from L1 to L2.
+ * The Combiner processes data row by row as it flows from L1 to L2.
  */
-struct VEOperation {
+struct CombinerOperation {
     // Source: L1 scratchpad
     size_t l1_scratchpad_id = 0;
     Address l1_base_addr = 0;
@@ -69,21 +69,21 @@ struct VEOperation {
 };
 
 /**
- * @brief Vector Engine Statistics
+ * @brief Combiner Statistics
  */
-struct VEStats {
-    uint64_t elements_processed = 0;    ///< Total elements through VE
+struct CombinerStats {
+    uint64_t elements_processed = 0;    ///< Total elements through Combiner
     uint64_t bias_additions = 0;        ///< Bias operations performed
     uint64_t activations_computed = 0;  ///< Activation functions computed
-    uint64_t operations_completed = 0;  ///< Number of VE operations completed
+    uint64_t operations_completed = 0;  ///< Number of Combiner operations completed
     uint64_t cycles_active = 0;         ///< Cycles spent processing
     uint64_t cycles_idle = 0;           ///< Cycles spent idle
 };
 
 /**
- * @brief Vector Engine - Inline Bias + Activation Processor
+ * @brief Combiner - Inline Bias + Activation Processor
  *
- * The Vector Engine processes data inline during L1→L2 transfers,
+ * The Combiner processes data inline during L1→L2 transfers,
  * applying bias addition and activation functions without additional
  * memory passes. This achieves operator fusion for MLP layers.
  *
@@ -96,16 +96,16 @@ struct VEStats {
  * Throughput: vector_width elements per cycle (default 8)
  *
  * Integration with Streamer:
- *   - Streamer routes output data through VE when enabled
- *   - VE appears transparent when disabled (pass-through)
- *   - Zero-copy operation: data flows L1 → VE → L2
+ *   - Streamer routes output data through Combiner when enabled
+ *   - Combiner appears transparent when disabled (pass-through)
+ *   - Zero-copy operation: data flows L1 → Combiner → L2
  *
  * Memory Traffic Savings:
- *   Without VE: 5 memory passes (matmul out, bias in, bias out, act in, act out)
- *   With VE: 1 memory pass (fused matmul + bias + activation)
+ *   Without Combiner: 5 memory passes (matmul out, bias in, bias out, act in, act out)
+ *   With Combiner: 1 memory pass (fused matmul + bias + activation)
  *   Savings: 4× reduction in L2 traffic
  */
-class KPU_API VectorEngine {
+class KPU_API Combiner {
 public:
     // =========================================
     // Constructors
@@ -113,30 +113,30 @@ public:
 
     /**
      * @brief Construct with default configuration
-     * @param id Unique identifier for this VE instance
+     * @param id Unique identifier for this Combiner instance
      */
-    explicit VectorEngine(size_t id = 0);
+    explicit Combiner(size_t id = 0);
 
     /**
      * @brief Construct with specific configuration
-     * @param id Unique identifier for this VE instance
-     * @param config VE configuration
+     * @param id Unique identifier for this Combiner instance
+     * @param config Combiner configuration
      */
-    VectorEngine(size_t id, const VectorEngineConfig& config);
+    Combiner(size_t id, const CombinerConfig& config);
 
-    ~VectorEngine() = default;
+    ~Combiner() = default;
 
     // =========================================
     // Configuration
     // =========================================
 
     /**
-     * @brief Update VE configuration
+     * @brief Update Combiner configuration
      * @param config New configuration
      *
      * Reconfigures the SFU and resizes buffers as needed.
      */
-    void configure(const VectorEngineConfig& config);
+    void configure(const CombinerConfig& config);
 
     /**
      * @brief Set the activation function
@@ -145,7 +145,7 @@ public:
     void set_activation(ActivationType activation);
 
     /**
-     * @brief Preload bias vector into VE buffer
+     * @brief Preload bias vector into Combiner buffer
      * @param bias_data Pointer to bias values
      * @param count Number of bias elements
      *
@@ -157,10 +157,10 @@ public:
     /**
      * @brief Get current configuration
      */
-    const VectorEngineConfig& config() const { return config_; }
+    const CombinerConfig& config() const { return config_; }
 
     /**
-     * @brief Get VE instance ID
+     * @brief Get Combiner instance ID
      */
     size_t id() const { return id_; }
 
@@ -174,7 +174,7 @@ public:
      *
      * Operations are processed in FIFO order.
      */
-    void enqueue_operation(const VEOperation& op);
+    void enqueue_operation(const CombinerOperation& op);
 
     /**
      * @brief Check if operation queue is empty
@@ -191,14 +191,14 @@ public:
     // =========================================
 
     /**
-     * @brief Advance VE state by one cycle
+     * @brief Advance Combiner state by one cycle
      * @param cycle Current simulation cycle
      * @param l1_read Function to read from L1 scratchpad
      * @param l2_write Function to write to L2 bank
      * @return true if an operation completed this cycle
      *
      * The l1_read and l2_write functions abstract the memory interface,
-     * allowing the VE to be tested independently of the full memory system.
+     * allowing the Combiner to be tested independently of the full memory system.
      */
     using L1ReadFunc = std::function<void(size_t scratchpad_id, Address addr, void* data, Size size)>;
     using L2WriteFunc = std::function<void(size_t bank_id, Address addr, const void* data, Size size)>;
@@ -237,27 +237,27 @@ public:
     // =========================================
 
     /**
-     * @brief Check if VE is currently processing
+     * @brief Check if Combiner is currently processing
      */
     bool is_busy() const { return state_ != State::IDLE; }
 
     /**
-     * @brief Check if VE is enabled
+     * @brief Check if Combiner is enabled
      */
     bool is_enabled() const { return config_.enabled; }
 
     /**
-     * @brief Enable the Vector Engine
+     * @brief Enable the Combiner
      */
     void enable() { config_.enabled = true; }
 
     /**
-     * @brief Disable the Vector Engine (pass-through mode)
+     * @brief Disable the Combiner (pass-through mode)
      */
     void disable() { config_.enabled = false; }
 
     /**
-     * @brief Reset VE state and clear queues
+     * @brief Reset Combiner state and clear queues
      */
     void reset();
 
@@ -268,7 +268,7 @@ public:
     /**
      * @brief Get performance statistics
      */
-    const VEStats& stats() const { return stats_; }
+    const CombinerStats& stats() const { return stats_; }
 
     /**
      * @brief Reset statistics counters
@@ -305,7 +305,7 @@ public:
 
 private:
     size_t id_;
-    VectorEngineConfig config_;
+    CombinerConfig config_;
     SFU sfu_;
 
     // Bias buffer (preloaded once per layer)
@@ -313,7 +313,7 @@ private:
     bool bias_loaded_ = false;
 
     // Operation queue
-    std::queue<VEOperation> op_queue_;
+    std::queue<CombinerOperation> op_queue_;
 
     // Current operation state
     enum class State {
@@ -326,7 +326,7 @@ private:
     State state_ = State::IDLE;
 
     // Current operation progress
-    VEOperation current_op_;
+    CombinerOperation current_op_;
     Size current_row_ = 0;
     Cycle op_start_cycle_ = 0;
 
@@ -335,7 +335,7 @@ private:
     std::vector<float> output_buffer_;  // Processed row ready for output
 
     // Statistics
-    VEStats stats_;
+    CombinerStats stats_;
 
     // Internal helpers
     void start_operation();

@@ -5,7 +5,7 @@
  * Verifies that:
  * 1. MatMul schedule compiles to a valid DMProgram
  * 2. Conv2D schedule compiles with im2col gather ops
- * 3. Softmax schedule compiles with VE reduction/elementwise ops
+ * 3. Softmax schedule compiles with Combiner reduction/elementwise ops
  */
 
 #include <sw/kpu/dsl/schedule.hpp>
@@ -134,10 +134,10 @@ void test_conv2d_schedule() {
     bool has_fused_drain = false;
     for (const auto& instr : prog.instructions) {
         if (instr.label.find("GATHER") != std::string::npos) has_gather = true;
-        if (instr.label.find("+VE") != std::string::npos) has_fused_drain = true;
+        if (instr.label.find("+CMB") != std::string::npos) has_fused_drain = true;
     }
     check(has_gather, "Has im2col gather DMA operation");
-    check(has_fused_drain, "Has fused drain with VE (bias+activation)");
+    check(has_fused_drain, "Has fused drain with Combiner (bias+activation)");
 }
 
 // ============================================================================
@@ -163,7 +163,7 @@ void test_softmax_schedule() {
     check(prog.instructions.back().opcode == DMOpcode::HALT,
           "DMProgram ends with HALT");
 
-    // Check for VE operations (emitted as annotated NOPs)
+    // Check for Combiner operations (emitted as annotated NOPs)
     bool has_reduce_max = false;
     bool has_reduce_sum = false;
     bool has_ewise_sub = false;
@@ -173,20 +173,20 @@ void test_softmax_schedule() {
     bool has_scratch = false;
 
     for (const auto& instr : prog.instructions) {
-        if (instr.label.find("VE_REDUCE(MAX)") != std::string::npos) has_reduce_max = true;
-        if (instr.label.find("VE_REDUCE(SUM)") != std::string::npos) has_reduce_sum = true;
-        if (instr.label.find("VE_ELEMENTWISE(SUB)") != std::string::npos) has_ewise_sub = true;
-        if (instr.label.find("VE_ELEMENTWISE(EXP)") != std::string::npos) has_ewise_exp = true;
-        if (instr.label.find("VE_ELEMENTWISE(DIV)") != std::string::npos) has_ewise_div = true;
+        if (instr.label.find("CMB_REDUCE(MAX)") != std::string::npos) has_reduce_max = true;
+        if (instr.label.find("CMB_REDUCE(SUM)") != std::string::npos) has_reduce_sum = true;
+        if (instr.label.find("CMB_ELEMENTWISE(SUB)") != std::string::npos) has_ewise_sub = true;
+        if (instr.label.find("CMB_ELEMENTWISE(EXP)") != std::string::npos) has_ewise_exp = true;
+        if (instr.label.find("CMB_ELEMENTWISE(DIV)") != std::string::npos) has_ewise_div = true;
         if (instr.opcode == DMOpcode::STR_BROADCAST_ROW) has_broadcast = true;
         if (instr.label.find("SCRATCH") != std::string::npos) has_scratch = true;
     }
 
-    check(has_reduce_max, "Has VE_REDUCE(MAX) for pass 1");
-    check(has_reduce_sum, "Has VE_REDUCE(SUM) for pass 3");
-    check(has_ewise_sub, "Has VE_ELEMENTWISE(SUB) for x - max");
-    check(has_ewise_exp, "Has VE_ELEMENTWISE(EXP) for exp(x - max)");
-    check(has_ewise_div, "Has VE_ELEMENTWISE(DIV) for exp / sum");
+    check(has_reduce_max, "Has CMB_REDUCE(MAX) for pass 1");
+    check(has_reduce_sum, "Has CMB_REDUCE(SUM) for pass 3");
+    check(has_ewise_sub, "Has CMB_ELEMENTWISE(SUB) for x - max");
+    check(has_ewise_exp, "Has CMB_ELEMENTWISE(EXP) for exp(x - max)");
+    check(has_ewise_div, "Has CMB_ELEMENTWISE(DIV) for exp / sum");
     check(has_broadcast, "Has broadcast operations");
     check(has_scratch, "Has drain-to-scratch operations");
 
