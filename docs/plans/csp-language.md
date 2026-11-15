@@ -94,6 +94,9 @@ release    := 'release' tiles ';'          -- the program's last use: the credit
 acc        := 'acc' tile 'in' 'fabric' [ 'init' tile ] '{' stmt* '}'
                                            -- an output-stationary accumulator; init: its start
                                            -- (accumulator-init-stream.md), else zero
+            | 'acc' tile 'in' 'l2' '{' stmt* '}'     -- the tile may be a slice: C[:, j]
+                                           -- an L2 accumulator (#429, #430): each tile's partial in
+                                           -- an L2 slot, every call merged into it by the Combiner
 stage      := 'stage' tiles 'in' 'l2' '{' stmt* '}'           -- resident tiles copied into L2 for the block
 call       := 'call' FN '(' tiles ')' ( '->' | '+->' ) tile [ context ] ';'
                                            -- '->' writes, '+->' accumulates
@@ -129,6 +132,7 @@ Comments are `//` to the end of the line. Tensor element types beyond fp32 are d
 | `acc y in fabric init x { ... }` | as above, from x: x's Move (bm) and Feed (str), the Feed seeding y, before the first call; `init y` then Releases y's residency (docs/plans/accumulator-init-stream.md) | x resident; a tensor tiled as y, or a vector tiled as y's columns; `init y` needs y inout |
 | `store y` | out of a closed `acc`: Drain, Writeback, Store, Release (an L3 slot for the writeback's moment); a resident, written tile: Store | y written and not yet stored, or inherited |
 | `store y late` | the accumulator's four actions, emitted after the NEXT `acc` block's calls, at the end of the program, or before a `resident`/`acc` that names y again (added by `l2-reuse-and-fabric-pipeline-view.md` step 2b) | y a closed `acc`; no `via` |
+| `acc Y in l2 { ... }` (Y may be a slice) | the block's open reserves an L2 slot per tile of Y (from `l2 = N`, shared with the stages) and emits nothing; each call `+->` into a tile of Y: its operands' Move (bm) and Feed (str), Call (cf, L0 MATMUL_MERGE: the partial from zero), Drain (str) carrying the slot and the Combiner's merge, overwrite for the tile's first call (opening the slot) and accumulate after; `store y`: Writeback (bm) reading the slot, L2Release, Store, Release (added by #430) | `l2 = N` declared; the target has a Combiner; Y not resident; L2 capacity; every tile fed; no `init`, `late` store, `retain`, or a fabric or combiner stage on the store (an epilogue on the final merge is #427's) |
 | `stage X in l2 { ... }` | per tile: Move (bm) into an L2 slot the walker allocates; a call inside on X: Feed (str) of the copy, no Move; the block's end: L2Release per tile (l2 credit) (added by `l2-reuse-and-fabric-pipeline-view.md` step 3) | `l2 = N` declared; X resident; not already staged; L2 capacity; inside the block X is not released, retained or written |
 | `inherit X` | Inherit X (l3 credit, held from the start; no DMA) | at the top of the program, before any other statement; X declared `in` or `inout`; L3 capacity |
 | `retain y` | a resident tile: Retain (its credit is not returned); a closed `acc`: Drain, Writeback, Retain | y resident (as written) or a closed accumulator; inside loops, each enclosing loop variable indexes one dimension alone; the slot counts against capacity to the end |

@@ -59,5 +59,35 @@ fused operations cost no extra pass over memory.
 | The `systolic` block of a deployment: accumulator slots, banks, rows, latency (#396) | The Combiner's configuration. The accumulator fields retire when the RTL drops them (branes-ai/embodied-ai-soc-generator#67). |
 | `kpu-tile-cmds` (#397): a LOAD into the accumulator for a bias, COMPUTE accumulate or overwrite | A COMPUTE names its Combiner operation: merge or overwrite, bias, scale, activation, format. |
 
-The work to model it, at L-B, L-T1 and L-CA, in the shared records and in the contracts with
-the RTL, is tracked in #427.
+## The merge of partials, as built
+
+The merge is in the CSP language and at every level (#429's merge, #430's programs):
+
+- **The program states it.** `acc C[:, j] in l2 { ... }` is an L2 accumulator: each tile of C
+  holds its partial in an L2 slot, from the machine clause's `l2 = N`. Each call `+->` into one
+  of its tiles runs the gemm on a fresh accumulator in the fabric, and its Drain carries the
+  Combiner's merge into the slot: **overwrite** for the tile's first K block, **accumulate** for
+  the rest (a read-modify-write in L2). The store writes the slot back through L3 to DRAM.
+- **The trace records it** as `MATMUL_MERGE` (L0 opset 1.5), with the merge mode and the
+  partial's L2 slot. The replay checks the slot, as it checks a staging's.
+- **The levels execute it.** L-B merges in the tile's number system, so int8 × int8 summed in
+  int32 merges exactly. L-T1 holds the slot from the first merge's credit to its L2Release,
+  serializes the read-modify-writes on it, and counts the merges' L2 bytes. L-CA takes the slot
+  at its turn with an L2 credit, times each merge as one add on the Combiner
+  (`combiner_lanes` × `combiner_rate`), and retires the slot after the store's Writeback has
+  read it. A machine with no `combiner` block cannot run an L2 accumulator.
+- **The programs:** `kpu-csp-gen --algo matmul --dataflow ws|is` writes the weight- and
+  input-stationary schedules (#430). The stationary tile is staged in L2 across the loop that
+  reuses it, and C's panel of partials is the L2 accumulator.
+
+Not built yet:
+- an epilogue on the final merge (bias, activation, scaling, block-format conversion). Today a
+  store from an L2 accumulator takes `@ bm.egress` stages only;
+- an init (`acc ... in l2 init ...`);
+- a weight-stationary timing of the array. L-T1 and L-CA time each merge's gemm as a
+  one-call output-stationary chain.
+
+These are #427's.
+
+The work to model the rest of it, at L-B, L-T1 and L-CA, in the shared records and in the
+contracts with the RTL, is tracked in #427.

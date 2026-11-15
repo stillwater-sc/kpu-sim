@@ -24,6 +24,10 @@
 // l2 = 4)` declares each compute tile's L2 slots, and `stage A[i, :] in l2 { ... }` copies
 // resident tiles into L2 once for the block; the calls inside feed the copy, and the block's end
 // frees the slots.
+//
+// L2 accumulators (#429, #430): `acc C[:, j] in l2 { ... }` holds each tile's partial in an L2
+// slot (of the same `l2 = N`), and the Combiner merges every call's result into it -- the
+// reduction across K blocks of the weight- and input-stationary schedules.
 //   }
 //
 // C-style blocks, ';'-terminated statements, '//' comments. The parser builds the AST and
@@ -114,6 +118,9 @@ struct Stmt {
     std::string map, along;
     // Acc: `init X` -- the tile whose values the accumulator starts from; none: from zero.
     std::optional<TileRef> init;
+    // Acc: `in l2` -- an L2 accumulator (#429, #430): each tile's partial in an L2 slot, every
+    // call's result merged into it by the Combiner. Its tile may be a slice. Else `in fabric`.
+    bool in_l2 = false;
 };
 
 struct Decl {
@@ -527,8 +534,16 @@ private:
             s.kind = Stmt::Kind::Acc;
             s.out = tile();
             expect_word("in");
-            expect_word("fabric");
+            if (word("l2")) {
+                take();
+                s.in_l2 = true;
+            } else {
+                expect_word("fabric");
+            }
             if (word("init")) {
+                if (s.in_l2)
+                    throw SyntaxError(line(), "acc ... in l2 init: an L2 accumulator's first merge overwrites its "
+                                              "slot, so it takes no init (not built yet)");
                 take();
                 s.init = tile();
             }

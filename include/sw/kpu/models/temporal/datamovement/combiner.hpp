@@ -36,6 +36,23 @@ struct CombinerConfig {
 };
 
 /**
+ * @brief How the Combiner writes a result row into L2 (#429)
+ *
+ * Overwrite writes the row (an output-stationary result, or a partial's first K block).
+ * Accumulate is the merge of partials of the weight- and input-stationary schedules: the row in
+ * L2 is read, the new row added to it, and the sum written back (a read-modify-write in L2).
+ */
+enum class CombinerMerge : uint8_t { Overwrite, Accumulate };
+
+/**
+ * @brief A block format the Combiner converts results into (#427)
+ *
+ * Reserved: the OCP Microscaling formats, MXINT8 first, then MXFP8. Only None is built; an
+ * operation that names another is refused.
+ */
+enum class CombinerBlockFormat : uint8_t { None, MXINT8, MXFP8 };
+
+/**
  * @brief Operation descriptor for Combiner
  *
  * Describes a single bias + activation operation on a tile of data.
@@ -64,6 +81,16 @@ struct CombinerOperation {
     // Activation configuration
     ActivationType activation = ActivationType::NONE;
 
+    // The merge into L2 (#429): Accumulate reads the L2 row and adds the new one to it. An
+    // epilogue (bias, activation) applies to the final merge only, which is #427's, so an
+    // accumulating operation takes none.
+    CombinerMerge merge = CombinerMerge::Overwrite;
+
+    // Reserved for #427: scaling (requantization) and a block-format conversion. Only the
+    // defaults (scale 1, no format) are built; enqueue_operation refuses others.
+    float scale = 1.0f;
+    CombinerBlockFormat format = CombinerBlockFormat::None;
+
     // Completion callback
     std::function<void()> completion_callback;
 };
@@ -75,6 +102,7 @@ struct CombinerStats {
     uint64_t elements_processed = 0;    ///< Total elements through Combiner
     uint64_t bias_additions = 0;        ///< Bias operations performed
     uint64_t activations_computed = 0;  ///< Activation functions computed
+    uint64_t elements_merged = 0;       ///< Elements accumulated into L2 (read-modify-write)
     uint64_t operations_completed = 0;  ///< Number of Combiner operations completed
     uint64_t cycles_active = 0;         ///< Cycles spent processing
     uint64_t cycles_idle = 0;           ///< Cycles spent idle
@@ -202,8 +230,12 @@ public:
      */
     using L1ReadFunc = std::function<void(size_t scratchpad_id, Address addr, void* data, Size size)>;
     using L2WriteFunc = std::function<void(size_t bank_id, Address addr, const void* data, Size size)>;
+    using L2ReadFunc = std::function<void(size_t bank_id, Address addr, void* data, Size size)>;
 
     bool update(Cycle cycle, L1ReadFunc l1_read, L2WriteFunc l2_write);
+    /// The same, with L2 readable: an accumulating operation (CombinerMerge::Accumulate) reads
+    /// the row it merges into through `l2_read`.
+    bool update(Cycle cycle, L1ReadFunc l1_read, L2WriteFunc l2_write, L2ReadFunc l2_read);
 
     // =========================================
     // Immediate Processing (Non-Pipelined)
@@ -339,7 +371,8 @@ private:
 
     // Internal helpers
     void start_operation();
-    void process_row(L1ReadFunc l1_read, L2WriteFunc l2_write);
+    void process_row(L1ReadFunc l1_read, L2WriteFunc l2_write, const L2ReadFunc& l2_read);
+    std::vector<float> merge_buffer_;   ///< The L2 row an accumulating operation merges into
     void finish_operation();
 };
 

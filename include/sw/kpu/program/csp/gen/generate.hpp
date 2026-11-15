@@ -3,12 +3,12 @@
 // csp-gen: write CSP programs (docs/plans/kpu-run-csp-programs.md step 1).
 //
 // The simulator (kpu-run) takes a CSP program and executes it; producing programs is this
-// library's job, and the kpu-csp-gen tool's. Each operator has ONE canonical schedule, written
-// as a structured program with its loops -- never unrolled and re-rolled -- and every program
-// is validated symbolically (lang::validate) before it is returned, so the generator cannot
-// emit a program the language refuses.
+// library's job, and the kpu-csp-gen tool's. Each (operator, dataflow) has ONE canonical
+// schedule, written as a structured program with its loops -- never unrolled and re-rolled --
+// and every program is validated symbolically (lang::validate) before it is returned, so the
+// generator cannot emit a program the language refuses.
 //
-//   matmul  output-stationary panels: a column panel of B and a row panel of A resident at a
+//   matmul  dataflow os (the default) -- output-stationary panels: a column panel of B and a row panel of A resident at a
 //           time, an accumulator per C tile. orient = "col" (B's panel outer, j) or "row" (A's
 //           panel outer, i). L3: 2 x tiles-per-panel + 1 (the store's writeback). Each store is
 //           `late`: it leaves after the next accumulator's calls, so the movers bring the next
@@ -17,6 +17,17 @@
 //           A tile leaves L3 once per row instead of once per C tile; the machine clause
 //           declares `l2 = tiles-per-panel` (docs/plans/l2-reuse-and-fabric-pipeline-view.md
 //           step 3).
+//           dataflow ws -- weight-stationary (#430): B's tile is the stationary operand. For each
+//           column panel j, C[:, j]'s partials are an L2 accumulator (`acc C[:, j] in l2`); for each
+//           k, A's column panel and B[k, j] are made resident, B[k, j] is staged in L2 and held
+//           there across the i loop (the reuse the program states), and every call's result is
+//           merged by the Combiner into C[i, j]'s slot. So each B tile leaves L3 once, not once per
+//           call. L3: tiles-per-panel + 1 (A[:, k] and B[k, j]); L2: tiles-per-panel + 1 (the
+//           panel's partials and the stationary B tile).
+//           dataflow is -- input-stationary (#430): the same with A's tile stationary. For each row
+//           panel i, C[i, :]'s partials are the L2 accumulator; for each k, A[i, k] and B's row
+//           panel are resident, A[i, k] is staged and held across the j loop. L3 and L2 as ws.
+//           Neither takes orient (the dataflow fixes the loop order), stage_a or an init.
 //   linear  matmul plus the epilogue act(C + b): the bias vector b[j] is resident with B's
 //           panel, and `place` writes the context -- `via add(b[j]) @ P, act @ P` for
 //           P = fabric | combiner | bm.egress -- or "unfused": a second pass that reads C
@@ -66,6 +77,10 @@ struct Options {
     // matmul: the inputs' number system (numeric.hpp; docs/plans/typed-value-path.md). A and B are
     // in it; C, and an init's D or b, are in its registered accumulator's (int8 -> int32).
     std::string dtype = "fp32";
+    // matmul: the dataflow -- which operand the schedule holds stationary (#430). os: C, in the
+    // fabric; ws: B, staged in L2 across the i loop; is: A, staged across the j loop. ws and is
+    // reduce across K blocks through the Combiner's merge into C's L2 slots.
+    std::string dataflow = "os";
 };
 
 // Tiles along one dimension.
@@ -82,6 +97,7 @@ inline std::string accumulator_of(const std::string& in) {
 inline std::size_t slots_needed(const Options& o) {
     const std::size_t nt = tiles(o);
     if (o.algo == "lu") return nt * nt;
+    if (o.dataflow != "os") return nt + 1;  // ws, is: one operand's panel and the stationary tile
     const std::size_t mm = 2 * nt + 1;
     if (o.algo == "linear" && o.place != "unfused") return mm + 1;
     if (o.algo == "matmul" && (o.init == "bias" || o.init == "bias-row")) return mm + 1;   // D's tile, or b's
@@ -109,11 +125,26 @@ inline void check(const Options& o) {
         throw GenError("csp-gen: dtype '" + o.dtype + "' has no registered gemm (" + numeric::mac_names() + ")");
     if (o.stage_a && o.orient != "row")
         throw GenError("csp-gen: stage_a stages A's row panel for the loop over B's panels, which needs orient row");
+    if (o.dataflow != "os" && o.dataflow != "ws" && o.dataflow != "is")
+        throw GenError("csp-gen: dataflow '" + o.dataflow + "' (os | ws | is)");
+    if (o.dataflow != "os") {
+        const std::string df = "csp-gen: dataflow " + o.dataflow;
+        if (o.algo != "matmul") throw GenError(df + " is matmul's; --algo is '" + o.algo + "'");
+        if (o.orient != "col")
+            throw GenError(df + " fixes its own loop order (" +
+                           (o.dataflow == "ws" ? std::string("B's column panels outer") : std::string("A's row panels outer")) +
+                           "); orient is the output-stationary schedule's");
+        if (o.stage_a) throw GenError(df + " stages its stationary operand itself; stage_a is the os schedule's");
+        if (o.init != "none")
+            throw GenError(df + ": its first merge overwrites C's L2 slot, so init '" + o.init +
+                           "' is not built yet (the init through the Combiner is #427's)");
+    }
     const std::size_t need = slots_needed(o);
     if (need > o.l3) {
         const std::size_t nt = tiles(o);
         const std::string why =
-            o.algo == "lu" ? "the whole matrix, " + std::to_string(nt) + " x " + std::to_string(nt) + " tiles"
+            o.dataflow != "os" ? "a panel of " + std::to_string(nt) + " tiles and the stationary tile"
+            : o.algo == "lu" ? "the whole matrix, " + std::to_string(nt) + " x " + std::to_string(nt) + " tiles"
                            : "2 panels of " + std::to_string(nt) + " tiles and the store's writeback" +
                                  (o.algo == "linear" && o.place != "unfused" ? ", and the bias tile" : "") +
                                  (o.init == "bias" || o.init == "bias-row" ? ", and the init's tile" : "");
@@ -202,7 +233,47 @@ inline std::string matmul_nest(const Options& o, bool linear_fused) {
     return s;
 }
 
+// The weight- and input-stationary nests (#430): the stationary operand's tile staged in L2 and
+// held across the loop that reuses it, the result panel's partials an L2 accumulator that the
+// Combiner merges every call into.
+inline std::string stationary_nest(const Options& o) {
+    const std::string nt = std::to_string(tiles(o));
+    const bool ws = o.dataflow == "ws";
+    // ws: j outer, B[k, j] stationary across i. is: i outer, A[i, k] stationary across j.
+    const std::string outer = ws ? "j" : "i", inner = ws ? "i" : "j";
+    const std::string panel = ws ? "C[:, j]" : "C[i, :]";
+    const std::string moving = ws ? "A[:, k]" : "B[k, :]";   // the streamed operand's panel for this k
+    const std::string held = ws ? "B[k, j]" : "A[i, k]";     // the stationary tile
+    std::string s;
+    s += "  for " + outer + " in 0.." + nt + " {\n";
+    s += "    acc " + panel + " in l2 {\n";
+    s += "      for k in 0.." + nt + " {\n";
+    s += "        resident " + moving + ", " + held + ";\n";
+    s += "        stage " + held + " in l2 {\n";
+    s += "          for " + inner + " in 0.." + nt + " { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }\n";
+    s += "        }\n";
+    s += "        release " + moving + ", " + held + ";\n";
+    s += "      }\n";
+    s += "    }\n";
+    s += "    store " + panel + ";\n";
+    s += "  }\n";
+    return s;
+}
+
 inline std::string matmul(const Options& o) {
+    if (o.dataflow != "os") {
+        const bool ws = o.dataflow == "ws";
+        std::string s = header(o, std::string("matmul C = A . B, ") +
+                                      (ws ? "weight-stationary: B's tile staged in L2 across the i loop"
+                                          : "input-stationary: A's tile staged in L2 across the j loop") +
+                                      ", C's partials merged by the Combiner in L2");
+        s += "program matmul machine flat(l3 = " + std::to_string(o.l3) + ", l2 = " + std::to_string(tiles(o) + 1) +
+             ") {\n";
+        const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
+        s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype) + tensor("C", o, "out", acc);
+        s += stationary_nest(o);
+        return s + "}\n";
+    }
     const std::string what = o.init == "bias"       ? "matmul C = A . B + D"
                              : o.init == "bias-row" ? "matmul C = A . B + b"
                              : o.init == "accumulate" ? "matmul C += A . B"

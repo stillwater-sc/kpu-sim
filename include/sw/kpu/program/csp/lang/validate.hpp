@@ -41,6 +41,11 @@
 //     machine clause's `l2 = N` with the families staged around it. Inside the block the staged
 //     tiles stay resident in L3 and unwritten: a release, a retain or a call that may touch them
 //     is refused.
+//   * an L2 accumulator (`acc T in l2 { }`; #429, #430) holds an L2 slot per tile of T, from the
+//     block's open to the tile's store, counted against `l2 = N` with the stage blocks. A call
+//     `+->` into a tile T covers is a merge; T is fed when such a call runs in every iteration of
+//     the loops inside the block (the walker checks each tile is fed). Its store names T as the
+//     acc does, is not late, and carries bm.egress stages only.
 //
 // Totals (loads, calls, stores) are exact for rectangular loop nests (constant bounds) and
 // absent otherwise.
@@ -143,7 +148,7 @@ private:
     struct Family { std::string operand; std::vector<Dimension> dims; int line = 0; };
     struct Entry { Family family; bool dirty = false; bool inherited = false; };
     struct Box { std::string operand; std::vector<std::pair<bool, Interval>> dims; };   // (all, range)
-    struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; };
+    struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false; };
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
@@ -172,6 +177,38 @@ private:
                 throw CompileError(line, what + " " + text(f) + ", which can be staged in L2 (" + text(st) +
                                          "): a staged tile stays resident and unwritten until its stage block ends");
     }
+    // `acc T in l2 { ... }`: an L2 slot per tile of T, held to the tile's store.
+    void acc_l2(const Stmt& s, std::size_t depth, bool definite) {
+        if (ast_.l2 <= 0)
+            throw CompileError(s.line, "acc ... in l2: the machine clause declares no L2 (write `l2 = N`)");
+        if (target_ && !target_->combiner)
+            throw CompileError(s.line, "acc ... in l2: the Combiner merges its partials, and the target has no Combiner "
+                                       "(the deployment's `combiner` block)");
+        const Family y = family(s.out);
+        for (const Entry& e : state_)
+            if (may_overlap(y, e.family))
+                throw CompileError(s.line, "acc " + text(y) + " in l2: it can be resident in L3; an L2 accumulator's "
+                                           "partial starts in its L2 slot, so release it first");
+        for (const Acc& a : accs_)
+            if (may_overlap(y, a.tile)) throw CompileError(s.line, "acc " + text(y) + ": it may already have an accumulator");
+        not_retained(y, s.line);
+        const std::size_t n = count(y);
+        if (l2_live_ + n > static_cast<std::size_t>(ast_.l2))
+            throw CompileError(s.line, "acc " + text(y) + " in l2 needs " + std::to_string(n) + " L2 slot" +
+                                       (n == 1 ? "" : "s") + " for its partials, and " +
+                                       std::to_string(static_cast<std::size_t>(ast_.l2) - std::min(l2_live_, static_cast<std::size_t>(ast_.l2))) +
+                                       " of " + std::to_string(ast_.l2) + " are free");
+        l2_live_ += n;
+        peak_l2_ = std::max(peak_l2_, l2_live_);
+        accs_.push_back(Acc{y, false, false, depth, true});
+        for (const Stmt& b : s.body) stmt(b, depth, definite);
+        Acc& a = *std::find_if(accs_.begin(), accs_.end(), [&](const Acc& x) { return same(x.tile, y); });
+        if (!a.fed)
+            throw CompileError(s.line, "acc " + text(y) + " in l2 receives no call; each of its tiles needs at least "
+                                       "one '+->' into it");
+        a.closed = true;
+    }
+
     void stage(const Stmt& s, std::size_t depth, bool definite) {
         if (ast_.l2 <= 0)
             throw CompileError(s.line, "stage ... in l2: the machine clause declares no L2 (write `l2 = N`)");
@@ -401,6 +438,9 @@ private:
         if (acc != accs_.end()) {
             if (!acc->closed)
                 throw CompileError(s.line, "retain " + text(f) + " inside its own accumulator; retain it after the acc block");
+            if (acc->l2)
+                throw CompileError(s.line, "retain " + text(f) + ": " + text(f) + " is an L2 accumulator; retaining one "
+                                           "is not built yet, so store it");
             context(s, f);
             hold(total, s.line, "retain " + text(f) + "'s writeback");
             accs_.erase(acc);
@@ -538,6 +578,10 @@ private:
                 }
                 break;
             case Stmt::Kind::Acc: {
+                if (s.in_l2) {
+                    acc_l2(s, depth, definite);
+                    break;
+                }
                 const Family y = single(s.out);
                 if (s.init) init(s, y);
                 for (const Entry& e : state_)
@@ -707,7 +751,16 @@ private:
                 throw CompileError(s.line, "call " + s.fn + " reads " + text(t) + ", which is not provably resident; "
                                            "make it resident first");
         };
-        auto acc = std::find_if(accs_.begin(), accs_.end(), [&](const Acc& a) { return same(a.tile, y); });
+        auto acc = std::find_if(accs_.begin(), accs_.end(), [&](const Acc& a) {
+            return a.l2 ? covers(a.tile, y) : same(a.tile, y);
+        });
+        if (acc != accs_.end() && acc->l2 && !acc->closed) {
+            if (s.fn != "gemm")
+                throw CompileError(s.line, "call " + s.fn + " on the L2 accumulator " + text(y) + ": an L2 accumulator "
+                                           "takes gemm '+->', whose result the Combiner merges into its slot");
+            if (!s.context.empty())
+                throw CompileError(s.line, "a call into an L2 accumulator drains a partial; its epilogue is the store's");
+        }
         if (acc != accs_.end() && !acc->closed) {
             if (s.fn != "gemm")
                 throw CompileError(s.line, "call " + s.fn + " on the open accumulator " + text(y) + ": an accumulator "
@@ -747,6 +800,28 @@ private:
     void store(const Stmt& s) {
         const Family y = family(s.out);
         auto acc = std::find_if(accs_.begin(), accs_.end(), [&](const Acc& a) { return same(a.tile, y); });
+        if (acc != accs_.end() && acc->l2) {
+            if (!acc->closed)
+                throw CompileError(s.line, "store " + text(y) + " inside its own accumulator; store it after the acc block");
+            if (s.late)
+                throw CompileError(s.line, "store " + text(y) + " late: " + text(y) + " is an L2 accumulator, whose "
+                                           "partials are already out of the fabric; store it where it is written");
+            for (const ResolvedStage& r : resolve_result_context(s.context, target_, [](int line, const std::string& m) {
+                     throw CompileError(line, m);
+                 }))
+                if (r.place != Place::BmEgress)
+                    throw CompileError(s.line, "store " + text(y) + " via ... @ " + to_string(r.place) + ": " + text(y) +
+                                               " is an L2 accumulator, whose partials the Combiner merged as they "
+                                               "drained; an epilogue on the final merge is not built yet (#427), so "
+                                               "place it @ bm.egress");
+            context(s, y);
+            hold(1, s.line, "store " + text(y) + "'s writeback");      // the writeback's moment in L3, a tile at a time
+            live_ -= 1;
+            l2_live_ -= count(y);
+            accs_.erase(acc);
+            stores_ += count(y) * multiplier_;
+            return;
+        }
         if (acc != accs_.end()) {
             if (!acc->closed)
                 throw CompileError(s.line, "store " + text(y) + " inside its own accumulator; store it after the acc block");

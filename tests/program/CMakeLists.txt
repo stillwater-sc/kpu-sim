@@ -430,3 +430,14 @@ set_tests_properties(test_stream_signature PROPERTIES
     LABELS "program;stream;v0.9"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}     # reads tests/program/csp/*.csp
 )
+
+# Weight- and input-stationary matmul programs, and the Combiner's merge of partials into L2
+# slots they reduce through (#430, #429; docs/01-architecture/combiner.md)
+kpu_add_component_test(test_csp_dataflow "program"
+    test_csp_dataflow.cpp
+)
+
+set_tests_properties(test_csp_dataflow PROPERTIES
+    LABELS "program;csp;lang;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

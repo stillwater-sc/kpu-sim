@@ -82,6 +82,11 @@ public:
         // by memcpy and computed only by this MAC; bias and activation must be off (a typed
         // result has no tile context). Null: the fp32 arithmetic below, unchanged.
         program::numeric::Mac mac = nullptr;
+        // A partial for an L2 accumulator (#429, #430; MATMUL_MERGE): the call starts from zero in
+        // the fabric, whatever the fabric held for the tile, and waits until the tile's drains
+        // scheduled before it have landed in L2 -- the partial before it has left the array. Its
+        // Drain (schedule_merge) merges it into the tile's L2 slot. Not with accumulate or init.
+        bool partial = false;
     };
     struct FunctionalComputeSpec {
         std::vector<TileID> input_tiles;
@@ -410,6 +415,20 @@ public:
      */
     void schedule_drain(const TileDescriptor& tile, std::vector<VectorStage> fabric,
                         std::vector<VectorStage> drain, int streamer_id = -1);
+
+    /**
+     * @brief A drain the Combiner merges into an L2 accumulator's partial (#429, #430)
+     * @param tile Tile descriptor: `l2_slot` and `l2_slot_turn` name the partial's slot
+     * @param overwrite The tile's first merge (it opens the slot); else accumulate into it
+     * @param type The tile's number system (numeric.hpp): the merge adds in it
+     *
+     * The merge is one elementwise add on the Combiner (combiner_lanes x combiner_rate), timed
+     * as a drain stage. An accumulate is a read-modify-write of the entry in the slot.
+     */
+    void schedule_merge(const TileDescriptor& tile, bool overwrite, const std::string& type, int streamer_id = -1);
+    /// Drains the Combiner merged into an L2 partial, and of them read-modify-writes.
+    [[nodiscard]] std::uint64_t merges() const { return merges_; }
+    [[nodiscard]] std::uint64_t merge_accumulates() const { return merge_accumulates_; }
 
     /// Tile-context time, by site: busy cycles, and the cycles a vector unit slower than its
     /// move added to it. `fabric` is the epilogue time charged to the compute tiles.
@@ -749,6 +768,7 @@ private:
         Cycle latency = 0;           ///< Computed latency (set when started)
         bool started = false;        ///< Has computation started?
         std::uint32_t cf_tile = 0;   ///< The compute tile it runs on (set when started)
+        uint64_t after_drains = 0;   ///< A partial: the result tile's drains that must land first
     };
     std::vector<PendingCompute> pending_computes_;
     // The compute fabric (Config::num_compute_tiles > 0): when each tile is free again, and its
@@ -765,11 +785,20 @@ private:
     std::unordered_map<TileID, size_t, TileIDHash> completed_feed_counts_;
     // L2Releases not yet retired: the staging they close (tile, slot, turn), and the Feeds of
     // the tile scheduled before the release.
+    // An L2 accumulator's partial (#429) is closed after its merges have landed and its
+    // Writeback has read it: the release waits for the tile's drains and writebacks too.
     struct PendingL2Release {
         TileID tile;
         uint32_t slot = 0, turn = 0;
         size_t feeds = 0;
+        uint64_t drains = 0, writebacks = 0;
     };
+    std::unordered_map<TileID, uint64_t, TileIDHash> writebacks_scheduled_, writebacks_done_;
+    // Every drain's merge mode (TileDescriptor::merge), per tile in schedule order, and the
+    // number system a merged tile adds in.
+    std::unordered_map<TileID, std::deque<uint8_t>, TileIDHash> drain_merges_;
+    std::unordered_map<TileID, std::string, TileIDHash> merge_types_;
+    std::uint64_t merges_ = 0, merge_accumulates_ = 0;
     std::vector<PendingL2Release> pending_l2_releases_;
     void retire_l2_releases();
     // An accumulation chain (a CSP program's MatMulAccum calls on one result, ended by its
@@ -1185,6 +1214,7 @@ inline uint32_t ConcurrentTimingExecutor::mover_for(const TileDescriptor& tile, 
 inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile_in, int mover_id) {
     TileDescriptor tile = homed(tile_in);
     if (tile.ordered) tile.after_drains = drains_scheduled_[tile.tile_id];
+    ++writebacks_scheduled_[tile.tile_id];
     block_movers_[mover_for(tile, mover_id)]->schedule_writeback(tile);
 }
 
@@ -1198,7 +1228,9 @@ inline void ConcurrentTimingExecutor::schedule_l2_release(const TileDescriptor& 
         throw std::invalid_argument("schedule_l2_release: " + tile.tile_id.to_string() +
                                     " names no staging (its L2 slot and turn)");
     pending_l2_releases_.push_back(PendingL2Release{tile.tile_id, static_cast<uint32_t>(tile.l2_slot),
-                                                    tile.l2_slot_turn, scheduled_feed_counts_[tile.tile_id]});
+                                                    tile.l2_slot_turn, scheduled_feed_counts_[tile.tile_id],
+                                                    drains_scheduled_[tile.tile_id],
+                                                    writebacks_scheduled_[tile.tile_id]});
 }
 
 inline void ConcurrentTimingExecutor::retire_l2_releases() {
@@ -1211,7 +1243,14 @@ inline void ConcurrentTimingExecutor::retire_l2_releases() {
         // Feed still waits for its Move; another copy of the tile is not this one).
         const bool arrived = entry && entry->slot_id == it->slot && l2_tag_cam_.slot_turns(it->slot) == it->turn + 1 &&
                              l2_tag_cam_.slot_owner(it->slot) == std::optional<TileID>(tile);
-        if ((done == completed_feed_counts_.end() ? 0 : done->second) < it->feeds || !arrived) { ++it; continue; }
+        const auto landed = drains_landed_.find(tile);
+        const auto written = writebacks_done_.find(tile);
+        const bool partial_done = (landed == drains_landed_.end() ? 0 : landed->second) >= it->drains &&
+                                  (written == writebacks_done_.end() ? 0 : written->second) >= it->writebacks;
+        if ((done == completed_feed_counts_.end() ? 0 : done->second) < it->feeds || !arrived || !partial_done) {
+            ++it;
+            continue;
+        }
         TimingEvent e(EventType::CREDIT_RELEASED, current_cycle_, 0, tile, "L2:release");
         e.slot_id = entry->slot_id;
         if (l2_tag_cam_.invalidate(tile)) l2_credits_.release(static_cast<size_t>(tile.matrix));
@@ -1315,6 +1354,20 @@ inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile_
     schedule_drain(tile, streamer_id);
 }
 
+inline void ConcurrentTimingExecutor::schedule_merge(const TileDescriptor& tile_in, bool overwrite,
+                                                    const std::string& type, int streamer_id) {
+    if (tile_in.l2_slot < 0)
+        throw std::invalid_argument("schedule_merge: " + tile_in.tile_id.to_string() + " names no L2 slot for its partial");
+    TileDescriptor tile = tile_in;
+    tile.merge = overwrite ? TileDescriptor::kMergeOverwrite : TileDescriptor::kMergeAccumulate;
+    VectorStage add;
+    add.op = VectorStage::Op::Add;
+    tile.ve_cycles = stage_cycles(tile, {add}, static_cast<double>(config_.combiner_lanes) * config_.combiner_rate,
+                                  "Combiner");
+    merge_types_[tile.tile_id] = type;
+    schedule_drain(tile, streamer_id);
+}
+
 inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile_in, std::vector<VectorStage> egress,
                                                          int mover_id) {
     TileDescriptor tile = tile_in;
@@ -1397,6 +1450,7 @@ inline void ConcurrentTimingExecutor::chain_done(const TileID& id) {
 
 inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile, int streamer_id) {
     ++drains_scheduled_[tile.tile_id];
+    drain_merges_[tile.tile_id].push_back(tile.merge);
     // A DRAIN ends its tile's accumulation chain (if one is open): the result publishes once
     // the chain's calls are done.
     Chain& c = chains_[tile.tile_id];
@@ -1530,6 +1584,13 @@ inline void ConcurrentTimingExecutor::schedule_matmul_compute(
         if (scheduled_feed_counts_[*spec.init] == 0)
             throw std::invalid_argument("Matmul init tile has no scheduled feed: " + spec.init->to_string());
         pc.dependencies.push_back({*spec.init, scheduled_feed_counts_[*spec.init]});
+    }
+    // A partial starts from zero once the partial before it has left the array.
+    if (spec.partial) {
+        if (spec.accumulate || spec.init)
+            throw std::invalid_argument("Matmul partial on " + tile.tile_id.to_string() +
+                                        ": a partial starts from zero (no accumulate, no init)");
+        pc.after_drains = drains_scheduled_[tile.tile_id];
     }
     // An accumulating call waits for the previous call on its result (the accumulator it adds to).
     if (spec.accumulate && scheduled_compute_counts_[tile.tile_id] > 0) {
@@ -1936,6 +1997,11 @@ inline void ConcurrentTimingExecutor::reset() {
     moves_arrived_.clear();
     drains_scheduled_.clear();
     drains_landed_.clear();
+    writebacks_scheduled_.clear();
+    writebacks_done_.clear();
+    drain_merges_.clear();
+    merge_types_.clear();
+    merges_ = merge_accumulates_ = 0;
     drain_stages_.clear();
     writeback_stages_.clear();
     fabric_pending_.clear();
@@ -1979,6 +2045,10 @@ inline void ConcurrentTimingExecutor::reset() {
 }
 
 inline bool ConcurrentTimingExecutor::dependencies_satisfied(const PendingCompute& pc) const {
+    if (pc.after_drains > 0) {
+        auto it = drains_landed_.find(pc.tile.tile_id);
+        if ((it == drains_landed_.end() ? 0 : it->second) < pc.after_drains) return false;
+    }
     for (const auto& [tile_id, required_count] : pc.dependencies) {
         auto it = completed_feed_counts_.find(tile_id);
         size_t completed = it == completed_feed_counts_.end() ? 0 : it->second;
@@ -2188,10 +2258,30 @@ inline void ConcurrentTimingExecutor::apply_payload_event(const TimingEvent& eve
             copy_payload(MemoryLevel::L2, MemoryLevel::L1, event.tile_id, event.component_id);
             copy_payload(MemoryLevel::L1, MemoryLevel::COMPUTE, event.tile_id, event.component_id);
             break;
-        case EventType::TILE_DRAINED:
+        case EventType::TILE_DRAINED: {
             ++drains_landed_[event.tile_id];
+            uint8_t merge = TileDescriptor::kMergeNone;
+            if (auto q = drain_merges_.find(event.tile_id); q != drain_merges_.end() && !q->second.empty()) {
+                merge = q->second.front();
+                q->second.pop_front();
+            }
             copy_payload(MemoryLevel::COMPUTE, MemoryLevel::L1, event.tile_id, event.component_id);
-            copy_payload(MemoryLevel::L1, MemoryLevel::L2, event.tile_id, event.slot_id);
+            if (merge == TileDescriptor::kMergeAccumulate) {
+                // The Combiner's read-modify-write: the partial in the slot, plus the drained one.
+                ++merge_accumulates_;
+                auto l1 = l1_payloads_.find(event.tile_id);
+                auto l2 = l2_payloads_.find(event.tile_id);
+                if (functional_payloads_enabled_) {
+                    if (l1 == l1_payloads_.end() || l2 == l2_payloads_.end())
+                        throw std::runtime_error("Merge accumulate of " + event.tile_id.to_string() +
+                                                 ": no partial in its L2 slot, or none drained");
+                    program::merge_tile(merge_types_.at(event.tile_id), l2->second.payload.values,
+                                        l1->second.payload.values);
+                }
+            } else {
+                copy_payload(MemoryLevel::L1, MemoryLevel::L2, event.tile_id, event.slot_id);
+            }
+            if (merge != TileDescriptor::kMergeNone) ++merges_;
             apply_stages(MemoryLevel::L2, event.tile_id, drain_stages_);      // fabric + combiner
             // The result has moved to L2; free its array-side copies unless a
             // pending compute still holds it resident (issue #165).
@@ -2200,7 +2290,9 @@ inline void ConcurrentTimingExecutor::apply_payload_event(const TimingEvent& eve
                 retire_array_payload(event.tile_id);
             }
             break;
+        }
         case EventType::BM_WRITEBACK_COMPLETE:
+            ++writebacks_done_[event.tile_id];
             copy_payload(MemoryLevel::L2, MemoryLevel::L3, event.tile_id, event.slot_id);
             apply_stages(MemoryLevel::L3, event.tile_id, writeback_stages_);  // bm.egress
             break;

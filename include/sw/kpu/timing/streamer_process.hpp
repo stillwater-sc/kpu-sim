@@ -313,8 +313,10 @@ private:
                 }
             } else {
                 // Drain complete: result tile arrived at L2
-                // Note: slot_id was set when drain started
-                l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
+                // Note: slot_id was set when drain started. An accumulating merge lands in the
+                // entry its first merge made: there is nothing new to insert.
+                if (in_flight_->tile.merge != TileDescriptor::kMergeAccumulate)
+                    l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
                 total_tiles_drained_++;
 
                 events.push_back(TimingEvent::duration_event(
@@ -446,11 +448,33 @@ private:
             return false;
         }
 
+        // A merge into an L2 accumulator's partial (#429): the first takes the program's slot at
+        // its turn; every later one merges into the entry its first merge put there, and takes
+        // no credit (a read-modify-write of the slot it holds).
+        const bool accumulate = tile.merge == TileDescriptor::kMergeAccumulate;
+        if (tile.merge != TileDescriptor::kMergeNone) {
+            const auto slot = static_cast<uint32_t>(tile.l2_slot);
+            const auto held = l2_tag_cam_.match(tile.tile_id);
+            const bool ready = accumulate ? held.has_value() && held->slot_id == slot
+                                          : !held.has_value() && l2_tag_cam_.slot_ready(slot, tile.l2_slot_turn);
+            if (!ready) {
+                events.push_back(TimingEvent(
+                    accumulate ? EventType::STR_STALL_TAG : EventType::STR_STALL_CREDIT,
+                    current_cycle,
+                    config_.streamer_id,
+                    tile.tile_id,
+                    name()
+                ));
+                stall_cycles_credit_++;
+                return false;
+            }
+        }
+
         // Second check: Is L2 credit available? (Drains carry C result
         // tiles, which have their own partition when the pool is
         // partitioned, per #89 - a flood of A/B moves can never starve
         // result draining.)
-        if (!l2_credits_.acquire(static_cast<size_t>(tile.tile_id.matrix))) {
+        if (!accumulate && !l2_credits_.acquire(static_cast<size_t>(tile.tile_id.matrix))) {
             events.push_back(TimingEvent(
                 EventType::STR_STALL_CREDIT,
                 current_cycle,
@@ -473,7 +497,13 @@ private:
         Cycle transfer_cycles = drain_tile.fabric_cycles + std::max(move, drain_tile.ve_cycles);
         ve_busy_cycles_ += drain_tile.ve_cycles;
         if (drain_tile.ve_cycles > move) ve_bound_cycles_ += drain_tile.ve_cycles - move;
-        uint32_t l2_slot = allocate_l2_slot();
+        uint32_t l2_slot = 0;
+        if (drain_tile.merge != TileDescriptor::kMergeNone) {
+            l2_slot = static_cast<uint32_t>(drain_tile.l2_slot);
+            if (!accumulate) l2_tag_cam_.claim_slot(l2_slot, drain_tile.tile_id, drain_tile.l2_slot_turn);
+        } else {
+            l2_slot = allocate_l2_slot();
+        }
 
         in_flight_ = InFlightTransfer(
             drain_tile,
@@ -493,13 +523,14 @@ private:
         ));
         events.back().slot_id = l2_slot;
 
-        events.push_back(TimingEvent(
-            EventType::CREDIT_ACQUIRED,
-            current_cycle,
-            config_.streamer_id,
-            drain_tile.tile_id,
-            name()
-        ));
+        if (!accumulate)
+            events.push_back(TimingEvent(
+                EventType::CREDIT_ACQUIRED,
+                current_cycle,
+                config_.streamer_id,
+                drain_tile.tile_id,
+                name()
+            ));
 
         return true;
     }

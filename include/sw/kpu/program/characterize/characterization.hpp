@@ -108,7 +108,8 @@ inline Metrics characterize_program(const TileProgram& prog, const DeviceDescrip
         if (is_l3(op.kind)) --m.ops;                    // the compute schedule's ops: L3 placement is L-T1's
     m.feeds  = prog.count(TileOpKind::Feed);
     m.drains = prog.count(TileOpKind::Drain);
-    m.computes = prog.count(TileOpKind::MatMulAccum) + prog.count(TileOpKind::LuDiagFactor) +
+    m.computes = prog.count(TileOpKind::MatMulAccum) + prog.count(TileOpKind::MatMulMerge) +
+                 prog.count(TileOpKind::LuDiagFactor) +
                  prog.count(TileOpKind::TrsmLowerLeft) + prog.count(TileOpKind::TrsmUpperRight);
 
     TileDag dag(prog, dev, l1);

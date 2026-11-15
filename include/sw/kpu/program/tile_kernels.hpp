@@ -22,6 +22,7 @@
 #include <sw/kpu/program/tile_program.hpp>
 
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -341,6 +342,54 @@ inline void kernel_acc_init(TileProgram& prog, const TileOp& op) {
         for (Dim c = c0; c < c1; ++c) Y.set_word(r, c, X.word(x0 + (r - r0), xc0 + (c - c0)));
 }
 
+// The Combiner's merge of a partial into Y's tile (#429): y[i] := y[i] + p[i], in Y's number
+// system. The tiles hold their elements as stored (an fp32's value, a typed element's word in the
+// float's bits). fp32 adds as floats; a typed element adds its decoded values and encodes the sum
+// (an int32 wraps at 32 bits, as the MAC's sum does). L-B's Drain and MATMUL_MERGE's kernel both
+// merge through here, so the replay is bit-identical to L-B.
+inline void merge_tile(const std::string& type, std::vector<float>& y, const std::vector<float>& p) {
+    if (y.size() != p.size())
+        throw std::invalid_argument("merge: a partial of " + std::to_string(p.size()) + " elements into a tile of " +
+                                    std::to_string(y.size()));
+    if (type == numeric::kFp32) {
+        for (std::size_t i = 0; i < y.size(); ++i) y[i] += p[i];
+        return;
+    }
+    for (std::size_t i = 0; i < y.size(); ++i) {
+        numeric::Word a, b;
+        std::memcpy(&a, &y[i], sizeof a);
+        std::memcpy(&b, &p[i], sizeof b);
+        const numeric::Word s = numeric::encode(type, numeric::decode(type, a) + numeric::decode(type, b));
+        std::memcpy(&y[i], &s, sizeof s);
+    }
+}
+
+// MATMUL_MERGE (opset 1.5): the partial P := alpha * (A . B) from zero, then Y := P (overwrite)
+// or Y := Y + P (accumulate). The partial is MATMUL_ACCUM's arithmetic on a zero tile.
+inline void kernel_matmul_merge(TileProgram& prog, const TileOp& op) {
+    const TileCoord& yc = op.outputs.at(0);
+    TensorOperand& Y = prog.operand(yc.operand);
+    const Dim r0 = Y.row_begin(yc.ti), r1 = Y.row_end(yc.ti);
+    const Dim c0 = Y.col_begin(yc.tj), c1 = Y.col_end(yc.tj);
+    std::vector<float> before;
+    for (Dim r = r0; r < r1; ++r)
+        for (Dim c = c0; c < c1; ++c) {
+            before.push_back(Y.at(r, c));
+            Y.at(r, c) = 0.0f;                  // all-zero bits: 0 in every registered system
+        }
+    TileOp partial = op;
+    partial.kind = TileOpKind::MatMulAccum;
+    kernel_matmul_accum(prog, partial);
+    if (op.overwrite) return;
+    std::vector<float> p;
+    for (Dim r = r0; r < r1; ++r)
+        for (Dim c = c0; c < c1; ++c) p.push_back(Y.at(r, c));
+    merge_tile(Y.type, before, p);
+    std::size_t n = 0;
+    for (Dim r = r0; r < r1; ++r)
+        for (Dim c = c0; c < c1; ++c) Y.at(r, c) = before[n++];
+}
+
 // Y := act(Y): outputs = {Y's tile}.
 inline void kernel_activation(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
@@ -373,6 +422,7 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::BiasAdd:        kernel_bias_add(prog, op); break;
         case TileOpKind::Activation:     kernel_activation(prog, op); break;
         case TileOpKind::AccInit:        kernel_acc_init(prog, op); break;
+        case TileOpKind::MatMulMerge:    kernel_matmul_merge(prog, op); break;
         case TileOpKind::L3Load:
         case TileOpKind::L3Store:
         case TileOpKind::L3Move:
