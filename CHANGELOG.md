@@ -53,6 +53,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The reuse and bubble report of an L-T1 run** (#425, its first item): `kpu-run --bubbles`
+  (`csp/bubbles.hpp`, `bubble_report`).
+  - **Bubbles:** every compute lane's idle time before a call, and what it waited for. The
+    report walks back along program order: the operand whose Feed finished last, its Move, its
+    Load. Each step names the binding constraint:
+    - an L2 or L3 slot's credit;
+    - a saturated process: the streamer, BlockMover or DMA, with every lane busy over 90% of the
+      wait;
+    - a head-of-line block behind the action before it in its process's order, which the walk
+      follows;
+    - the DRAM transfer itself.
+  - **Reuse:** per operand, its Loads, Moves and Feeds; feeds per load is the reuse stated
+    across DRAM, feeds per move across L3.
+  - **Load:** per process, busy lane-cycles against lanes x makespan.
+  - L-T1's records gain `ready`, the cycle a leg's inputs and credit were there.
+  - On the 64^3 matmul, OS idles 454 cycles (358 DRAM, 96 BlockMover) at 1.00 feeds per move.
+    WS states 4.00 for B and idles 306.
+
 - **The Combiner's requantization: int32 accumulators into int8 results** (#427, part 2b).
   - The language:
     - a result declares its accumulator, `tensor C[..] int8 tile .. out acc int32`. Its gemms and

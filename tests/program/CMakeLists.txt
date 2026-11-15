@@ -463,3 +463,14 @@ set_tests_properties(test_csp_requant PROPERTIES
     LABELS "program;csp;numeric;v0.10"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
+
+# The reuse and bubble report of an L-T1 run: idle compute and its cause, stated reuse, process
+# load (#425)
+kpu_add_component_test(test_csp_bubbles "program"
+    test_csp_bubbles.cpp
+)
+
+set_tests_properties(test_csp_bubbles PROPERTIES
+    LABELS "program;csp;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
