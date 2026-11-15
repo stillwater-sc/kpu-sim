@@ -107,7 +107,7 @@ struct TileIDHash {
 // from L3) down the rows; the rest are elementwise activations.
 // ============================================================================
 struct VectorStage {
-    enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan };
+    enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8 };
     Op op = Op::Relu;
     TileID arg{};
     // Add: its read of `arg`, numbered in the order the executor scheduled the reads of `arg`.

@@ -78,9 +78,11 @@ jobs:
             !build/tests
             !build/CMakeCache.txt
             !build/CMakeFiles
-          key: benchmark-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'include/**') }}
+          # The dependencies' checkouts (build/_deps) are cached too, and FetchContent updates are
+          # disconnected: a change under cmake/ (a dependency's tag) must not restore them.
+          key: benchmark-build-${{ runner.os }}-${{ hashFiles('cmake/**') }}-${{ hashFiles('CMakeLists.txt', 'src/**', 'include/**') }}
           restore-keys: |
-            benchmark-build-${{ runner.os }}-
+            benchmark-build-${{ runner.os }}-${{ hashFiles('cmake/**') }}-
 
       - name: Configure CMake
         run: |

@@ -396,6 +396,21 @@ inline void kernel_matmul_merge(TileProgram& prog, const TileOp& op) {
         for (Dim c = c0; c < c1; ++c) Y.at(r, c) = before[n++];
 }
 
+// Y := Y as the block format represents it (opset 1.6): the tile's elements, row-major, in runs of
+// 32 (numeric::block_convert). The context computes in fp32.
+inline void kernel_block_convert(TileProgram& prog, const TileOp& op) {
+    const TileCoord& yc = op.outputs.at(0);
+    TensorOperand& Y = prog.operand(yc.operand);
+    require_fp32(Y, "kernel_block_convert");
+    std::vector<float> v;
+    for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
+        for (Dim c = Y.col_begin(yc.tj); c < Y.col_end(yc.tj); ++c) v.push_back(Y.at(r, c));
+    numeric::block_convert(op.format, v.data(), v.size());
+    std::size_t n = 0;
+    for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
+        for (Dim c = Y.col_begin(yc.tj); c < Y.col_end(yc.tj); ++c) Y.at(r, c) = v[n++];
+}
+
 // Y := act(Y): outputs = {Y's tile}.
 inline void kernel_activation(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
@@ -429,6 +444,7 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::Activation:     kernel_activation(prog, op); break;
         case TileOpKind::AccInit:        kernel_acc_init(prog, op); break;
         case TileOpKind::MatMulMerge:    kernel_matmul_merge(prog, op); break;
+        case TileOpKind::BlockConvert:   kernel_block_convert(prog, op); break;
         case TileOpKind::L3Load:
         case TileOpKind::L3Store:
         case TileOpKind::L3Move:

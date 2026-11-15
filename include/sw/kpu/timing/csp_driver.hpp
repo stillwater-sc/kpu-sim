@@ -537,6 +537,8 @@ private:
             case program::csp::VeOp::Gelu: v.op = VectorStage::Op::Gelu; break;
             case program::csp::VeOp::Silu: v.op = VectorStage::Op::Silu; break;
             case program::csp::VeOp::Atan: v.op = VectorStage::Op::Atan; break;
+            case program::csp::VeOp::MxInt8: v.op = VectorStage::Op::MxInt8; break;
+            case program::csp::VeOp::MxFp8: v.op = VectorStage::Op::MxFp8; break;
         }
         return v;
     }

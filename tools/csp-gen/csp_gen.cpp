@@ -62,6 +62,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
   --place <fabric|combiner|bm.egress|unfused>
                                 linear: where the epilogue runs      (default fabric)
+  --format <none|mxint8|mxfp8>  linear: convert the result into an OCP Microscaling block format,
+                                after the activation, at --place (combiner | bm.egress)
+                                (default none)
   -o <file>                     write here                           (default: stdout)
 
 The program is validated before it is written; a schedule that does not fit the L3, or a
@@ -98,7 +101,7 @@ int main(int argc, char** argv) {
     for (const auto& [k, v] : a)
         if (k != "--algo" && k != "--size" && k != "--tile" && k != "--l3" && k != "--target" && k != "--orient" &&
             k != "--act" && k != "--place" && k != "--stage-a" && k != "--init" && k != "--dtype" &&
-            k != "--dataflow" && k != "-o")
+            k != "--dataflow" && k != "--format" && k != "-o")
             return usage("unknown option '" + k + "'");
     for (const char* k : {"--algo", "--size", "--tile"})
         if (!a.count(k)) return usage(std::string(k) + " is required");
@@ -131,6 +134,10 @@ int main(int argc, char** argv) {
     if (a.count("--dtype")) {
         if (o.algo != "matmul") return usage("--dtype is matmul's; --algo is '" + o.algo + "'");
         o.dtype = a["--dtype"];
+    }
+    if (a.count("--format")) {
+        if (o.algo != "linear") return usage("--format is linear's; --algo is '" + o.algo + "'");
+        o.format = a["--format"];
     }
     if (a.count("--dataflow")) {
         if (o.algo != "matmul" && o.algo != "linear")

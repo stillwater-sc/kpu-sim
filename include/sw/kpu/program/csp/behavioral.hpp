@@ -465,6 +465,8 @@ private:
                     throw BehavioralError(where + ": add(" + b + ") @ " + to_string(st.place) + ": " + b +
                                           " is not resident in L3");
                 bias_tile(v, cols, slot_of(b).values);
+            } else if (is_block_format(st.op)) {
+                numeric::block_convert(block_format_of(st.op), v.data(), v.size());
             } else {
                 activate_tile(v, activation_of(st.op));
             }

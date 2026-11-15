@@ -150,8 +150,9 @@ private:
     struct Box { std::string operand; std::vector<std::pair<bool, Interval>> dims; };   // (all, range)
     // finals: an L2 accumulator's tiles whose final merge (a call with `via`) has run. A family
     // over a loop variable is widened to the variable's whole dimension when its loop ends.
+    // formatted: a final merge converted its tile into a block format, after which nothing may run.
     struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false;
-                 std::vector<Family> finals = {}; };
+                 std::vector<Family> finals = {}; bool formatted = false; };
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
@@ -795,13 +796,15 @@ private:
             // checks that no call into the tile follows it.
             for (const ResolvedStage& r : resolve_result_context(s.context, target_, [](int line, const std::string& m) {
                      throw CompileError(line, m);
-                 }))
+                 })) {
+                if (is_block_format(r.op)) acc->formatted = true;
                 if (r.place != Place::Combiner)
                     throw CompileError(s.line, "call gemm +-> " + text(y) + " via ... @ " + to_string(r.place) +
                                                ": the epilogue on an L2 accumulator's final merge runs on the Combiner, "
                                                "after the merge" +
                                                std::string(r.place == Place::BmEgress ? "; a bm.egress stage goes on the store"
                                                                                       : "; a fabric stage would act on one partial"));
+            }
             context(s, y);
             if (!s.context.empty()) {
                 Family f = y;
@@ -861,6 +864,9 @@ private:
             if (s.late)
                 throw CompileError(s.line, "store " + text(y) + " late: " + text(y) + " is an L2 accumulator, whose "
                                            "partials are already out of the fabric; store it where it is written");
+            if (acc->formatted && !s.context.empty())
+                throw CompileError(s.line, "store " + text(y) + " via ...: its final merge converted it into a block "
+                                           "format, its last operation; no stage may follow it");
             for (const ResolvedStage& r : resolve_result_context(s.context, target_, [](int line, const std::string& m) {
                      throw CompileError(line, m);
                  }))

@@ -11,7 +11,10 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # A change every file includes (a dependency's headers: Universal v3.91 -> v5.17.0, #436) misses
+    # the compile cache everywhere, and MSVC's cold build alone takes ~26 minutes; the tests take
+    # a few more. A warm build is a few minutes, so this limit binds only on such a change.
+    timeout-minutes: 45
 
     # sccache uses the GitHub Actions cache as its storage backend. The action
     # injects the required credentials when SCCACHE_GHA_ENABLED is set.

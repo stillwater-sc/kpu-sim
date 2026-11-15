@@ -257,7 +257,9 @@ private:
         std::vector<std::string> accs = {};                // Acc in l2: its tiles, in order
     };
     // An L2 accumulator's tile: its reserved L2 slot, and its staging once the first merge opens it.
-    struct Partial { L2Address at; TileCoord tile; std::size_t id = kNone; std::size_t merges = 0; int final_line = 0; };
+    // formatted: its final merge converted it into a block format, the last operation it may take.
+    struct Partial { L2Address at; TileCoord tile; std::size_t id = kNone; std::size_t merges = 0; int final_line = 0;
+                     bool formatted = false; };
     struct Staged { L2Address at; std::size_t id; TileCoord tile; };
     struct LateStore { const Stmt* s; TileCoord y; Where where; std::size_t seq; };
     struct Live { std::size_t id; bool dirty; bool inherited = false; };
@@ -508,6 +510,9 @@ private:
                 if (st.op == VeOp::Add) {
                     op.kind = TileOpKind::BiasAdd;
                     op.inputs = {st.arg};
+                } else if (is_block_format(st.op)) {
+                    op.kind = TileOpKind::BlockConvert;
+                    op.format = block_format_of(st.op);
                 } else {
                     op.kind = TileOpKind::Activation;
                     op.act = activation_of(st.op);
@@ -786,6 +791,7 @@ private:
                                                                                 : "; a fabric stage would act on one partial"));
             drain_ctx = std::move(d);
             pt.final_line = s.line;
+            for (const csp::Stage& st : drain_ctx) pt.formatted = pt.formatted || is_block_format(st.op);
         }
         for (std::size_t i = 0; i < args.size(); ++i) {
             TileOp feed;
@@ -826,9 +832,13 @@ private:
                                        " is an L2 accumulator, whose partials the Combiner merged as they drained; "
                                        "put the epilogue on its final merge (`call gemm(..) +-> " + k + " via ... @ "
                                        "combiner`), or @ bm.egress here");
+        const Partial pt = partial_.at(k);
+        if (pt.formatted && !wb_ctx.empty())
+            throw CompileError(s.line, "store " + k + " via ...: " + k + "'s final merge (csp line " +
+                                       std::to_string(pt.final_line) + ") converted it into a block format, its "
+                                       "last operation; no stage may follow it");
         need_slot(s.line, "store " + k + "'s writeback");
         record_stages(y, drain_ctx, wb_ctx);
-        const Partial pt = partial_.at(k);
         const std::size_t id = next_residency_++;
         place(id, y);
         emit(Action::Kind::Writeback, y, id, kNone, nullptr, true, false, false, std::move(wb_ctx), pt.at, pt.id);

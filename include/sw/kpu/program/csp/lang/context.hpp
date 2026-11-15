@@ -86,15 +86,25 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
     std::vector<ResolvedStage> out;
     int last_rank = -1;
     Place last = Place::Fabric;
+    const Stage* format = nullptr;                      // a block-format conversion seen: it is last
     for (const Stage& s : via) {
         ResolvedStage r;
         if (!parse_veop(s.op, r.op))
-            fail(s.line, "'" + s.op + "' is not a vector operation (add, relu, gelu, silu, atan)");
+            fail(s.line, "'" + s.op + "' is not a vector operation (add, relu, gelu, silu, atan, mxint8, mxfp8)");
+        if (format)
+            fail(s.line, s.op + " @ " + s.place + " follows the block-format conversion " + format->op +
+                         ": the conversion is a result's last operation (bias, scale, activation, format)");
         if (!parse_place(s.place, r.place))
             fail(s.line, "'" + s.place + "' is not a place (fabric, combiner, bm.egress, bm.ingress)");
         if (r.place == Place::BmIngress)
             fail(s.line, s.op + " @ bm.ingress: bm.ingress is an operand's way into the fabric (L3 -> L2); a result "
                          "leaves through fabric, combiner and bm.egress");
+        if (is_block_format(r.op)) {
+            format = &s;
+            if (r.place == Place::Fabric)
+                fail(s.line, s.op + " @ fabric: a block-format conversion runs where the result leaves for memory, "
+                             "on the Combiner or at bm.egress");
+        }
         if (r.op == VeOp::Add) {
             if (s.args.size() != 1) fail(s.line, "add takes one vector tile: add(b[j])");
             r.arg = s.args.front();
