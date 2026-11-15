@@ -141,6 +141,9 @@ public:
         Proc proc = Proc::Cf;
         std::size_t lane = 0;
         Cycle start = 0, finish = 0;
+        // When its inputs (and the credit it takes) were ready: start - ready is what a busy lane
+        // or the process's in-order issue cost it (#425's bubble report). Zero-length: start.
+        Cycle ready = 0;
         Cycle slot_wait = 0;            // a Load whose slot decided its start: what the wait cost
         Cycle l2_wait = 0;              // a stage Move or a first merge whose L2 slot decided its start: the same
         std::uint32_t chain = kNoChain; // a Call in a stream chain: its index in chains()
@@ -580,7 +583,7 @@ private:
         rec.kind = a.kind;
         rec.tile = a.tile;
         rec.place = a.place;
-        rec.start = rec.finish = t;
+        rec.start = rec.finish = rec.ready = t;
         records_.push_back(rec);
         st_.makespan = std::max(st_.makespan, t);
     }
@@ -648,6 +651,7 @@ private:
         rec.proc = Proc::Str;
         rec.lane = lanes(Proc::Str) + i;
         rec.start = start;
+        rec.ready = ready;
         rec.finish = finish;
         records_.push_back(rec);
         return finish;
@@ -738,6 +742,7 @@ private:
         rec.proc = p;
         rec.lane = lane;
         rec.start = start;
+        rec.ready = ready;
         rec.finish = finish;
         records_.push_back(rec);
         return finish;

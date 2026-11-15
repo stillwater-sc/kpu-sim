@@ -24,6 +24,7 @@
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/record/domain_flow_record.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>
+#include <sw/kpu/program/csp/bubbles.hpp>
 #include <sw/kpu/program/csp/tile_commands.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/version.hpp>
@@ -85,6 +86,10 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             version 1, #397): LOAD / STORE / EXEC with their sync and chain bits,
                             for one output-stationary int8 tile, with the inputs and L-B's results
   --timeline <file.json>    the L-T1 run as Chrome-trace intervals, one per leg
+  --bubbles                 the L-T1 run's reuse and bubble report: each compute lane's idle time
+                            before a call and what it waited for (an operand's Feed, Move or
+                            Load, a slot's credit, a busy lane), the reuse each operand's
+                            program states, and each process's load (#425)
   --step                    single-step (L-B: one action per step; L-T1: one record)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
   --no-compare              run the levels, do not diff values
@@ -129,7 +134,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                                                    "--emit-l0", "--emit-l0-kernel",
                                                    "--tflow", "--step", "--step-limit", "--timeline",
                                                    "--dflow", "--dflow-limit", "--dflow-values", "--dflow-values-cap",
-                                                   "--tile-commands"};
+                                                   "--tile-commands", "--bubbles"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -482,6 +487,19 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         }
         std::cout << "wrote  " << timeline_path << "  (" << entries.size()
                   << " events, one per leg, from L-T1; per process and lane)\n";
+    }
+
+    // --bubbles: the L-T1 run's reuse and bubble report (#425): where the compute lanes waited for
+    // data, why, and the reuse the program stated.
+    if (has_flag(a, "--bubbles")) {
+        const CspLevelOutcome* lt1 = nullptr;
+        for (const auto& o : res.levels)
+            if (o.level == ExecutionLevel::BlockSequential && !o.skipped) lt1 = &o;
+        if (!lt1) {
+            std::cerr << "kpu-run: --bubbles reads the L-T1 run, which did not run (add block-sequential to --level)\n";
+            return 2;
+        }
+        std::cout << sw::kpu::program::csp::bubble_report(lt1->records, lt1->makespan, lt1->busy, lt1->lanes).text();
     }
 
     // --step: walk the program at the finest of L-B and L-T1 that ran, through the platform
