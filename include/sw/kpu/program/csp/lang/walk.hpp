@@ -45,8 +45,14 @@
 // whose `partial` is set), Accumulate for each later one. `store` then Writes the slot back into an
 // L3 slot for the moment (the Writeback carries the L2 address), frees the L2 slot (L2Release),
 // and Stores and Releases the L3 slot. A late store, a retain and an `init` are refused for an
-// L2 accumulator, and so is a fabric or combiner stage on its store: the epilogue on the final
-// merge is #427's (a bm.egress stage rides the Writeback, as for any result).
+// L2 accumulator.
+//
+// The epilogue on the final merge (#427): a call into an L2 accumulator that carries `via` stages
+// is the tile's FINAL merge, as the program states it: its stages run on the Combiner after the
+// merge, on the merged value, as it lands in the slot. They must be `@ combiner` (a fabric stage
+// would act on one partial, and a bm.egress stage rides the store's Writeback, where it goes on
+// the store). A call into the tile after its final merge is refused; so is a combiner or fabric
+// stage on its store, which would come after the merges.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -251,7 +257,7 @@ private:
         std::vector<std::string> accs = {};                // Acc in l2: its tiles, in order
     };
     // An L2 accumulator's tile: its reserved L2 slot, and its staging once the first merge opens it.
-    struct Partial { L2Address at; TileCoord tile; std::size_t id = kNone; std::size_t merges = 0; };
+    struct Partial { L2Address at; TileCoord tile; std::size_t id = kNone; std::size_t merges = 0; int final_line = 0; };
     struct Staged { L2Address at; std::size_t id; TileCoord tile; };
     struct LateStore { const Stmt* s; TileCoord y; Where where; std::size_t seq; };
     struct Live { std::size_t id; bool dirty; bool inherited = false; };
@@ -761,8 +767,26 @@ private:
         if (s.fn != "gemm")
             throw CompileError(s.line, "call " + s.fn + " on the L2 accumulator " + yk + ": an L2 accumulator takes "
                                        "gemm '+->', whose result the Combiner merges into its slot");
-        if (!s.context.empty())
-            throw CompileError(s.line, "a call into an L2 accumulator drains a partial; its epilogue is the store's");
+        Partial& pt = partial_.at(yk);
+        if (pt.final_line)
+            throw CompileError(s.line, "call gemm into " + yk + " after its final merge (csp line " +
+                                       std::to_string(pt.final_line) + "): the call that carries the epilogue is the "
+                                       "tile's last");
+        // `via`: the final merge's epilogue, on the Combiner, after the merge.
+        std::vector<csp::Stage> drain_ctx;
+        if (!s.context.empty()) {
+            auto [d, wb] = result_context(s, y);
+            for (const auto* v : {&d, &wb})
+                for (const csp::Stage& st : *v)
+                    if (st.place != Place::Combiner)
+                        throw CompileError(s.line, std::string("call gemm +-> ") + yk + " via ... @ " + to_string(st.place) +
+                                                   ": the epilogue on an L2 accumulator's final merge runs on the Combiner, "
+                                                   "after the merge" +
+                                                   (st.place == Place::BmEgress ? "; a bm.egress stage goes on the store"
+                                                                                : "; a fabric stage would act on one partial"));
+            drain_ctx = std::move(d);
+            pt.final_line = s.line;
+        }
         for (std::size_t i = 0; i < args.size(); ++i) {
             TileOp feed;
             feed.kind = TileOpKind::Feed;
@@ -771,7 +795,6 @@ private:
             feed.inputs = {args[i]};
             deliver(args[i], s.line, s.fn, &feed);
         }
-        Partial& pt = partial_.at(yk);
         op.kind = TileOpKind::MatMulMerge;
         op.overwrite = pt.merges == 0;
         op.l2 = pt.at;
@@ -781,10 +804,11 @@ private:
         drain.port_kind = PortKind::Output;
         drain.port = "South";
         drain.outputs = {y};
+        record_stages(y, drain_ctx, {});               // after the merge, in the trace as at every level
         const std::size_t d = sink_.l0(drain);
         if (pt.merges == 0) pt.id = next_staging_++;   // the first merge opens the slot: its staging
         merge_ = pt.merges == 0 ? Merge::Overwrite : Merge::Accumulate;
-        emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, {}, pt.at, pt.id);
+        emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx), pt.at, pt.id);
         ++pt.merges;
         ++acc_calls_[yk];
     }
@@ -800,7 +824,8 @@ private:
         if (!drain_ctx.empty())
             throw CompileError(s.line, "store " + k + " via ... @ " + to_string(drain_ctx.front().place) + ": " + k +
                                        " is an L2 accumulator, whose partials the Combiner merged as they drained; "
-                                       "an epilogue on the final merge is not built yet (#427), so place it @ bm.egress");
+                                       "put the epilogue on its final merge (`call gemm(..) +-> " + k + " via ... @ "
+                                       "combiner`), or @ bm.egress here");
         need_slot(s.line, "store " + k + "'s writeback");
         record_stages(y, drain_ctx, wb_ctx);
         const Partial pt = partial_.at(k);

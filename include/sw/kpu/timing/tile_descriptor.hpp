@@ -198,6 +198,8 @@ struct TileDescriptor {
     uint64_t program_seq = 0;   // the action's place in its program (ordered actions only)
     uint64_t after_writebacks = 0;  // a Move's or ejection's: the tile's Writebacks before it (set by the mover)
     uint64_t after_drains = 0;      // a Writeback's: the tile's Drains before it (set by the executor)
+    uint64_t after_stage_reads = 0; // a Release's: the tile contexts scheduled before it that read the
+                                    // tile (add's bias), which it waits for (set by the executor)
 
     // Tile dimensions (for compute operations)
     Size height = 16;         // Tile height (rows)

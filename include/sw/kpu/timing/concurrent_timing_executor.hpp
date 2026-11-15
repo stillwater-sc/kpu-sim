@@ -423,9 +423,11 @@ public:
      * @param type The tile's number system (numeric.hpp): the merge adds in it
      *
      * The merge is one elementwise add on the Combiner (combiner_lanes x combiner_rate), timed
-     * as a drain stage. An accumulate is a read-modify-write of the entry in the slot.
+     * as a drain stage. An accumulate is a read-modify-write of the entry in the slot. `stages`:
+     * the final merge's epilogue (#427), applied to the merged value in the slot, after the add.
      */
-    void schedule_merge(const TileDescriptor& tile, bool overwrite, const std::string& type, int streamer_id = -1);
+    void schedule_merge(const TileDescriptor& tile, bool overwrite, const std::string& type,
+                        std::vector<VectorStage> stages = {}, int streamer_id = -1);
     /// Drains the Combiner merged into an L2 partial, and of them read-modify-writes.
     [[nodiscard]] std::uint64_t merges() const { return merges_; }
     [[nodiscard]] std::uint64_t merge_accumulates() const { return merge_accumulates_; }
@@ -813,12 +815,12 @@ private:
     void publish_result(const TileID& id);
     void chain_done(const TileID& id);
     // Tile contexts, per tile in the order its drains and writebacks were scheduled (a tile's
-    // drains complete in order, as do its writebacks). stage_reads_: stages not yet applied that
-    // read a tile (add's bias) -- its Release waits for them.
+    // drains complete in order, as do its writebacks). The stages that read a tile (add's bias),
+    // scheduled and applied: a Release waits for those scheduled before it (after_stage_reads).
     using StageQueue = std::unordered_map<TileID, std::deque<std::vector<VectorStage>>, TileIDHash>;
     StageQueue drain_stages_, writeback_stages_;
     std::unordered_map<TileID, std::deque<Cycle>, TileIDHash> fabric_pending_;
-    std::unordered_map<TileID, size_t, TileIDHash> stage_reads_;
+    std::unordered_map<TileID, uint64_t, TileIDHash> stage_reads_scheduled_, stage_reads_applied_;
     std::unordered_map<TileID, uint32_t, TileIDHash> result_cf_;     // the compute tile holding a result
     Cycle fabric_epilogue_cycles_ = 0;
     [[nodiscard]] Cycle stage_cycles(const TileDescriptor& t, const std::vector<VectorStage>& stages,
@@ -1110,10 +1112,11 @@ inline void ConcurrentTimingExecutor::create_components() {
         block_movers_.push_back(std::make_unique<BlockMoverProcess>(
             bm_config, *l3_tile_cams_[mover_tile_[i]], *l3_tile_credits_[mover_tile_[i]],
             l2_credits_, l2_tag_cam_));
-        // A program's Release waits for the context stages that still read the entry.
-        block_movers_.back()->set_release_guard([this](const TileID& id) {
-            auto it = stage_reads_.find(id);
-            return it != stage_reads_.end() && it->second > 0;
+        // A program's Release waits for the context stages scheduled before it that read the
+        // entry (#434): never for a later residency's, which wait for this Release to load it.
+        block_movers_.back()->set_release_guard([this](const TileDescriptor& t) {
+            auto it = stage_reads_applied_.find(t.tile_id);
+            return (it == stage_reads_applied_.end() ? 0 : it->second) < t.after_stage_reads;
         });
         // A program's Writeback takes the copy its own Drain brought to L2.
         block_movers_.back()->set_writeback_guard([this](const TileDescriptor& t) {
@@ -1227,7 +1230,8 @@ inline void ConcurrentTimingExecutor::enqueue_writeback(const TileDescriptor& ti
 }
 
 inline void ConcurrentTimingExecutor::schedule_release(const TileDescriptor& tile_in, int mover_id) {
-    const TileDescriptor tile = homed(tile_in);
+    TileDescriptor tile = homed(tile_in);
+    tile.after_stage_reads = stage_reads_scheduled_[tile.tile_id];
     block_movers_[mover_for(tile, mover_id)]->schedule_release(tile);
 }
 
@@ -1356,24 +1360,29 @@ inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile_
     std::vector<VectorStage> all = std::move(fabric);
     all.insert(all.end(), drain.begin(), drain.end());
     for (const VectorStage& st : all)
-        if (st.op == VectorStage::Op::Add) ++stage_reads_[st.arg];
+        if (st.op == VectorStage::Op::Add) ++stage_reads_scheduled_[st.arg];
     drain_stages_[tile.tile_id].push_back(std::move(all));
     fabric_pending_[tile.tile_id].push_back(tile.fabric_cycles);
     enqueue_drain(tile, streamer_id);
 }
 
 inline void ConcurrentTimingExecutor::schedule_merge(const TileDescriptor& tile_in, bool overwrite,
-                                                    const std::string& type, int streamer_id) {
+                                                    const std::string& type, std::vector<VectorStage> stages,
+                                                    int streamer_id) {
     if (tile_in.l2_slot < 0)
         throw std::invalid_argument("schedule_merge: " + tile_in.tile_id.to_string() + " names no L2 slot for its partial");
     TileDescriptor tile = tile_in;
     tile.merge = overwrite ? TileDescriptor::kMergeOverwrite : TileDescriptor::kMergeAccumulate;
     VectorStage add;
     add.op = VectorStage::Op::Add;
-    tile.ve_cycles = stage_cycles(tile, {add}, static_cast<double>(config_.combiner_lanes) * config_.combiner_rate,
+    std::vector<VectorStage> timed{add};                 // the merge's add, then the epilogue's stages
+    timed.insert(timed.end(), stages.begin(), stages.end());
+    tile.ve_cycles = stage_cycles(tile, timed, static_cast<double>(config_.combiner_lanes) * config_.combiner_rate,
                                   "Combiner");
     merge_types_[tile.tile_id] = type;
-    drain_stages_[tile.tile_id].emplace_back();         // one entry per drain: a merge has no stages
+    for (const VectorStage& st : stages)
+        if (st.op == VectorStage::Op::Add) ++stage_reads_scheduled_[st.arg];
+    drain_stages_[tile.tile_id].push_back(std::move(stages));   // one entry per drain, applied after the merge
     fabric_pending_[tile.tile_id].push_back(0);
     enqueue_drain(tile, streamer_id);
 }
@@ -1384,7 +1393,7 @@ inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& t
     tile.ve_cycles = stage_cycles(tile, egress, static_cast<double>(config_.bm_ve_lanes) * config_.bm_ve_rate,
                                   "BlockMovers");
     for (const VectorStage& st : egress)
-        if (st.op == VectorStage::Op::Add) ++stage_reads_[st.arg];
+        if (st.op == VectorStage::Op::Add) ++stage_reads_scheduled_[st.arg];
     writeback_stages_[tile.tile_id].push_back(std::move(egress));
     enqueue_writeback(tile, mover_id);
 }
@@ -1442,7 +1451,7 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
         write_payload(level, id, std::move(y), slot);
     }
     for (const VectorStage& st : stages)
-        if (st.op == VectorStage::Op::Add) --stage_reads_[st.arg];
+        if (st.op == VectorStage::Op::Add) ++stage_reads_applied_[st.arg];
 }
 
 inline void ConcurrentTimingExecutor::publish_result(const TileID& id) {
@@ -2023,7 +2032,8 @@ inline void ConcurrentTimingExecutor::reset() {
     drain_stages_.clear();
     writeback_stages_.clear();
     fabric_pending_.clear();
-    stage_reads_.clear();
+    stage_reads_scheduled_.clear();
+    stage_reads_applied_.clear();
     result_cf_.clear();
     fabric_epilogue_cycles_ = 0;
     scheduled_compute_counts_.clear();

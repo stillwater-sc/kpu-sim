@@ -28,7 +28,8 @@
 // Combiner's merge into the tile's L2 slot: Overwrite writes the partial into a free slot and tags
 // it, Accumulate adds it to the partial the slot holds (merge_tile, in the tile's number system).
 // The store's Writeback reads the slot and leaves it; its L2Release frees it. Refused, by name: a
-// first merge into a live slot, an accumulate into a slot that does not hold the tile.
+// first merge into a live slot, an accumulate into a slot that does not hold the tile. The final
+// merge's Drain carries the epilogue (#427): its stages run on the merged value in the slot.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -159,11 +160,11 @@ public:
                 [[fallthrough]];
             case Action::Kind::Drain: {
                 std::vector<float> v = take(from_chan(a.kind), k, where(i), /*keep=*/false);
-                stages(v, a, where(i));         // a result's epilogue, where the program placed it
-                if (a.merge != Merge::None) {   // the Combiner's merge into the partial's L2 slot
-                    merge(a, k, std::move(v), where(i));
+                if (a.merge != Merge::None) {   // the Combiner's merge into the partial's L2 slot, then
+                    merge(a, k, std::move(v), where(i));   // the final merge's epilogue on the sum
                     break;
                 }
+                stages(v, a, where(i));         // a result's epilogue, where the program placed it
                 at(to_chan(a.kind))[k] = std::move(v);
                 break;
             }
@@ -361,6 +362,7 @@ private:
         if (!a.l2) throw BehavioralError(where + ": a merge carries no L2 address");
         ++sum_.merges;
         if (a.merge == Merge::Overwrite) {
+            stages(v, a, where);                // a one-block reduction's final merge is its first
             stage_l2(*a.l2, a, k, std::move(v), where);
             return;
         }
@@ -372,6 +374,7 @@ private:
             throw BehavioralError(where + ": merge accumulate into " + a.l2->to_string() + ", which holds " +
                                   it->second.tag.to_string() + ", not " + k);
         merge_tile(work_.operand(a.tile.operand).type, it->second.values, v);
+        stages(it->second.values, a, where);    // the final merge's epilogue (#427), on the merged value
     }
 
     const L3Slot& slot_of(const std::string& k) const { return l3_.at(key_of(l3_index_.at(k))); }

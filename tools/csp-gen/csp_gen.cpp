@@ -52,12 +52,13 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 (default none: from zero)
   --dtype <fp32|int8>           matmul: A's and B's number system; C (and D or b) is in its
                                 registered accumulator's: int8 -> int32 (default fp32)
-  --dataflow <os|ws|is>         matmul: the stationary operand (default os). os holds C in
+  --dataflow <os|ws|is>         matmul, linear: the stationary operand (default os). os holds C in
                                 the fabric; ws holds B's tile, staged in L2 across the i loop;
                                 is holds A's, across the j loop. ws and is keep C's partials
                                 in L2 slots, merged by the Combiner (they declare
                                 l2 = tiles per panel + 1, and take no --orient, --stage-a or
-                                --init)
+                                --init). A linear epilogue under ws or is runs @ combiner on
+                                each tile's final merge, @ bm.egress (ws), or unfused
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
   --place <fabric|combiner|bm.egress|unfused>
                                 linear: where the epilogue runs      (default fabric)
@@ -132,7 +133,8 @@ int main(int argc, char** argv) {
         o.dtype = a["--dtype"];
     }
     if (a.count("--dataflow")) {
-        if (o.algo != "matmul") return usage("--dataflow is matmul's; --algo is '" + o.algo + "'");
+        if (o.algo != "matmul" && o.algo != "linear")
+            return usage("--dataflow is matmul's and linear's; --algo is '" + o.algo + "'");
         o.dataflow = a["--dataflow"];
     }
     if (a.count("--act") && !sw::kpu::program::parse_activation(a["--act"], o.act))

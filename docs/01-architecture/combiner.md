@@ -80,9 +80,16 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
   input-stationary schedules (#430). The stationary tile is staged in L2 across the loop that
   reuses it, and C's panel of partials is the L2 accumulator.
 
+- **The epilogue on the final merge** (#427). The program states which merge is the final one:
+  a call into an L2 accumulator that carries `via ... @ combiner` stages is the tile's last.
+  The Combiner applies those stages to the merged value as it lands in the slot, and a later
+  call into the tile is refused. `kpu-csp-gen --algo linear --dataflow ws|is --place combiner`
+  writes the k loop's last block out on its own, so its calls carry the bias and activation.
+  Under ws, `--place bm.egress` puts the epilogue on the panel's store instead. A fabric stage
+  is refused, because it would act on one partial.
+
 Not built yet:
-- an epilogue on the final merge (bias, activation, scaling, block-format conversion). Today a
-  store from an L2 accumulator takes `@ bm.egress` stages only;
+- scaling (requantization) and block-format conversion (MXINT8, then MXFP8) on the Combiner;
 - an init (`acc ... in l2 init ...`);
 - a weight-stationary timing of the array. L-T1 and L-CA time each merge's gemm as a
   one-call output-stationary chain.

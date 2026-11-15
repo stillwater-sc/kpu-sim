@@ -758,8 +758,25 @@ private:
             if (s.fn != "gemm")
                 throw CompileError(s.line, "call " + s.fn + " on the L2 accumulator " + text(y) + ": an L2 accumulator "
                                            "takes gemm '+->', whose result the Combiner merges into its slot");
-            if (!s.context.empty())
-                throw CompileError(s.line, "a call into an L2 accumulator drains a partial; its epilogue is the store's");
+            // `via`: the final merge's epilogue (#427), on the Combiner, after the merge. The walker
+            // checks that no call into the tile follows it.
+            for (const ResolvedStage& r : resolve_result_context(s.context, target_, [](int line, const std::string& m) {
+                     throw CompileError(line, m);
+                 }))
+                if (r.place != Place::Combiner)
+                    throw CompileError(s.line, "call gemm +-> " + text(y) + " via ... @ " + to_string(r.place) +
+                                               ": the epilogue on an L2 accumulator's final merge runs on the Combiner, "
+                                               "after the merge" +
+                                               std::string(r.place == Place::BmEgress ? "; a bm.egress stage goes on the store"
+                                                                                      : "; a fabric stage would act on one partial"));
+            context(s, y);
+            for (const Family& a : args)
+                if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, a); }))
+                    throw CompileError(s.line, "call " + s.fn + " reads " + text(a) + ", which is not provably resident; "
+                                               "make it resident first");
+            if (definite || depth <= acc->depth) acc->fed = true;
+            calls_ += multiplier_;
+            return;
         }
         if (acc != accs_.end() && !acc->closed) {
             if (s.fn != "gemm")
@@ -812,8 +829,7 @@ private:
                 if (r.place != Place::BmEgress)
                     throw CompileError(s.line, "store " + text(y) + " via ... @ " + to_string(r.place) + ": " + text(y) +
                                                " is an L2 accumulator, whose partials the Combiner merged as they "
-                                               "drained; an epilogue on the final merge is not built yet (#427), so "
-                                               "place it @ bm.egress");
+                                               "drained; put the epilogue on its final merge, or @ bm.egress here");
             context(s, y);
             hold(1, s.line, "store " + text(y) + "'s writeback");      // the writeback's moment in L3, a tile at a time
             live_ -= 1;

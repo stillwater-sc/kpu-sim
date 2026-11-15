@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **L-CA no longer livelocks on a vector tile made resident for one result's context** (#434).
+  A Release waited for every stage read of the tile that had been scheduled, including those of
+  its next residency. The driver's window hands those over early, and they wait for this Release
+  to load the tile again. A Release now waits only for the reads scheduled before it
+  (`TileDescriptor::after_stage_reads`), as a Writeback waits for its own drains.
+
 ### Changed
 
 - **The Vector Engine is the Combiner** (#429, the rename; the merge of partials follows). It is
@@ -37,6 +45,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     4400 to 5328, while the staged one stays at 4400, so staging now pays at L-CA as at L-T1.
 
 ### Added
+
+- **The epilogue on an L2 accumulator's final merge** (#427, part 1).
+  - The language: a call into an L2 accumulator that carries `via` stages, all `@ combiner`,
+    is the tile's final merge. Its Drain carries the stages, and they run on the merged value.
+    A later call into the tile is refused, as are a fabric stage (it would act on one partial)
+    and a bm.egress stage (that goes on the store).
+  - The levels: L-B and L-CA apply the stages after the merge. The trace records them after
+    `MATMUL_MERGE`. L-CA times them on the Combiner with the merge's add.
+  - `kpu-csp-gen --algo linear --dataflow ws|is`:
+    - `--place combiner` writes the k loop's last block out on its own, and its calls carry
+      `add(b[j])` and the activation;
+    - under ws, `--place bm.egress` puts them on the panel's store;
+    - `--place unfused` keeps the second pass;
+    - `fabric` is refused, and so is `bm.egress` under is.
+  - The fused-operation matrix test covers each activation (relu, gelu, silu, atan) under
+    output-stationary (fabric, combiner, bm.egress), weight-stationary (combiner, bm.egress,
+    unfused) and input-stationary (combiner, unfused). The fabric runs only add and relu, so its
+    cells are relu only. Every placement matches the unfused output-stationary oracle per tile
+    at L-B, and L-T1 and L-CA match L-B bit for bit.
 
 - **Weight- and input-stationary matmul programs, and the Combiner's merge of partials** (#430,
   #429's merge). `kpu-csp-gen --algo matmul --dataflow os|ws|is` (default `os`, unchanged).

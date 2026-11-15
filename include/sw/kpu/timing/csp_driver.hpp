@@ -415,7 +415,9 @@ private:
                                                         " is in L2 twice at once");
                         d.l2_slot_turn = l2_turns_[a.l2->slot]++;
                     }
-                    exec_.schedule_merge(d, overwrite, inputs_.operand(a.tile.operand).type);
+                    std::vector<VectorStage> epilogue;    // the final merge's (#427), after the merge
+                    for (const auto& st : a.context) epilogue.push_back(stage(st));
+                    exec_.schedule_merge(d, overwrite, inputs_.operand(a.tile.operand).type, std::move(epilogue));
                     break;
                 }
                 if (a.context.empty()) { exec_.schedule_drain(d); break; }

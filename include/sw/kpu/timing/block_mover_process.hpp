@@ -181,8 +181,9 @@ public:
     }
 
     /// A Release also waits while this says the entry still has a reader the BlockMover does
-    /// not see -- a tile context's stage that reads it (add's bias) on a later drain or writeback.
-    void set_release_guard(std::function<bool(const TileID&)> guard) { release_guard_ = std::move(guard); }
+    /// not see -- a tile context's stage scheduled before the Release that reads it (add's bias)
+    /// on a drain or writeback still in flight.
+    void set_release_guard(std::function<bool(const TileDescriptor&)> guard) { release_guard_ = std::move(guard); }
 
     /// A writeback also waits while this says its own copy (its Drain's) has not reached L2.
     void set_writeback_guard(std::function<bool(const TileDescriptor&)> guard) { writeback_guard_ = std::move(guard); }
@@ -364,7 +365,7 @@ private:
     std::unordered_map<TileID, uint64_t, TileIDHash> moves_issued_, moves_done_, ejects_issued_, ejects_done_;
     std::unordered_map<TileID, uint64_t, TileIDHash> writebacks_issued_, writebacks_done_;
     std::unordered_map<TileID, uint32_t, TileIDHash> releases_issued_, releases_done_;
-    std::function<bool(const TileID&)> release_guard_;
+    std::function<bool(const TileDescriptor&)> release_guard_;
     std::function<bool(const TileDescriptor&)> writeback_guard_;
     Cycle ve_busy_cycles_ = 0;
     Cycle ve_bound_cycles_ = 0;
@@ -577,7 +578,7 @@ private:
             const auto md = moves_done_.find(id);
             const auto rd = releases_done_.find(id);
             const auto ed = ejects_done_.find(id);
-            const bool ordered = !(release_guard_ && release_guard_(id)) &&
+            const bool ordered = !(release_guard_ && release_guard_(it->tile)) &&
                                  (md == moves_done_.end() ? 0 : md->second) >= it->moves_before &&
                                  (rd == releases_done_.end() ? 0u : rd->second) == it->tile.l3_epoch &&
                                  (ed == ejects_done_.end() ? 0 : ed->second) >= it->ejects_before;
