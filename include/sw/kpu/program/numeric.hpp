@@ -68,9 +68,11 @@ std::vector<std::pair<std::string, std::string>> mac_pairs();
 std::string mac_names();                             // "fp32 -> fp32, int8 -> int32"
 
 // The OCP Microscaling (MX) block formats (#427; docs/01-architecture/combiner.md): blocks of 32
-// elements sharing one 8-bit power-of-two scale (e8m0). MXFP8 (e4m3 elements, saturating) is
-// Universal's mxfp8. MXINT8 (int8 codes, ties to even) is converted per OCP MX v1.0 in
-// numeric.cpp until Universal's mxint8 is fixed (stillwater-sc/universal#2083). The Combiner converts a result
+// elements sharing one 8-bit power-of-two scale (e8m0). Both are converted per OCP MX v1.0 in
+// numeric.cpp: MXFP8's elements are Universal's e4m3 (saturating), MXINT8's int8 codes with an
+// implicit 2^-6, ties to even. The block scaling is kpu-sim's until Universal's mxblock is fixed
+// (stillwater-sc/universal#2083: v5.17.0's mxint8 saturates each block's largest element, and its
+// quantize overflows below a 2^-127 scale). The Combiner converts a result
 // into one as it writes it to L2: block_convert runs the conversion on fp32 elements -- each run
 // of 32 consecutive elements (row-major in a tile; the last run may be shorter) is quantized to
 // the format and read back -- so the elements hold the values the format represents.

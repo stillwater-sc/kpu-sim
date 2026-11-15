@@ -114,6 +114,25 @@ TEST_CASE("Block formats: the registry converts as Universal's mxint8 and mxfp8 
     numeric::block_convert("mxint8", two.data(), two.size());
     CHECK(two[1] == 1.0f);
     CHECK(two[32] == 0.75f);
+    // #436's review, at the edges of the scale.
+    {   // A block maximum just below 128: floor(log2) is 6 (ilogb, not a rounded log2, which gives
+        // 7), so the scale is 2^6 and the largest element saturates at code 127 -- 127, not 128.
+        std::vector<float> v{0x1.fffffep+6f};
+        numeric::block_convert("mxint8", v.data(), v.size());
+        CHECK(v[0] == 127.0f);
+    }
+    {   // e8m0's smallest scale, 2^-127: MXINT8's implicit 2^-6 makes its spacing 2^-133.
+        std::vector<float> v{0x1p-127f, 0x1p-133f};
+        numeric::block_convert("mxint8", v.data(), v.size());
+        CHECK(v == std::vector<float>{0x1p-127f, 0x1p-133f});
+    }
+    {   // MXFP8 there too: no reciprocal of a scale below 2^-127, so no inf and no NaN.
+        std::vector<float> v{0x1p-126f, 0.0f, 0.0f}, w{0x1p-120f, 0x1p-126f};
+        numeric::block_convert("mxfp8", v.data(), v.size());
+        numeric::block_convert("mxfp8", w.data(), w.size());
+        CHECK(v == std::vector<float>{0x1p-126f, 0.0f, 0.0f});
+        CHECK(w == std::vector<float>{0x1p-120f, 0x1p-126f});
+    }
     // An element a byte, a scale a block.
     CHECK(numeric::block_bytes("mxint8", 256) == 256 + 8);
     CHECK(numeric::block_bytes("mxfp8", 70) == 70 + 3);
@@ -144,6 +163,19 @@ TEST_CASE("Block formats: the language places the conversion last, off the fabri
     CHECK_THAT(refused("mxint8 @ combiner, relu @ combiner"),
                ContainsSubstring("relu @ combiner follows the block-format conversion mxint8"));
     CHECK_THAT(refused("mxint8 @ fabric"), ContainsSubstring("mxint8 @ fabric: a block-format conversion runs where"));
+    // An L2 accumulator's final merge that converts its tile ends its operations: its store takes
+    // no stage after it (#436's review).
+    {
+        const std::string p = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n  tensor A[16,16] tile 16x16 in;\n"
+                              "  tensor B[16,16] tile 16x16 in;\n  tensor C[16,16] tile 16x16 out;\n"
+                              "  acc C[0, 0] in l2 {\n    resident A[0, 0], B[0, 0];\n"
+                              "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0] via mxint8 @ combiner;\n"
+                              "    release A[0, 0], B[0, 0];\n  }\n  store C[0, 0] via relu @ bm.egress;\n}\n";
+        CHECK_THROWS_WITH(lang::validate(p), ContainsSubstring("csp line 11: store C[0, 0] via ...: its final merge "
+                                                               "converted it into a block format"));
+        CHECK_THROWS_WITH(lang::compile(p), ContainsSubstring("csp line 11: store C[0,0] via ...: C[0,0]'s final merge "
+                                                              "(csp line 8) converted it into a block format"));
+    }
     // A target whose Combiner lacks the format refuses it by name.
     auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
     d.combiner = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu"}};

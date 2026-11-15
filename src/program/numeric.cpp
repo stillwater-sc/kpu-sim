@@ -179,22 +179,15 @@ std::string mac_names() {
 // ---- the OCP Microscaling block formats (#427) ----
 namespace {
 
-template <class Block>
+// The OCP MX v1.0 conversion of one format, block by block. A block's shared scale is the e8m0
+// power of two X = 2^(floor(log2 amax) - emax), clamped to e8m0's [2^-127, 2^127], where emax is
+// the element type's largest exponent; each element is x / X in the element type, read back times
+// X. floor(log2) is ilogb, exact for every finite value (a rounded log2 is not near powers of
+// two). The scaling is ldexp, which never forms 1 / X: Universal v5.17.0's mxblock::quantize does,
+// and overflows to inf below X = 2^-127 (stillwater-sc/universal#2083). A non-finite amax makes
+// the scale NaN, and the block reads back as NaN, as Universal's blocks do.
+template <class Element>
 void convert_blocks(float* v, std::size_t n) {
-    Block b;
-    for (std::size_t at = 0; at < n; at += Block::size()) {
-        const std::size_t len = std::min(Block::size(), n - at);
-        b.quantize(v + at, len);
-        b.dequantize(v + at, len);
-    }
-}
-
-// MXINT8 per OCP MX v1.0, until Universal's mxint8 is fixed (stillwater-sc/universal#2083: v5.17.0
-// saturates each block's largest element and rounds ties away from zero). The block's scale is
-// 2^(floor(log2 amax) - 6), an e8m0 power of two; each element is an int8 code, x / scale rounded
-// to nearest, ties to even, clamped to [-128, 127]. A non-finite amax makes the scale NaN, and
-// the block reads back as NaN, as Universal's blocks do.
-void convert_mxint8(float* v, std::size_t n) {
     for (std::size_t at = 0; at < n; at += kBlockSize) {
         const std::size_t len = std::min(kBlockSize, n - at);
         float amax = 0.0f;
@@ -207,14 +200,29 @@ void convert_mxint8(float* v, std::size_t n) {
             for (std::size_t i = 0; i < len; ++i) v[at + i] = 0.0f;
             continue;
         }
-        const int shared = std::clamp(static_cast<int>(std::floor(std::log2(amax))), -127, 127);
-        const int scale = std::clamp(shared - 6, -127, 127);   // e8m0: biased 0..254
-        for (std::size_t i = 0; i < len; ++i) {
-            const float code = std::clamp(std::nearbyint(std::ldexp(v[at + i], -scale)), -128.0f, 127.0f);
-            v[at + i] = std::ldexp(code, scale);
-        }
+        const int x = std::clamp(std::ilogb(amax) - Element::emax, -127, 127);   // the e8m0 scale
+        for (std::size_t i = 0; i < len; ++i) v[at + i] = std::ldexp(Element::round(std::ldexp(v[at + i], -x)), x);
     }
 }
+
+// MXFP8's element: Universal's e4m3, saturating (emax 8). Its conversion from float rounds to
+// nearest even and clamps to +-448.
+struct Fp8Element {
+    static constexpr int emax = 8;
+    static float round(float s) { return static_cast<float>(su::e4m3_saturating(s)); }
+};
+
+// MXINT8's element, per OCP MX v1.0 (until Universal's mxint8 is fixed, universal#2083: v5.17.0
+// saturates each block's largest element and rounds ties away from zero): an int8 code with an
+// implicit scale of 2^-6, so its largest exponent is 0 and its values are code / 64 in
+// [-2, 127/64]. The code is rounded to nearest, ties to even (the default rounding mode), and
+// clamped to [-128, 127].
+struct Int8Element {
+    static constexpr int emax = 0;
+    static float round(float s) {
+        return std::ldexp(std::clamp(std::nearbyint(std::ldexp(s, 6)), -128.0f, 127.0f), -6);
+    }
+};
 
 struct BlockFormat {
     const char* name;
@@ -224,8 +232,8 @@ struct BlockFormat {
 
 const std::vector<BlockFormat>& block_formats() {
     static const std::vector<BlockFormat> f = {
-        {"mxint8", &convert_mxint8, 1},                  // Universal's, once universal#2083 is fixed
-        {"mxfp8", &convert_blocks<su::mxfp8>, 1},
+        {"mxint8", &convert_blocks<Int8Element>, 1},     // Universal's mxint8, once universal#2083 is fixed
+        {"mxfp8", &convert_blocks<Fp8Element>, 1},
     };
     return f;
 }

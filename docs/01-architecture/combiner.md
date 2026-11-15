@@ -92,10 +92,12 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
   `@ bm.egress`) convert a result into an OCP Microscaling format as the last of its fused
   operations, after bias and activation (esg#68's order). Each run of 32 row-major elements
   shares an e8m0 scale.
-  - MXFP8 is Universal's `mxfp8` (e4m3, saturating), through the numeric registry.
-  - MXINT8 is converted per OCP MX v1.0 in `src/program/numeric.cpp`, until Universal's
-    `mxint8` is fixed (stillwater-sc/universal#2083: v5.17.0 saturates each block's largest
-    element).
+  - Both are converted per OCP MX v1.0 in `src/program/numeric.cpp`. MXFP8's elements are
+    Universal's e4m3 (saturating), and MXINT8's are int8 codes with an implicit 2^-6, ties to
+    even. The block scaling (an `ilogb` exponent and an e8m0-clamped scale, applied with
+    `ldexp`) is kpu-sim's until Universal's `mxblock` is fixed (stillwater-sc/universal#2083:
+    v5.17.0's `mxint8` saturates each block's largest element, and its `quantize` overflows
+    below a 2^-127 scale).
   - The trace records `BLOCK_CONVERT` (L0 opset 1.6), and every level computes the same bits.
   - `kpu-csp-gen --algo linear --format mxint8|mxfp8` appends it to the epilogue.
   - The result stays in fp32 words holding the values the format represents. Storing the

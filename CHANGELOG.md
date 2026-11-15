@@ -59,8 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     run on the Combiner or at bm.egress, never in the fabric. A target whose unit lacks the
     format refuses it by name.
   - The numeric registry: `block_convert`, `is_block_format`, `block_bytes`. Each run of 32
-    row-major elements shares an e8m0 scale. MXFP8 is Universal's `mxfp8`. MXINT8 is converted
-    per OCP MX v1.0 (ties to even) until stillwater-sc/universal#2083 is fixed.
+    row-major elements shares an e8m0 scale. Both formats are converted per OCP MX v1.0, with
+    MXFP8's elements from Universal's e4m3 (saturating) and MXINT8's as int8 codes (ties to
+    even). The block scaling is kpu-sim's until stillwater-sc/universal#2083 is fixed.
   - L0 opset 1.6: `BLOCK_CONVERT format=`. L-B, the replay, L-T1 and L-CA compute the same bits
     under OS, WS and IS.
   - `kpu-csp-gen --algo linear --format none|mxint8|mxfp8`, with `--place combiner|bm.egress`.
