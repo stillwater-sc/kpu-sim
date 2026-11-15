@@ -142,6 +142,7 @@ public:
         std::size_t lane = 0;
         Cycle start = 0, finish = 0;
         Cycle slot_wait = 0;            // a Load whose slot decided its start: what the wait cost
+        Cycle l2_wait = 0;              // a stage Move or a first merge whose L2 slot decided its start: the same
         std::uint32_t chain = kNoChain; // a Call in a stream chain: its index in chains()
         std::uint32_t chain_pos = 0;    //   and its place in it, from 1
     };
@@ -295,6 +296,7 @@ public:
             case Action::Kind::Move: {
                 Residency& r = residency_[k];
                 Cycle ready = r.current;
+                Cycle l2_wait = 0;
                 if (a.l2) {                                 // a stage: after ITS L2 slot's L2Release
                     const Cycle credit = get_l2(*a.l2);
                     if (credit > ready) {
@@ -304,11 +306,13 @@ public:
                         if (credit > other) {
                             ++st_.l2_bound;
                             st_.l2_wait_cycles += credit - other;
+                            l2_wait = credit - other;
                         }
                         ready = credit;
                     }
                 }
                 const Cycle f = run(Proc::Bm, ready, transfer(Proc::Bm, bytes), a);
+                records_.back().l2_wait = l2_wait;
                 r.readers = std::max(r.readers, f);
                 moved_[k] = f;
                 if (a.l2) {
@@ -356,6 +360,7 @@ public:
             }
             case Action::Kind::Drain: {
                 Cycle ready = get(acc_, k);
+                Cycle l2_wait = 0;
                 auto oc = open_chain_.find(k);
                 if (oc != open_chain_.end()) {                  // its last result is out of the array
                     if (!chains_[oc->second].closed) close_chain(oc->second);
@@ -372,6 +377,7 @@ public:
                         if (credit > other) {
                             ++st_.l2_bound;
                             st_.l2_wait_cycles += credit - other;
+                            l2_wait = credit - other;
                         }
                         ready = credit;
                     }
@@ -390,6 +396,7 @@ public:
                 }
                 drained_[k] = fabric() ? run_drain(ready, transfer(Proc::Str, bytes), a)
                                        : run(Proc::Str, ready, transfer(Proc::Str, bytes), a);
+                records_.back().l2_wait = l2_wait;
                 if (oc != open_chain_.end()) {
                     chains_[oc->second].drain_action = records_.back().action;
                     open_chain_.erase(oc);

@@ -29,6 +29,7 @@
 #include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -443,6 +444,22 @@ TEST_CASE("Dataflow: L-T1 computes L-B's values, and holds each partial's L2 slo
             std::sort(iv.begin(), iv.end());
             for (std::size_t i = 1; i < iv.size(); ++i) CHECK(iv[i].first >= iv[i - 1].second);
         }
+        // The L2 waits counted (#432's review): each is a record's, they sum to the total, and a
+        // record that counts one starts exactly when its slot's credit returned -- the credit was
+        // its binding constraint, not the drain lane or the issue order.
+        std::uint64_t waits = 0;
+        std::size_t bound = 0;
+        for (const auto& rec : lt.records) {
+            if (rec.l2_wait == 0) continue;
+            waits += rec.l2_wait;
+            ++bound;
+            CAPTURE(rec.tile.to_string(), rec.start, rec.l2_wait);
+            CHECK(std::any_of(lt.l2_slots.begin(), lt.l2_slots.end(), [&](const auto& sl) {
+                return sl.tile.to_string() == rec.tile.to_string() && sl.t0 == rec.start;
+            }));
+        }
+        CHECK(waits == lt.l2_wait_cycles);
+        CHECK(bound == lt.l2_bound);
         CHECK(lt.merges == 64);
         CHECK(lt.merge_accumulates == 48);
         // An accumulate reads its partial and writes it back; every merge writes a 16x16 fp32 tile.

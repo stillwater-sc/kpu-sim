@@ -189,7 +189,7 @@ struct CspLevelOutcome {
     // the read-modify-writes among them (L-T1, L-CA), and the L2 bytes they read and write (L-T1).
     std::size_t merges = 0, merge_accumulates = 0;
     std::uint64_t merge_l2_read_bytes = 0, merge_l2_write_bytes = 0;
-    std::size_t l2_bound = 0;               // L-T1: stage Moves whose start their L2 slot decided
+    std::size_t l2_bound = 0;               // L-T1: stage Moves and first merges whose start their L2 slot decided
     std::uint64_t l2_wait_cycles = 0;       //        and what those waits cost
     // L-T1 with a declared fabric: each accumulator's gemm chain as a systolic stream, and the
     // calls timed as one leg instead, by why (docs/plans/l2-reuse-and-fabric-pipeline-view.md).
