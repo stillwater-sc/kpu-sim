@@ -287,6 +287,7 @@ private:
     std::vector<program::TileCoord> retained_;       // tiles the program retained, in L3 at the end
     std::map<std::string, TileID> inits_;            // accumulator -> its init's fed tile, until its first Call
     std::set<TileID> stored_;                        // C tiles a Store has written to DRAM
+    std::map<TileID, std::uint64_t> loads_pulled_;   // each tile's Loads and Inherits, in program order
 
     void check_machine(std::size_t l3, std::size_t l2) {
         // The program's L2 slots are the L2 CAM's first `l2`; unstaged copies need the rest.
@@ -367,6 +368,7 @@ private:
             open_.insert(d.tile_id);
         }
         if (a.kind == Action::Kind::Release) open_.erase(d.tile_id);
+        if (a.kind == Action::Kind::Load || a.kind == Action::Kind::Inherit) ++loads_pulled_[d.tile_id];
         switch (a.kind) {
             case Action::Kind::Load:
                 // An inout C: DRAM holds this run's input until a Store writes the tile (the
@@ -522,7 +524,15 @@ private:
     VectorStage stage(const program::csp::Stage& st) const {
         VectorStage v;
         switch (st.op) {
-            case program::csp::VeOp::Add:  v.op = VectorStage::Op::Add; v.arg = id(st.arg); break;
+            case program::csp::VeOp::Add: {
+                v.op = VectorStage::Op::Add;
+                v.arg = id(st.arg);
+                // The move waits for the vector's Loads before it in program order: the executor
+                // may not have them yet (Loads are handed over in order, as their credits allow).
+                auto n = loads_pulled_.find(v.arg);
+                v.arg_loads = n == loads_pulled_.end() ? 0 : n->second;
+                break;
+            }
             case program::csp::VeOp::Relu: v.op = VectorStage::Op::Relu; break;
             case program::csp::VeOp::Gelu: v.op = VectorStage::Op::Gelu; break;
             case program::csp::VeOp::Silu: v.op = VectorStage::Op::Silu; break;

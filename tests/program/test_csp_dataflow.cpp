@@ -680,9 +680,23 @@ TEST_CASE("Final merge: what the language and the generator refuse", "[program][
     const std::string fin = "    call gemm(A[0, 1], B[1, 0]) +-> C[0, 0] via add(b[0]) @ combiner, relu @ combiner;\n";
     REQUIRE(error_of(head + open + "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n" + fin + close, false) == "accepted");
     REQUIRE(error_of(head + open + "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n" + fin + close, true) == "accepted");
-    // A call after the final merge (the walker's check: the order is an execution's).
-    CHECK_THAT(error_of(head + open + fin + "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n" + close, false),
-               ContainsSubstring("csp line 10: call gemm into C[0,0] after its final merge (csp line 9)"));
+    // A call after the final merge, written after it or in a later iteration of its loop.
+    both(fin + "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n",
+         "csp line 10: call gemm into C[0,0] after its final merge (csp line 9)",
+         "csp line 10: call gemm into C[0, 0], which can be after its final merge (C[0, 0], csp line 9)");
+    both("    for k in 0..2 { call gemm(A[0, k], B[k, 0]) +-> C[0, 0] via relu @ combiner; }\n",
+         "csp line 9: call gemm into C[0,0] after its final merge (csp line 9)",
+         "csp line 9: call gemm into C[0, 0] via ...: the final merge runs in every iteration of the loop over k");
+    // After a loop of final merges over j, every tile it ranged over is final.
+    const std::string row = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+                            "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                            "  tensor C[32,32] tile 16x16 out;\n"
+                            "  acc C[0, :] in l2 {\n    resident A[0, 0], B[0, :];\n"
+                            "    for j in 0..2 { call gemm(A[0, 0], B[0, j]) +-> C[0, j] via relu @ combiner; }\n"
+                            "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                            "    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n";
+    CHECK_THAT(error_of(row, true), ContainsSubstring("csp line 9: call gemm into C[0, 1], which can be after its final merge"));
+    CHECK_THAT(error_of(row, false), ContainsSubstring("csp line 9: call gemm into C[0,1] after its final merge"));
     // An epilogue stage off the Combiner.
     both("    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0] via relu @ fabric;\n",
          "csp line 9: call gemm +-> C[0,0] via ... @ fabric: the epilogue on an L2 accumulator's final merge runs on the "
@@ -732,4 +746,37 @@ TEST_CASE("L-CA: a vector tile resident for one result's context, then released 
         REQUIRE_FALSE(o.skipped);
         CHECK(same_bits(o.values.operand("C").values, r.reference->operand("C").values));
     }
+}
+
+TEST_CASE("L-CA: a tile context's add waits for its vector's Load to land", "[program][csp][run]") {
+    // #435's review: nothing ordered a drain after the Load of the vector its stage reads. With a
+    // slow memory, C's gemm is done long before b[j] -- made resident just before the store --
+    // has landed in L3, and the drain read the previous residency's b, or none. The drain now
+    // waits for the Loads of b scheduled before it.
+    // A's tiles 2..5 are filler the gemm does not read: their Loads queue ahead of b[j]'s on the
+    // DMA, so b[j] lands well after C's gemm is done.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 16) {\n"
+                            "  tensor A[32,96] tile 16x16 in;\n  tensor B[96,32] tile 16x16 in;\n"
+                            "  vector b[32] tile 16 in;\n  tensor C[32,32] tile 16x16 out;\n"
+                            "  for i in 0..2 {\n    for j in 0..2 {\n"
+                            "      resident A[i, 0], A[i, 1], B[0, j], B[1, j];\n"
+                            "      acc C[i, j] in fabric { for k in 0..2 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; } }\n"
+                            "      resident A[i, 2], A[i, 3], A[i, 4], A[i, 5];\n"
+                            "      resident b[j];\n      store C[i, j] via add(b[j]) @ combiner;\n"
+                            "      release b[j];\n      release A[i, 2], A[i, 3], A[i, 4], A[i, 5];\n"
+                            "      release A[i, 0], A[i, 1], B[0, j], B[1, j];\n    }\n  }\n}\n";
+    const auto d = s1_with_combiner();
+    const lang::Program ast = lang::parse(src);
+    const TileProgram inputs = driver::csp_inputs(ast);
+    const auto ref = driver::csp_reference(ast, inputs, 1'000'000);
+    REQUIRE(ref.values);
+    auto cfg = sw::kpu::timing::csp_config_from(d);
+    REQUIRE(cfg);
+    cfg->config.mc_bandwidth_gbps = 0.25;                // a slow memory: every Load takes long
+    cfg->config.mc_startup_latency = 400;
+    sw::kpu::timing::ConcurrentTimingExecutor exec(cfg->config);
+    lang::ActionStream s(ast, lang::target_from(d));
+    const auto r = sw::kpu::timing::CspDriver(exec, s, inputs, 256).run();
+    REQUIRE(r.completed);
+    CHECK(same_bits(r.values.operand("C").values, ref.values->operand("C").values));
 }

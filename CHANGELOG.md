@@ -13,7 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A Release waited for every stage read of the tile that had been scheduled, including those of
   its next residency. The driver's window hands those over early, and they wait for this Release
   to load the tile again. A Release now waits only for the reads scheduled before it
-  (`TileDescriptor::after_stage_reads`), as a Writeback waits for its own drains.
+  (`TileDescriptor::after_stage_reads`), as a Writeback waits for its own drains. The reads are
+  numbered, and a Release counts the contiguous prefix of applied ones. The drains of different
+  tiles complete in any order, so a raw count could include a later residency's read.
+- **L-CA: a tile context's add waits for its vector's Load.** Nothing ordered a drain or a
+  writeback after the Load of the vector its `add` reads. With a slow memory the add read the
+  previous residency's vector, or none ("the vector is not in L3"). Each move now waits for the
+  vector's Loads that come before it in program order. The CSP driver supplies the count
+  (`VectorStage::arg_loads`), because it hands Loads to the executor only as their credits allow.
 
 ### Changed
 

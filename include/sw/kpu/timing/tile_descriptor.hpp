@@ -110,6 +110,13 @@ struct VectorStage {
     enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan };
     Op op = Op::Relu;
     TileID arg{};
+    // Add: its read of `arg`, numbered in the order the executor scheduled the reads of `arg`.
+    // A Release of `arg` waits for the reads numbered below its own count (after_stage_reads).
+    uint64_t read_seq = 0;
+    // Add: the Loads (and Inherits) of `arg` the program issued before this stage's move, which
+    // the move waits for (a CSP driver sets it, in program order). 0: the executor's own count
+    // of the Loads scheduled with it.
+    uint64_t arg_loads = 0;
 };
 
 // ============================================================================

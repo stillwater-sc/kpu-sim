@@ -148,7 +148,10 @@ private:
     struct Family { std::string operand; std::vector<Dimension> dims; int line = 0; };
     struct Entry { Family family; bool dirty = false; bool inherited = false; };
     struct Box { std::string operand; std::vector<std::pair<bool, Interval>> dims; };   // (all, range)
-    struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false; };
+    // finals: an L2 accumulator's tiles whose final merge (a call with `via`) has run. A family
+    // over a loop variable is widened to the variable's whole dimension when its loop ends.
+    struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false;
+                 std::vector<Family> finals = {}; };
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
@@ -648,6 +651,8 @@ private:
         const std::vector<Entry> before = state_;
         const std::vector<Acc> accs_found = accs_;
         const std::size_t accs_before = accs_.size();
+        std::vector<std::size_t> finals_before;
+        for (const Acc& a : accs_) finals_before.push_back(a.finals.size());
         for (const Stmt& b : s.body) stmt(b, depth + 1, definite && trips.lo >= 1);
 
         // Residency-balanced: an iteration leaves exactly the families it found.
@@ -678,6 +683,29 @@ private:
         if (accs_.size() > accs_before)
             throw CompileError(s.line, "the loop over " + s.var + " leaves the accumulator " + text(accs_.back().tile) +
                                        " unstored: an iteration must store what it accumulates");
+        // A final merge in the body runs once per iteration: its tile must change with the loop's
+        // variable, or a second iteration merges into a tile already finalized.
+        for (std::size_t n = 0; n < finals_before.size() && n < accs_.size(); ++n)
+            for (std::size_t f = finals_before[n]; f < accs_[n].finals.size(); ++f) {
+                const Family& fin = accs_[n].finals[f];
+                const bool varies = std::any_of(fin.dims.begin(), fin.dims.end(), [&](const Dimension& d) {
+                    auto c = d.a.coeff.find(s.var);
+                    return !d.all && c != d.a.coeff.end() && c->second != 0;
+                });
+                if (!varies && trips.hi > 1)
+                    throw CompileError(fin.line, "call gemm into " + text(fin) + " via ...: the final merge runs in every "
+                                                 "iteration of the loop over " + s.var + ", so its second iteration is "
+                                                 "after the tile's final merge");
+            }
+        // A final merge inside the loop finalized the tiles its variable ranges over: past the loop
+        // the family stands for all of them (conservative over a loop that does not cover the
+        // dimension).
+        for (Acc& a : accs_)
+            for (Family& f : a.finals)
+                for (Dimension& d : f.dims) {
+                    auto c = d.a.coeff.find(s.var);
+                    if (!d.all && c != d.a.coeff.end() && c->second != 0) d.all = true;
+                }
         multiplier_ = saved_mult;
         if (!rectangular) --nonrect_;
         loop_order_.pop_back();
@@ -755,6 +783,11 @@ private:
             return a.l2 ? covers(a.tile, y) : same(a.tile, y);
         });
         if (acc != accs_.end() && acc->l2 && !acc->closed) {
+            for (const Family& f : acc->finals)
+                if (may_overlap(f, y))
+                    throw CompileError(s.line, "call gemm into " + text(y) + ", which can be after its final merge (" +
+                                               text(f) + ", csp line " + std::to_string(f.line) + "): the call that "
+                                               "carries the epilogue is the tile's last");
             if (s.fn != "gemm")
                 throw CompileError(s.line, "call " + s.fn + " on the L2 accumulator " + text(y) + ": an L2 accumulator "
                                            "takes gemm '+->', whose result the Combiner merges into its slot");
@@ -770,6 +803,11 @@ private:
                                                std::string(r.place == Place::BmEgress ? "; a bm.egress stage goes on the store"
                                                                                       : "; a fabric stage would act on one partial"));
             context(s, y);
+            if (!s.context.empty()) {
+                Family f = y;
+                f.line = s.line;
+                acc->finals.push_back(f);
+            }
             for (const Family& a : args)
                 if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, a); }))
                     throw CompileError(s.line, "call " + s.fn + " reads " + text(a) + ", which is not provably resident; "

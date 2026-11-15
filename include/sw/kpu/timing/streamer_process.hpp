@@ -210,6 +210,8 @@ public:
 
     /// A feed also waits while this says its own copy has not arrived (a program's ordering).
     void set_feed_guard(std::function<bool(const TileDescriptor&)> guard) { feed_guard_ = std::move(guard); }
+    /// A drain waits while this says so: its tile context reads a vector not yet in L3.
+    void set_drain_guard(std::function<bool(const TileDescriptor&)> guard) { drain_guard_ = std::move(guard); }
 
     /// The Combiner, timed on this streamer's drain (`@ combiner`): its busy cycles, and the cycles it slowed drains by.
     [[nodiscard]] Cycle ve_busy_cycles() const { return ve_busy_cycles_; }
@@ -250,6 +252,7 @@ private:
     Cycle stall_cycles_credit_ = 0;
     Cycle stall_cycles_compute_ = 0;
     std::function<bool(const TileDescriptor&)> feed_guard_;
+    std::function<bool(const TileDescriptor&)> drain_guard_;
     Cycle ve_busy_cycles_ = 0;      // the vector unit's cycles on drains
     Cycle ve_bound_cycles_ = 0;     // cycles a drain ran longer because the vector unit was slower
     Cycle active_cycles_ = 0;
@@ -445,6 +448,14 @@ private:
                 name()
             ));
             stall_cycles_compute_++;
+            return false;
+        }
+
+        // A tile context that reads a vector (add's bias) waits for the vector's Load to land.
+        if (drain_guard_ && drain_guard_(tile)) {
+            events.push_back(TimingEvent(EventType::STR_STALL_TAG, current_cycle, config_.streamer_id, tile.tile_id,
+                                         name()));
+            stall_cycles_tag_++;
             return false;
         }
 
