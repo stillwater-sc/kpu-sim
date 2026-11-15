@@ -28,7 +28,9 @@
 //           panel i, C[i, :]'s partials are the L2 accumulator; for each k, A[i, k] and B's row
 //           panel are resident, A[i, k] is staged and held across the j loop. L3 and L2 as ws.
 //           Neither takes orient (the dataflow fixes the loop order), stage_a or an init.
-//   linear  matmul plus the epilogue act(C + b): the bias vector b[j] is resident with B's
+//   linear  (any dataflow; ws and is: the epilogue @ combiner on each tile's final merge, @ bm.egress
+//           on ws's panel store, or unfused -- never @ fabric, which would act on one partial)
+//           matmul plus the epilogue act(C + b): the bias vector b[j] is resident with B's
 //           panel, and `place` writes the context -- `via add(b[j]) @ P, act @ P` for
 //           P = fabric | combiner | bm.egress -- or "unfused": a second pass that reads C
 //           back and applies add and act as calls. L3: the matmul's + 1 (fused), and 2 for the
@@ -97,7 +99,9 @@ inline std::string accumulator_of(const std::string& in) {
 inline std::size_t slots_needed(const Options& o) {
     const std::size_t nt = tiles(o);
     if (o.algo == "lu") return nt * nt;
-    if (o.dataflow != "os") return nt + 1;  // ws, is: one operand's panel and the stationary tile
+    if (o.dataflow != "os") {               // ws, is: one operand's panel and the stationary tile,
+        return nt + (o.algo == "linear" && o.place != "unfused" ? 2 : 1);   // and b's tile
+    }
     const std::size_t mm = 2 * nt + 1;
     if (o.algo == "linear" && o.place != "unfused") return mm + 1;
     if (o.algo == "matmul" && (o.init == "bias" || o.init == "bias-row")) return mm + 1;   // D's tile, or b's
@@ -129,7 +133,14 @@ inline void check(const Options& o) {
         throw GenError("csp-gen: dataflow '" + o.dataflow + "' (os | ws | is)");
     if (o.dataflow != "os") {
         const std::string df = "csp-gen: dataflow " + o.dataflow;
-        if (o.algo != "matmul") throw GenError(df + " is matmul's; --algo is '" + o.algo + "'");
+        if (o.algo != "matmul" && o.algo != "linear")
+            throw GenError(df + " is matmul's and linear's; --algo is '" + o.algo + "'");
+        if (o.algo == "linear" && o.place == "fabric")
+            throw GenError(df + ": a fabric epilogue would act on one partial; the reduction's sum is the "
+                                "Combiner's, so place it @ combiner (or bm.egress, unfused)");
+        if (o.algo == "linear" && o.place == "bm.egress" && o.dataflow == "is")
+            throw GenError(df + ": an epilogue @ bm.egress rides the row panel's store, where b[j] varies by tile; "
+                                "place it @ combiner (on each tile's final merge), or unfused");
         if (o.orient != "col")
             throw GenError(df + " fixes its own loop order (" +
                            (o.dataflow == "ws" ? std::string("B's column panels outer") : std::string("A's row panels outer")) +
@@ -143,7 +154,8 @@ inline void check(const Options& o) {
     if (need > o.l3) {
         const std::size_t nt = tiles(o);
         const std::string why =
-            o.dataflow != "os" ? "a panel of " + std::to_string(nt) + " tiles and the stationary tile"
+            o.dataflow != "os" ? "a panel of " + std::to_string(nt) + " tiles and the stationary tile" +
+                                     std::string(o.algo == "linear" && o.place != "unfused" ? ", and the bias tile" : "")
             : o.algo == "lu" ? "the whole matrix, " + std::to_string(nt) + " x " + std::to_string(nt) + " tiles"
                            : "2 panels of " + std::to_string(nt) + " tiles and the store's writeback" +
                                  (o.algo == "linear" && o.place != "unfused" ? ", and the bias tile" : "") +
@@ -236,26 +248,51 @@ inline std::string matmul_nest(const Options& o, bool linear_fused) {
 // The weight- and input-stationary nests (#430): the stationary operand's tile staged in L2 and
 // held across the loop that reuses it, the result panel's partials an L2 accumulator that the
 // Combiner merges every call into.
-inline std::string stationary_nest(const Options& o) {
-    const std::string nt = std::to_string(tiles(o));
+//
+// A fused linear epilogue act(C + b) (#427): @ combiner, the k loop's last block is written out on
+// its own, and its calls -- each tile's final merge -- carry the epilogue, which the Combiner runs
+// on the merged value. b[j] is resident around them: for ws, with the panel's last block (one b
+// tile per panel); for is, around each call (b varies along the j loop). @ bm.egress (ws only), the
+// panel's store carries it.
+inline std::string stationary_nest(const Options& o, bool linear_fused) {
+    const std::size_t n = tiles(o);
+    const std::string nt = std::to_string(n);
     const bool ws = o.dataflow == "ws";
+    const bool at_combiner = linear_fused && o.place == "combiner";
+    const bool at_egress = linear_fused && o.place == "bm.egress";
+    const std::string epilogue = std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place;
     // ws: j outer, B[k, j] stationary across i. is: i outer, A[i, k] stationary across j.
     const std::string outer = ws ? "j" : "i", inner = ws ? "i" : "j";
     const std::string panel = ws ? "C[:, j]" : "C[i, :]";
-    const std::string moving = ws ? "A[:, k]" : "B[k, :]";   // the streamed operand's panel for this k
-    const std::string held = ws ? "B[k, j]" : "A[i, k]";     // the stationary tile
+    auto block = [&](const std::string& k, bool last) {
+        const std::string moving = ws ? "A[:, " + k + "]" : "B[" + k + ", :]";   // the streamed operand's panel
+        const std::string held = ws ? "B[" + k + ", j]" : "A[i, " + k + "]";     // the stationary tile
+        const std::string in = last ? "      " : "        ";
+        std::string call = "call gemm(A[i, " + k + "], B[" + k + ", j]) +-> C[i, j]" + (last ? epilogue : std::string()) + ";";
+        const std::string bias = last && ws ? std::string(", b[j]") : std::string();
+        if (last && !ws) call = "resident b[j]; " + call + " release b[j];";
+        std::string t;
+        t += in + "resident " + moving + ", " + held + bias + ";\n";
+        t += in + "stage " + held + " in l2 {\n";
+        t += in + "  for " + inner + " in 0.." + nt + " { " + call + " }\n";
+        t += in + "}\n";
+        t += in + "release " + moving + ", " + held + bias + ";\n";
+        return t;
+    };
     std::string s;
     s += "  for " + outer + " in 0.." + nt + " {\n";
+    if (at_egress) s += "    resident b[j];\n";
     s += "    acc " + panel + " in l2 {\n";
-    s += "      for k in 0.." + nt + " {\n";
-    s += "        resident " + moving + ", " + held + ";\n";
-    s += "        stage " + held + " in l2 {\n";
-    s += "          for " + inner + " in 0.." + nt + " { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }\n";
-    s += "        }\n";
-    s += "        release " + moving + ", " + held + ";\n";
+    s += "      for k in 0.." + std::to_string(at_combiner ? n - 1 : n) + " {\n";
+    s += block("k", false);
     s += "      }\n";
+    if (at_combiner) {
+        s += "      // the last K block: each tile's final merge, with the epilogue on the Combiner\n";
+        s += block(std::to_string(n - 1), true);
+    }
     s += "    }\n";
-    s += "    store " + panel + ";\n";
+    s += "    store " + panel + (at_egress ? epilogue : std::string()) + ";\n";
+    if (at_egress) s += "    release b[j];\n";
     s += "  }\n";
     return s;
 }
@@ -271,7 +308,7 @@ inline std::string matmul(const Options& o) {
              ") {\n";
         const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
         s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype) + tensor("C", o, "out", acc);
-        s += stationary_nest(o);
+        s += stationary_nest(o, false);
         return s + "}\n";
     }
     const std::string what = o.init == "bias"       ? "matmul C = A . B + D"
@@ -296,13 +333,19 @@ inline std::string matmul(const Options& o) {
 
 inline std::string linear(const Options& o) {
     const bool fused = o.place != "unfused";
-    std::string s = header(o, std::string("linear C = ") + to_string(o.act) + "(A . B + b), " + o.orient +
-                                  "-panel schedule, epilogue " + (fused ? "@ " + o.place : std::string("unfused")));
-    s += "program linear machine flat(l3 = " + std::to_string(o.l3) + ") {\n";
+    const std::string schedule = o.dataflow == "ws"   ? std::string("weight-stationary schedule")
+                                 : o.dataflow == "is" ? std::string("input-stationary schedule")
+                                                      : o.orient + "-panel schedule";
+    std::string s = header(o, std::string("linear C = ") + to_string(o.act) + "(A . B + b), " + schedule +
+                                  ", epilogue " + (fused ? "@ " + o.place : std::string("unfused")) +
+                                  (o.dataflow != "os" && o.place == "combiner" ? " on each tile's final merge"
+                                                                               : std::string()));
+    s += "program linear machine flat(l3 = " + std::to_string(o.l3) +
+         (o.dataflow != "os" ? ", l2 = " + std::to_string(tiles(o) + 1) : std::string()) + ") {\n";
     s += tensor("A", o, "in") + tensor("B", o, "in");
     s += "  vector b[" + std::to_string(o.size) + "] tile " + std::to_string(o.tile) + " in;\n";
     s += tensor("C", o, fused ? "out" : "inout");
-    s += matmul_nest(o, fused);
+    s += o.dataflow != "os" ? stationary_nest(o, fused) : matmul_nest(o, fused);
     if (!fused) {
         // The epilogue as calls, on C read back from DRAM: a second round trip.
         const std::string nt = std::to_string(tiles(o));

@@ -156,8 +156,8 @@ TEST_CASE("Dataflow: the generator refuses what WS and IS do not take", "[progra
     CHECK_THAT(refused(x), ContainsSubstring("init 'bias' is not built yet"));
     x = o;
     x.dataflow = "ws";
-    x.algo = "linear";
-    CHECK_THAT(refused(x), ContainsSubstring("dataflow ws is matmul's"));
+    x.algo = "lu";
+    CHECK_THAT(refused(x), ContainsSubstring("dataflow ws is matmul's and linear's"));
     x = o;
     x.dataflow = "ws";
     x.l3 = 4;
@@ -556,4 +556,227 @@ TEST_CASE("Dataflow: L-CA keeps each drain's tile context with its own drain", "
     bool negative = false;
     for (float v : r.reference->operand("C").values) negative = negative || v == 0.0f;
     CHECK(negative);
+}
+
+// ---- #427: the epilogue on the final merge, and the fused-operation matrix ----------------------
+
+namespace {
+
+// S1 with both vector units: the Combiner, which runs every activation, and the BlockMovers'.
+platform::DeviceSpecification s1_with_vector_units() {
+    auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    d.combiner = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu", "gelu", "silu", "atan"}};
+    d.movers.bm_vector = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu", "gelu", "silu", "atan"}};
+    return d;
+}
+
+std::string linear(const std::string& dataflow, const std::string& place, ActivationFn act) {
+    gen::Options o;
+    o.algo = "linear";
+    o.size = 64;
+    o.tile = 16;
+    o.l3 = 12;
+    o.dataflow = dataflow;
+    o.place = place;
+    o.act = act;
+    return gen::generate(o);
+}
+
+}  // namespace
+
+TEST_CASE("Final merge: the epilogue rides each tile's last call, on the Combiner", "[program][csp][dataflow][epilogue]") {
+    for (const char* df : {"ws", "is"}) {
+        CAPTURE(df);
+        const std::string src = linear(df, "combiner", ActivationFn::Relu);
+        CHECK_THAT(src, ContainsSubstring("for k in 0..3 {"));        // the last K block written out
+        CHECK_THAT(src, ContainsSubstring("+-> C[i, j] via add(b[j]) @ combiner, relu @ combiner;"));
+        CHECK_THAT(src, ContainsSubstring("on each tile's final merge"));
+        const lang::Validation v = lang::validate(src);
+        CHECK(v.peak_l3 == 6);                                         // a panel, the stationary tile, b's tile
+        const CspProgram p = lang::compile(src);
+        // Exactly one Drain per tile carries the epilogue: its fourth merge, an accumulate.
+        std::map<std::string, std::size_t> fused, merges;
+        for (const Action& a : p.actions) {
+            if (a.merge == Merge::None) continue;
+            const std::string k = a.tile.to_string();
+            ++merges[k];
+            if (!a.context.empty()) {
+                ++fused[k];
+                CHECK(merges[k] == 4);
+                CHECK(a.merge == Merge::Accumulate);
+                REQUIRE(a.context.size() == 2);
+                CHECK(a.context[0].op == VeOp::Add);
+                CHECK(a.context[0].place == Place::Combiner);
+                CHECK(a.context[1].op == VeOp::Relu);
+            }
+        }
+        CHECK(fused.size() == 16);
+        for (const auto& [k, n] : fused) CHECK(n == 1);
+    }
+    // @ bm.egress under ws: the panel's store carries it, and no merge does.
+    const CspProgram eg = lang::compile(linear("ws", "bm.egress", ActivationFn::Relu));
+    for (const Action& a : eg.actions) {
+        if (a.merge != Merge::None) CHECK(a.context.empty());
+        if (a.kind == Action::Kind::Writeback && a.tile.operand == "C") CHECK(a.context.size() == 2);
+    }
+}
+
+TEST_CASE("Final merge: the fused-operation matrix computes one result in every placement and dataflow",
+          "[program][csp][run][dataflow][epilogue]") {
+    const auto d = s1_with_vector_units();
+    for (ActivationFn act : {ActivationFn::Relu, ActivationFn::Gelu, ActivationFn::Silu, ActivationFn::Atan}) {
+        // The oracle's form: output-stationary, the epilogue unfused (a second pass of calls).
+        const std::string oracle_src = linear("os", "unfused", act);
+        const lang::Program oracle_ast = lang::parse(oracle_src);
+        const TileProgram inputs = driver::csp_inputs(oracle_ast);
+        const auto oracle = driver::csp_reference(oracle_ast, inputs, 1'000'000);
+        REQUIRE(oracle.values);
+        struct Cell { const char* df; const char* place; };
+        for (const Cell c : {Cell{"os", "fabric"}, Cell{"os", "combiner"}, Cell{"os", "bm.egress"},
+                             Cell{"ws", "combiner"}, Cell{"ws", "bm.egress"}, Cell{"ws", "unfused"},
+                             Cell{"is", "combiner"}, Cell{"is", "unfused"}}) {
+            CAPTURE(to_string(act), c.df, c.place);
+            // The fabric's epilogue is the matmul's bias and ReLU (lang::Target::fabric).
+            if (std::string(c.place) == "fabric" && act != ActivationFn::Relu) continue;
+            const lang::Program ast = lang::parse(linear(c.df, c.place, act));
+            // The same inputs for every cell: C's role (out or inout) does not change what A, B and b hold.
+            TileProgram in = driver::csp_inputs(ast);
+            for (const char* n : {"A", "B", "b"}) in.operand(n).values = inputs.operand(n).values;
+            driver::CspRunRequest req{ast, &d, in,
+                                      {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential,
+                                       ExecutionLevel::CycleAccurate}};
+            const auto r = driver::run_csp(req);
+            REQUIRE(r.reference);
+            CHECK(r.reference_note.empty());
+            // L-B, per tile within the format's bound, against the unfused output-stationary oracle.
+            TileProgram got = *oracle.values;
+            got.operand("C").values = r.reference->operand("C").values;
+            const OperandsCheck chk = check_operands(got, *oracle.values);
+            INFO(chk.summary());
+            CHECK(chk.pass);
+            // The refining levels: L-B's values, bit for bit.
+            for (const auto& o : r.levels) {
+                CAPTURE(to_string(o.level));
+                INFO(o.skipped.value_or(""));
+                REQUIRE_FALSE(o.skipped);
+                CHECK(same_bits(o.values.operand("C").values, r.reference->operand("C").values));
+            }
+            if (std::string(c.df) != "os" && std::string(c.place) == "combiner")
+                CHECK(r.levels[2].ve.combiner_busy > 0);          // the merges and the epilogue on the Combiner
+        }
+    }
+}
+
+TEST_CASE("Final merge: what the language and the generator refuse", "[program][csp][lang][dataflow][epilogue]") {
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+                             "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                             "  vector b[32] tile 16 in;\n  tensor C[32,32] tile 16x16 out;\n";
+    const std::string open = "  acc C[0, 0] in l2 {\n    resident A[0, :], B[:, 0], b[0];\n";
+    const std::string close = "    release A[0, :], B[:, 0], b[0];\n  }\n  store C[0, 0];\n}\n";
+    auto both = [&](const std::string& body, const std::string& walk, const std::string& symbolic) {
+        CHECK_THAT(error_of(head + open + body + close, false), ContainsSubstring(walk));
+        CHECK_THAT(error_of(head + open + body + close, true), ContainsSubstring(symbolic));
+    };
+    const std::string fin = "    call gemm(A[0, 1], B[1, 0]) +-> C[0, 0] via add(b[0]) @ combiner, relu @ combiner;\n";
+    REQUIRE(error_of(head + open + "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n" + fin + close, false) == "accepted");
+    REQUIRE(error_of(head + open + "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n" + fin + close, true) == "accepted");
+    // A call after the final merge, written after it or in a later iteration of its loop.
+    both(fin + "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n",
+         "csp line 10: call gemm into C[0,0] after its final merge (csp line 9)",
+         "csp line 10: call gemm into C[0, 0], which can be after its final merge (C[0, 0], csp line 9)");
+    both("    for k in 0..2 { call gemm(A[0, k], B[k, 0]) +-> C[0, 0] via relu @ combiner; }\n",
+         "csp line 9: call gemm into C[0,0] after its final merge (csp line 9)",
+         "csp line 9: call gemm into C[0, 0] via ...: the final merge runs in every iteration of the loop over k");
+    // After a loop of final merges over j, every tile it ranged over is final.
+    const std::string row = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+                            "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                            "  tensor C[32,32] tile 16x16 out;\n"
+                            "  acc C[0, :] in l2 {\n    resident A[0, 0], B[0, :];\n"
+                            "    for j in 0..2 { call gemm(A[0, 0], B[0, j]) +-> C[0, j] via relu @ combiner; }\n"
+                            "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                            "    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n";
+    CHECK_THAT(error_of(row, true), ContainsSubstring("csp line 9: call gemm into C[0, 1], which can be after its final merge"));
+    CHECK_THAT(error_of(row, false), ContainsSubstring("csp line 9: call gemm into C[0,1] after its final merge"));
+    // An epilogue stage off the Combiner.
+    both("    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0] via relu @ fabric;\n",
+         "csp line 9: call gemm +-> C[0,0] via ... @ fabric: the epilogue on an L2 accumulator's final merge runs on the "
+         "Combiner", "csp line 9: call gemm +-> C[0, 0] via ... @ fabric");
+    both("    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0] via relu @ bm.egress;\n",
+         "a bm.egress stage goes on the store", "a bm.egress stage goes on the store");
+    // The add's vector must be resident at the merge.
+    CHECK_THAT(error_of(head + "  acc C[0, 0] in l2 {\n    resident A[0, :], B[:, 0];\n"
+                        "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0] via add(b[0]) @ combiner;\n"
+                        "    release A[0, :], B[:, 0];\n  }\n  store C[0, 0];\n}\n", false),
+               ContainsSubstring("add(b[0,0]) @ combiner reads b[0,0], which is not resident"));
+    // The generator: no fabric epilogue under ws or is, and no bm.egress under is.
+    gen::Options o;
+    o.algo = "linear";
+    o.size = 64;
+    o.tile = 16;
+    o.l3 = 12;
+    o.dataflow = "ws";
+    o.place = "fabric";
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("a fabric epilogue would act on one partial"));
+    o.dataflow = "is";
+    o.place = "bm.egress";
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("b[j] varies by tile"));
+}
+
+TEST_CASE("L-CA: a vector tile resident for one result's context, then released (#434)", "[program][csp][run]") {
+    // b[j] is made resident for each C tile's store, read by its add on the Combiner, and released
+    // right after. The window hands the next tile's store over before this Release is due: the
+    // Release waits for the reads scheduled before it only, never for a later residency's, which
+    // wait for this Release to load b[j] again.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 12) {\n"
+                            "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                            "  vector b[32] tile 16 in;\n  tensor C[32,32] tile 16x16 out;\n"
+                            "  for i in 0..2 {\n    resident A[i, :];\n    for j in 0..2 {\n      resident B[:, j];\n"
+                            "      acc C[i, j] in fabric { for k in 0..2 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; } }\n"
+                            "      resident b[j];\n      store C[i, j] via add(b[j]) @ combiner, relu @ combiner;\n"
+                            "      release b[j];\n      release B[:, j];\n    }\n    release A[i, :];\n  }\n}\n";
+    const auto d = s1_with_combiner();
+    const lang::Program ast = lang::parse(src);
+    driver::CspRunRequest req{ast, &d, driver::csp_inputs(ast),
+                              {ExecutionLevel::BlockSequential, ExecutionLevel::CycleAccurate}};
+    const auto r = driver::run_csp(req);
+    REQUIRE(r.reference);
+    for (const auto& o : r.levels) {
+        CAPTURE(to_string(o.level));
+        INFO(o.skipped.value_or(""));
+        REQUIRE_FALSE(o.skipped);
+        CHECK(same_bits(o.values.operand("C").values, r.reference->operand("C").values));
+    }
+}
+
+TEST_CASE("L-CA: a tile context's add waits for its vector's Load to land", "[program][csp][run]") {
+    // #435's review: nothing ordered a drain after the Load of the vector its stage reads. With a
+    // slow memory, C's gemm is done long before b[j] -- made resident just before the store --
+    // has landed in L3, and the drain read the previous residency's b, or none. The drain now
+    // waits for the Loads of b scheduled before it.
+    // A's tiles 2..5 are filler the gemm does not read: their Loads queue ahead of b[j]'s on the
+    // DMA, so b[j] lands well after C's gemm is done.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 16) {\n"
+                            "  tensor A[32,96] tile 16x16 in;\n  tensor B[96,32] tile 16x16 in;\n"
+                            "  vector b[32] tile 16 in;\n  tensor C[32,32] tile 16x16 out;\n"
+                            "  for i in 0..2 {\n    for j in 0..2 {\n"
+                            "      resident A[i, 0], A[i, 1], B[0, j], B[1, j];\n"
+                            "      acc C[i, j] in fabric { for k in 0..2 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; } }\n"
+                            "      resident A[i, 2], A[i, 3], A[i, 4], A[i, 5];\n"
+                            "      resident b[j];\n      store C[i, j] via add(b[j]) @ combiner;\n"
+                            "      release b[j];\n      release A[i, 2], A[i, 3], A[i, 4], A[i, 5];\n"
+                            "      release A[i, 0], A[i, 1], B[0, j], B[1, j];\n    }\n  }\n}\n";
+    const auto d = s1_with_combiner();
+    const lang::Program ast = lang::parse(src);
+    const TileProgram inputs = driver::csp_inputs(ast);
+    const auto ref = driver::csp_reference(ast, inputs, 1'000'000);
+    REQUIRE(ref.values);
+    auto cfg = sw::kpu::timing::csp_config_from(d);
+    REQUIRE(cfg);
+    cfg->config.mc_bandwidth_gbps = 0.25;                // a slow memory: every Load takes long
+    cfg->config.mc_startup_latency = 400;
+    sw::kpu::timing::ConcurrentTimingExecutor exec(cfg->config);
+    lang::ActionStream s(ast, lang::target_from(d));
+    const auto r = sw::kpu::timing::CspDriver(exec, s, inputs, 256).run();
+    REQUIRE(r.completed);
+    CHECK(same_bits(r.values.operand("C").values, ref.values->operand("C").values));
 }

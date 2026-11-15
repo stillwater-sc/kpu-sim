@@ -110,6 +110,13 @@ struct VectorStage {
     enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan };
     Op op = Op::Relu;
     TileID arg{};
+    // Add: its read of `arg`, numbered in the order the executor scheduled the reads of `arg`.
+    // A Release of `arg` waits for the reads numbered below its own count (after_stage_reads).
+    uint64_t read_seq = 0;
+    // Add: the Loads (and Inherits) of `arg` the program issued before this stage's move, which
+    // the move waits for (a CSP driver sets it, in program order). 0: the executor's own count
+    // of the Loads scheduled with it.
+    uint64_t arg_loads = 0;
 };
 
 // ============================================================================
@@ -198,6 +205,8 @@ struct TileDescriptor {
     uint64_t program_seq = 0;   // the action's place in its program (ordered actions only)
     uint64_t after_writebacks = 0;  // a Move's or ejection's: the tile's Writebacks before it (set by the mover)
     uint64_t after_drains = 0;      // a Writeback's: the tile's Drains before it (set by the executor)
+    uint64_t after_stage_reads = 0; // a Release's: the tile contexts scheduled before it that read the
+                                    // tile (add's bias), which it waits for (set by the executor)
 
     // Tile dimensions (for compute operations)
     Size height = 16;         // Tile height (rows)
