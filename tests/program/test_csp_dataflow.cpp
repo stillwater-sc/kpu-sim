@@ -496,3 +496,47 @@ TEST_CASE("Dataflow: L-CA computes L-B's values, merging each partial in its L2 
     const lang::Target t = lang::target_from(bare);
     CHECK_THROWS_WITH(lang::validate(program("ws"), &t), ContainsSubstring("the target has no Combiner"));
 }
+
+TEST_CASE("Dataflow: a merge's result is never one of its inputs", "[program][csp][dataflow]") {
+    TileProgram p("overlap");
+    p.add_operand(TensorOperand("A", 1, 1, 1, 1)).at(0, 0) = 2.0f;
+    p.add_operand(TensorOperand("B", 1, 1, 1, 1)).at(0, 0) = 3.0f;
+    TileOp op;
+    op.kind = TileOpKind::MatMulMerge;
+    op.inputs = {TileCoord{"A", 0, 0}, TileCoord{"B", 0, 0}};
+    op.outputs = {TileCoord{"A", 0, 0}};
+    op.overwrite = true;
+    TileKernelState st;
+    CHECK_THROWS_WITH(apply(p, op, st), ContainsSubstring("the result A[0,0] is also an input"));
+    CHECK(p.operand("A").at(0, 0) == 2.0f);              // refused before anything is written
+}
+
+TEST_CASE("Dataflow: L-CA keeps each drain's tile context with its own drain", "[program][csp][run][dataflow]") {
+    // C[0, 0] is merged in L2 (two drains, no stages) and stored, then read back and written in
+    // place through a ReLU on the Combiner. Every drain of a tile takes its own entry in the
+    // tile's stage queue, so the merges' completions never consume the later drain's ReLU: a
+    // ReLU applied to the first partial would give relu(relu(p0) + p1), not relu(p0 + p1).
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+                            "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                            "  tensor C[32,32] tile 16x16 inout;\n"
+                            "  acc C[0, 0] in l2 {\n    resident A[0, :], B[:, 0];\n"
+                            "    for k in 0..2 { call gemm(A[0, k], B[k, 0]) +-> C[0, 0]; }\n"
+                            "    release A[0, :], B[:, 0];\n  }\n  store C[0, 0];\n"
+                            "  resident C[0, 0];\n  call relu(C[0, 0]) -> C[0, 0] via relu @ combiner;\n"
+                            "  store C[0, 0];\n  release C[0, 0];\n}\n";
+    const auto d = s1_with_combiner();
+    const lang::Program ast = lang::parse(src);
+    driver::CspRunRequest req{ast, &d, driver::csp_inputs(ast), {ExecutionLevel::CycleAccurate}};
+    const auto r = driver::run_csp(req);
+    REQUIRE(r.reference);
+    CHECK(r.reference_note.empty());
+    INFO(r.levels.at(0).skipped.value_or(""));
+    REQUIRE_FALSE(r.levels.at(0).skipped);
+    CHECK(r.levels[0].merges == 2);
+    CHECK(same_bits(r.levels[0].values.operand("C").values, r.reference->operand("C").values));
+    // The data must reach the case: some element of the first partial is negative where the sum
+    // is not, or the two orders would agree.
+    bool negative = false;
+    for (float v : r.reference->operand("C").values) negative = negative || v == 0.0f;
+    CHECK(negative);
+}

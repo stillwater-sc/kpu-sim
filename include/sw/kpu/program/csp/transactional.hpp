@@ -364,8 +364,15 @@ public:
                 if (a.merge == Merge::Overwrite) {              // the partial's slot: after its credit
                     const Cycle credit = get_l2(*a.l2);
                     if (credit > ready) {
-                        ++st_.l2_bound;
-                        st_.l2_wait_cycles += credit - ready;
+                        // The credit binds only past every other bound on the drain's start: a
+                        // free drain lane and the drains' issue order (run_drain, run).
+                        const auto& lanes_free = fabric() ? drain_free_ : lane_free_[Proc::Str];
+                        const Cycle issue = fabric() ? drain_last_start_ : last_start_[Proc::Str];
+                        const Cycle other = std::max({ready, *std::min_element(lanes_free.begin(), lanes_free.end()), issue});
+                        if (credit > other) {
+                            ++st_.l2_bound;
+                            st_.l2_wait_cycles += credit - other;
+                        }
                         ready = credit;
                     }
                     l2_open_[k] = l2_slots_.size();

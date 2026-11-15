@@ -824,6 +824,9 @@ private:
     [[nodiscard]] Cycle stage_cycles(const TileDescriptor& t, const std::vector<VectorStage>& stages,
                                      double per_cycle, const char* site) const;
     void apply_stages(MemoryLevel level, const TileID& id, StageQueue& queue);
+    // The drain and writeback themselves, once the caller has queued the move's stage entry.
+    void enqueue_drain(const TileDescriptor& tile, int streamer_id);
+    void enqueue_writeback(const TileDescriptor& tile, int mover_id);
     void on_drain_start(const TileID& id);
     std::unordered_map<TileID, size_t, TileIDHash> scheduled_compute_counts_;
     std::unordered_map<TileID, size_t, TileIDHash> completed_compute_counts_;
@@ -1211,7 +1214,12 @@ inline uint32_t ConcurrentTimingExecutor::mover_for(const TileDescriptor& tile, 
     return m;
 }
 
-inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile_in, int mover_id) {
+inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile, int mover_id) {
+    writeback_stages_[tile.tile_id].emplace_back();     // one entry per writeback: none for this one
+    enqueue_writeback(tile, mover_id);
+}
+
+inline void ConcurrentTimingExecutor::enqueue_writeback(const TileDescriptor& tile_in, int mover_id) {
     TileDescriptor tile = homed(tile_in);
     if (tile.ordered) tile.after_drains = drains_scheduled_[tile.tile_id];
     ++writebacks_scheduled_[tile.tile_id];
@@ -1351,7 +1359,7 @@ inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile_
         if (st.op == VectorStage::Op::Add) ++stage_reads_[st.arg];
     drain_stages_[tile.tile_id].push_back(std::move(all));
     fabric_pending_[tile.tile_id].push_back(tile.fabric_cycles);
-    schedule_drain(tile, streamer_id);
+    enqueue_drain(tile, streamer_id);
 }
 
 inline void ConcurrentTimingExecutor::schedule_merge(const TileDescriptor& tile_in, bool overwrite,
@@ -1365,7 +1373,9 @@ inline void ConcurrentTimingExecutor::schedule_merge(const TileDescriptor& tile_
     tile.ve_cycles = stage_cycles(tile, {add}, static_cast<double>(config_.combiner_lanes) * config_.combiner_rate,
                                   "Combiner");
     merge_types_[tile.tile_id] = type;
-    schedule_drain(tile, streamer_id);
+    drain_stages_[tile.tile_id].emplace_back();         // one entry per drain: a merge has no stages
+    fabric_pending_[tile.tile_id].push_back(0);
+    enqueue_drain(tile, streamer_id);
 }
 
 inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& tile_in, std::vector<VectorStage> egress,
@@ -1376,7 +1386,7 @@ inline void ConcurrentTimingExecutor::schedule_writeback(const TileDescriptor& t
     for (const VectorStage& st : egress)
         if (st.op == VectorStage::Op::Add) ++stage_reads_[st.arg];
     writeback_stages_[tile.tile_id].push_back(std::move(egress));
-    schedule_writeback(tile, mover_id);
+    enqueue_writeback(tile, mover_id);
 }
 
 inline ConcurrentTimingExecutor::VectorStats ConcurrentTimingExecutor::vector_stats() const {
@@ -1448,7 +1458,15 @@ inline void ConcurrentTimingExecutor::chain_done(const TileID& id) {
     c.scheduled = c.done = 0;
 }
 
+// A drain with no tile context still takes its entry in the tile's stage queues: each drain's
+// completion pops one, in order, so a later drain's stages are never applied to this one.
 inline void ConcurrentTimingExecutor::schedule_drain(const TileDescriptor& tile, int streamer_id) {
+    drain_stages_[tile.tile_id].emplace_back();
+    fabric_pending_[tile.tile_id].push_back(0);
+    enqueue_drain(tile, streamer_id);
+}
+
+inline void ConcurrentTimingExecutor::enqueue_drain(const TileDescriptor& tile, int streamer_id) {
     ++drains_scheduled_[tile.tile_id];
     drain_merges_[tile.tile_id].push_back(tile.merge);
     // A DRAIN ends its tile's accumulation chain (if one is open): the result publishes once

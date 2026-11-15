@@ -368,6 +368,12 @@ inline void merge_tile(const std::string& type, std::vector<float>& y, const std
 // or Y := Y + P (accumulate). The partial is MATMUL_ACCUM's arithmetic on a zero tile.
 inline void kernel_matmul_merge(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
+    // The partial is computed in Y's place, so Y must not be one of its inputs: a merge's result
+    // is an L2 partial, never a tile the gemm reads (the language cannot write one).
+    for (const TileCoord& in : op.inputs)
+        if (in.operand == yc.operand && in.ti == yc.ti && in.tj == yc.tj)
+            throw std::invalid_argument("MatMulMerge: the result " + yc.to_string() + " is also an input; a merge's "
+                                        "partial goes into an L2 slot, not into a tile the gemm reads");
     TensorOperand& Y = prog.operand(yc.operand);
     const Dim r0 = Y.row_begin(yc.ti), r1 = Y.row_end(yc.ti);
     const Dim c0 = Y.col_begin(yc.tj), c1 = Y.col_end(yc.tj);
