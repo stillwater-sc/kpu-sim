@@ -265,6 +265,13 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
         }
     }
     const bool compare = !has_flag(a, "--no-compare");
+    // --bubbles reads each deployment's L-T1 run, as a single run's does.
+    if (has_flag(a, "--bubbles") &&
+        std::find(levels.begin(), levels.end(), ExecutionLevel::BlockSequential) == levels.end()) {
+        std::cerr << "kpu-run: --bubbles reads the L-T1 run, which a sweep at --level " << arg(a, "--level", "all")
+                  << " does not make (add block-sequential to --level)\n";
+        return 2;
+    }
 
     struct Row {
         std::string digest;
@@ -274,6 +281,7 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
         std::optional<TileProgram> oracle;               // L-B's values on this deployment
         bool agree = true;                               // every level within bound of L-B
         bool replay_ok = true;
+        bool no_bubbles = false;                         // --bubbles, and L-T1 did not run here
     };
     std::vector<Row> rows(specs.size());
 
@@ -315,10 +323,16 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
         }
         print_levels(row.levels, row.run_ids, ast, window);
         if (!row.replay_ok) std::cout << "\n  FAILED: the trace does not reproduce L-B on this deployment\n";
-        if (has_flag(a, "--bubbles"))
+        if (has_flag(a, "--bubbles")) {
+            bool reported = false;
             for (const auto& o : row.levels)
-                if (o.level == ExecutionLevel::BlockSequential && !o.skipped)
+                if (o.level == ExecutionLevel::BlockSequential && !o.skipped) {
                     std::cout << "\n" << sw::kpu::program::csp::bubble_report(o.records, o.makespan, o.busy, o.lanes).text();
+                    reported = true;
+                }
+            // L-T1 skipped on this deployment: the report it asked for is missing, which is a refusal.
+            if (!reported) row.no_bubbles = true;
+        }
         if (compare && row.oracle) row.agree = print_value_check(row.levels, *row.oracle);
     }
 
@@ -344,7 +358,7 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
             ran = ran || !o.skipped;
             std::cout << std::setw(12) << cell;
         }
-        if (!ran) refused = true;
+        if (!ran || row.no_bubbles) refused = true;
         failed = failed || !row.agree || !row.replay_ok;
         std::cout << (!row.replay_ok ? "FAILED (replay)" : !compare ? "not compared" : row.agree ? "agree" : "FAILED")
                   << "   " << deploy_paths[d] << "\n";

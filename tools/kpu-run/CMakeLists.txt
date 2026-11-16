@@ -373,6 +373,16 @@ if(KPU_BUILD_TESTS)
             -DMUST_NOT_MATCH=values.vs
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
+    # ...as is --bubbles in a sweep that makes no L-T1 run...
+    add_test(NAME kpu_run_csp_sweep_bubbles_needs_lt1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--bubbles
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--bubbles.reads.the.L-T1.run,.which.a.sweep.at.--level.behavioral.does.not.make
+            -DMUST_NOT_MATCH=values.vs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
     # ...and an L0 trace, which runs at L-B on one deployment, refuses a repeated --deploy rather
     # than reading the first.
     add_test(NAME kpu_run_l0_refuses_sweep
@@ -731,7 +741,8 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_refuses_invalid_program kpu_run_l0_refuses_lca
         kpu_run_csp_step_lt1 kpu_run_csp_step_lb kpu_run_csp_step_lca
         kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1 kpu_run_csp_retain kpu_run_csp_inherit
-        kpu_run_csp_sweep kpu_run_csp_sweep_refuses_one_run_records kpu_run_l0_refuses_sweep
+        kpu_run_csp_sweep kpu_run_csp_sweep_refuses_one_run_records kpu_run_csp_sweep_bubbles_needs_lt1
+        kpu_run_l0_refuses_sweep
         PROPERTIES LABELS "program;driver;csp")
 
     # ---- the machine as a spec (#282 increment 4) ---------------------------------

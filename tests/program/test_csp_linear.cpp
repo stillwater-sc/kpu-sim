@@ -317,6 +317,10 @@ TEST_CASE("Linear: what the language refuses, by line", "[program][csp][linear][
     auto err = [](const std::string& via) { return compile_error(linear_source(via)); };
     CHECK_THAT(err(" via relu @ bm.egress, add(b[j]) @ fabric"),
                ContainsSubstring("csp line 14: add @ fabric is listed after a stage @ bm.egress"));
+    // The Combiner's order: a bias comes before the activation it feeds, at one place or two.
+    CHECK_THAT(err(" via relu @ fabric, add(b[j]) @ fabric"),
+               ContainsSubstring("csp line 14: add follows relu: the order is bias, scale, activation, format"));
+    CHECK_THAT(err(" via relu @ fabric, add(b[j]) @ combiner"), ContainsSubstring("add follows relu"));
     CHECK_THAT(err(" via add(B[0, j]) @ fabric"), ContainsSubstring("add takes a vector operand"));
     CHECK_THAT(err(" via add(b[0]) @ fabric"), ContainsSubstring("add(b[0,0]) @ fabric reads b[0,0], which is not resident"));
     CHECK_THAT(err(" via add @ fabric"), ContainsSubstring("add takes one vector tile"));

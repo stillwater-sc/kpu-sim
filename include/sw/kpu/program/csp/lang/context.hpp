@@ -140,6 +140,10 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
                          ", which the tile reaches later; list the stages in the order the tile passes their places");
         last_rank = rank;
         last = r.place;
+        // A bias comes before the activation or format it feeds (after the places are checked,
+        // whose order is the tile's path).
+        if (r.op == VeOp::Add && after_scale)
+            fail(s.line, "add follows " + after_scale->op + ": the order is bias, scale, activation, format");
         if (target) {
             const auto& site = r.place == Place::Fabric ? target->fabric
                                : r.place == Place::Combiner ? target->combiner : target->bm;
