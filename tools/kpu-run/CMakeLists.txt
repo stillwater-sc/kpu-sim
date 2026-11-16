@@ -421,12 +421,14 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=stepping.L-B:.*actions.*each.applied.*LOAD.B.0,0.*dma.dram->l3..r0.opens....line.9..j=0/4.*LOAD.A.0,0.*line.11..j=0/4.i=0/4.*FEED.A.0,0...str.l2->cf.*line.13..j=0/4.i=0/4.k=0/4.*fabric.1.*stopped.after.12.of
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
-    add_test(NAME kpu_run_csp_step_refuses_lca_only
+    # L-CA (#285): one cycle per step, its protocol events named by the program's tiles, and the
+    # transfers in flight per process.
+    add_test(NAME kpu_run_csp_step_lca
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>cycle-accurate$<SEMICOLON>--step
-            -DEXPECT_CODE=2
-            -DMUST_MATCH=--step.walks.L-B.*or.L-T1.*neither.ran
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>cycle-accurate$<SEMICOLON>--step$<SEMICOLON>--step-limit$<SEMICOLON>8
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=stepping.L-CA:.*cycles.at.which.something.happened.*@[0-9]+.+event.*DMA_LOAD_START.+DMA.*[AB].[0-9],[0-9].*.dma.[0-9].*stopped.after.8.of.*OK
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     add_test(NAME kpu_run_csp_timeline
@@ -727,7 +729,7 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_block_sequential kpu_run_csp_emit_result
         kpu_run_csp_lu_skips_lca kpu_run_csp_refuses_lca_on_t4 kpu_run_csp_rejects_algo
         kpu_run_csp_refuses_invalid_program kpu_run_l0_refuses_lca
-        kpu_run_csp_step_lt1 kpu_run_csp_step_lb kpu_run_csp_step_refuses_lca_only
+        kpu_run_csp_step_lt1 kpu_run_csp_step_lb kpu_run_csp_step_lca
         kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1 kpu_run_csp_retain kpu_run_csp_inherit
         kpu_run_csp_sweep kpu_run_csp_sweep_refuses_one_run_records kpu_run_l0_refuses_sweep
         PROPERTIES LABELS "program;driver;csp")

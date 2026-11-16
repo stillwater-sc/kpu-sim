@@ -222,11 +222,13 @@ public:
     }
 
     // Run the program at `level`. `window` is L-CA's driver window, a schedule option.
-    CspPlatformRun run_csp(CspProgramHandle h, ExecutionLevel level, std::size_t window = 256) const {
+    // `keep_events`: L-CA keeps its protocol events (what its step replays).
+    CspPlatformRun run_csp(CspProgramHandle h, ExecutionLevel level, std::size_t window = 256,
+                           bool keep_events = false) const {
         require_single_device();
         const CspEntry& e = csp_.at(checked(h));
         CspPlatformRun r;
-        r.outcome = driver::csp_run_level(level, e.ast, &spec_.device(0), e.inputs, window);
+        r.outcome = driver::csp_run_level(level, e.ast, &spec_.device(0), e.inputs, window, keep_events);
         r.identity.program_digest = e.digest;
         r.identity.snapshot_digest = e.inputs_digest;
         r.identity.deployment_digest = deployment_digest_;
@@ -246,7 +248,8 @@ public:
 
     // Stepping a CSP program (kpu-run-csp-programs step 4c): one action per step at L-B,
     // applied; at L-T1 the program runs first and the cursor replays its records in start
-    // order, as an L0 program's L-T1 cursor replays its timeline. L-CA steps cycles (#283).
+    // order, as an L0 program's L-T1 cursor replays its timeline. At L-CA the program runs first
+    // too, with `window`, and the cursor replays its protocol events one cycle per step (#285).
     class CspCursor {
     public:
         driver::CspStepper& stepper() const { return *stepper_; }
@@ -268,7 +271,7 @@ public:
         std::optional<CspPlatformRun> run_;
     };
 
-    CspCursor step_begin(CspProgramHandle h, ExecutionLevel level) const {
+    CspCursor step_begin(CspProgramHandle h, ExecutionLevel level, std::size_t window = 256) const {
         require_single_device();
         const CspEntry& e = csp_.at(checked(h));
         CspCursor cur;
@@ -285,13 +288,18 @@ public:
                                                                           cur.run_->outcome.slots);
                 return cur;
             }
+            case ExecutionLevel::CycleAccurate: {
+                cur.run_ = run_csp(h, level, window, true);
+                if (cur.run_->outcome.skipped)
+                    throw std::invalid_argument("platform: " + *cur.run_->outcome.skipped);
+                cur.stepper_ = std::make_unique<driver::CspCycleStepper>(cur.run_->outcome.events);
+                return cur;
+            }
             case ExecutionLevel::ResourceTransactional:
-            case ExecutionLevel::CycleAccurate:
                 break;
         }
         throw std::invalid_argument(std::string("platform: stepping a CSP program at ") + driver::to_string(level) +
-                                    " is not implemented: L-B steps actions, L-T1 replays records; L-CA's step is "
-                                    "a cycle (#283)");
+                                    " is not implemented: L-T2 does not exist yet (#283)");
     }
 
     const TileProgram& program(ProgramHandle h) const { return programs_.at(checked(h)); }

@@ -96,7 +96,9 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             before a call and what it waited for (an operand's Feed, Move or
                             Load, a slot's credit, a busy lane), the reuse each operand's
                             program states, and each process's load (#425)
-  --step                    single-step (L-B: one action per step; L-T1: one record)
+  --step                    single-step the finest level that ran (L-B: one action per step;
+                            L-T1: one record; L-CA: one cycle, with its protocol events and
+                            the transfers in flight per process)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
   --no-compare              run the levels, do not diff values
 
@@ -726,27 +728,31 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::cout << sw::kpu::program::csp::bubble_report(lt1->records, lt1->makespan, lt1->busy, lt1->lanes).text();
     }
 
-    // --step: walk the program at the finest of L-B and L-T1 that ran, through the platform
-    // (step 4c). L-B applies one action per step; L-T1 replays its records in start order.
+    // --step: walk the program at the finest level that ran, through the platform (step 4c).
+    // L-B applies one action per step; L-T1 replays its records in start order; L-CA replays its
+    // protocol events, one cycle per step (#285).
     if (has_flag(a, "--step")) {
         std::optional<ExecutionLevel> target;
         for (const auto& o : res.levels)
-            if (!o.skipped && (o.level == ExecutionLevel::Behavioral || o.level == ExecutionLevel::BlockSequential))
+            if (!o.skipped && (o.level == ExecutionLevel::Behavioral || o.level == ExecutionLevel::BlockSequential ||
+                               o.level == ExecutionLevel::CycleAccurate))
                 target = o.level;
         if (!target) {
-            std::cerr << "kpu-run: --step walks L-B (actions) or L-T1 (records); neither ran (L-CA's step is a "
-                         "cycle, #283)\n";
+            std::cerr << "kpu-run: --step walks L-B (actions), L-T1 (records) or L-CA (cycles); none of them ran\n";
             return 2;
         }
         std::optional<platform::VirtualPlatform::CspCursor> cur;
         try {
-            cur.emplace(vp->step_begin(handle, *target));
+            cur.emplace(vp->step_begin(handle, *target, window));
         } catch (const std::exception& e) {
             std::cerr << "kpu-run: " << e.what() << "\n";
             return 2;
         }
+        const bool cycles = *target == ExecutionLevel::CycleAccurate;
         std::cout << "\nstepping " << short_name(*target) << ": " << cur->size()
                   << (cur->executes() ? " actions (each applied as it is stepped)"
+                      : cycles        ? " cycles at which something happened (a replay of the run's protocol "
+                                        "events, one cycle per step; a stall is listed when it begins)"
                                       : " records (a replay of the run, in start order)")
                   << (step_limit && cur->size() > step_limit ? ", showing the first " + std::to_string(step_limit)
                                                               : "")
@@ -756,6 +762,18 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         while (!step_limit || shown < step_limit) {
             if (!cur->step()) break;
             const driver::CspStep& st = cur->current();
+            if (cycles) {
+                // The cycle, its events, and the transfers each process has in flight after it.
+                std::cout << "  " << std::setw(6) << std::right << cur->position() << "  " << std::left << "@"
+                          << st.start << "  " << st.events.size() << (st.events.size() == 1 ? " event" : " events")
+                          << (st.stalls_continuing ? "  (+" + std::to_string(st.stalls_continuing) + " stalls continuing)"
+                                                   : std::string());
+                for (const auto& [p, n] : cur->stepper().lanes_busy()) std::cout << "  [" << p << " " << n << "]";
+                std::cout << "\n";
+                for (const auto& e : st.events) std::cout << "            " << driver::describe(e) << "\n";
+                ++shown;
+                continue;
+            }
             std::cout << "  " << std::setw(6) << std::right << cur->position() << "  " << std::left
                       << describe(st, !cur->executes()) << "   L3 " << st.l3_held << "/" << ast->l3;
             if (cur->executes())

@@ -100,6 +100,21 @@ namespace sw::kpu::timing {
 
 class CspDriver {
 public:
+    // One protocol event of the run, named by the program's tile (#285: L-CA's step). Kept only
+    // when keep_events(true): a run of any size otherwise holds none of them past its end.
+    struct ProtocolEvent {
+        // The cycle it happened. The executor stamps a COMPLETE event with its transfer's start
+        // and its duration (a Chrome-trace span); here it is the cycle the transfer ended,
+        // cycle - duration its start.
+        Cycle cycle = 0;
+        EventType type = EventType::DMA_LOAD_START;
+        std::string component;                      // "DMA[0]", "BlockMover[1]", ...
+        std::optional<program::TileCoord> tile;     // none for a memory controller's events
+        std::uint32_t slot = 0;
+        Cycle duration = 0;
+        std::string detail;
+    };
+
     struct Result {
         bool completed = false;
         bool livelock = false;
@@ -120,7 +135,12 @@ public:
         // claimed -- each slot's tiles in the order they held it (l3-placement-at-lb.md step 6).
         std::vector<std::pair<program::TileCoord, std::uint32_t>> l3_placement;
         program::TileProgram values;        // the source program's operands, as DRAM holds them
+        // With keep_events(true): every protocol event, in cycle order (each cycle's in the order
+        // the executor logged them). Kept for a run that did not complete too: it shows where.
+        std::vector<ProtocolEvent> events;
     };
+
+    void keep_events(bool keep) { keep_events_ = keep; }
 
     // window = 0: hand over the whole program at once (the trace's default, as step 2 did).
     static constexpr std::size_t kWholeProgram = 0;
@@ -226,6 +246,25 @@ public:
         }
         r.cycles = exec_.current_cycle();
         r.completed = done();
+        if (keep_events_) {
+            const auto& ev = exec_.events();
+            r.events.reserve(ev.size());
+            for (const auto& e : ev) {
+                ProtocolEvent p;
+                p.cycle = e.cycle + e.duration;
+                p.type = e.type;
+                p.component = e.component_name;
+                // A memory controller's events name a bank, not a tile.
+                if (e.type != EventType::MC_ACCESS_TYPE && e.type != EventType::MC_BANK_CONFLICT)
+                    if (const auto c = coord_.find(e.tile_id); c != coord_.end()) p.tile = c->second;
+                p.slot = e.slot_id;
+                p.duration = e.duration;
+                p.detail = e.detail;
+                r.events.push_back(std::move(p));
+            }
+            std::stable_sort(r.events.begin(), r.events.end(),
+                             [](const ProtocolEvent& a, const ProtocolEvent& b) { return a.cycle < b.cycle; });
+        }
         for (const auto& e : exec_.events()) {
             r.dram_loads += e.type == EventType::DMA_LOAD_COMPLETE;
             r.dram_stores += e.type == EventType::DMA_STORE_COMPLETE;
@@ -277,6 +316,7 @@ private:
     program::csp::lang::ActionStream* stream_ = nullptr;
     const program::TileProgram& inputs_;
     std::size_t window_;
+    bool keep_events_ = false;
     std::map<std::string, Address> base_;
     std::size_t next_ = 0;                      // the trace's next action
     std::deque<TileDescriptor> loads_;          // the dma process's Loads not yet handed over
