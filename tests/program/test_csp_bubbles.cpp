@@ -14,6 +14,7 @@
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/program/driver/csp_run.hpp>
+#include <sw/kpu/program/platform/deployment_json.hpp>
 
 #include <map>
 #include <string>
@@ -181,3 +182,65 @@ TEST_CASE("Bubbles: the cause follows the binding resource", "[program][csp][bub
 }
 
 
+
+namespace {
+
+// S1 with a Combiner (the WS and IS schedules merge their partials there).
+platform::DeviceSpecification s1_combiner() {
+    auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    d.combiner = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu"}};
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("Bubbles: L-CA's run, read from its protocol events, is the program's actions", "[program][csp][bubbles][lca]") {
+    // #425's report at L-CA: the events matched back to the actions (timing/csp_records.hpp). The
+    // same program at L-T1 is the check: one leg per action, the same reuse, a report that adds up.
+    const auto d = s1_combiner();
+    for (const char* df : {"os", "ws", "is"}) {
+        CAPTURE(df);
+        const std::string src = matmul(df);
+        const lang::Program ast = lang::parse(src);
+        const TileProgram in = driver::csp_inputs(ast);
+        const auto lt1 = driver::csp_run_level(driver::ExecutionLevel::BlockSequential, ast, &d, in);
+        const auto lca = driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, ast, &d, in, 256, true);
+        REQUIRE_FALSE(lca.skipped);
+        CHECK(lca.unmatched_events == 0);
+        // One leg per action, as at L-T1 (a Store has two), kind by kind.
+        std::map<std::pair<std::size_t, int>, std::size_t> a, b;
+        for (const auto& r : lt1.records) ++a[{r.action, static_cast<int>(r.kind)}];
+        for (const auto& r : lca.records) ++b[{r.action, static_cast<int>(r.kind)}];
+        CHECK(a == b);
+        for (const auto& r : lca.records) {
+            CHECK(r.ready <= r.start);
+            CHECK(r.start <= r.finish);
+            CHECK(r.finish <= lca.makespan);
+        }
+        const BubbleReport rep = bubble_report(lca.records, lca.makespan, lca.busy, lca.lanes, "L-CA");
+        const BubbleReport ref = bubble_report(lt1.records, lt1.makespan, lt1.busy, lt1.lanes);
+        CHECK(rep.calls == ref.calls);
+        REQUIRE(rep.reuse.size() == ref.reuse.size());
+        for (std::size_t i = 0; i < rep.reuse.size(); ++i) {     // the reuse is the program's, not a level's
+            CHECK(rep.reuse[i].operand == ref.reuse[i].operand);
+            CHECK(rep.reuse[i].loads == ref.reuse[i].loads);
+            CHECK(rep.reuse[i].moves == ref.reuse[i].moves);
+            CHECK(rep.reuse[i].feeds == ref.reuse[i].feeds);
+        }
+        CHECK(reuse_of(rep, "A").loads == lca.dram_loads - reuse_of(rep, "B").loads);
+        BubbleReport::Cycle sum = 0;
+        for (const auto& bb : rep.bubbles) {
+            CHECK(bb.idle > 0);
+            CHECK(bb.cause != Cause::Unknown);
+            sum += bb.idle;
+        }
+        CHECK(sum == rep.cf_idle);
+        CHECK(rep.cf_busy == lca.busy.at("cf"));
+        for (const auto& l : rep.loads) CHECK(l.utilization <= 1.0);
+        CHECK_THAT(rep.text(), ContainsSubstring("(L-CA, uncalibrated)"));
+    }
+    // A run that keeps no events has no records: they are the report's, not every run's.
+    const lang::Program ast = lang::parse(matmul("os"));
+    const auto plain = driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, ast, &d, driver::csp_inputs(ast));
+    CHECK(plain.records.empty());
+}

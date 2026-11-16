@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The reuse and bubble report at L-CA** (#425). `kpu-run --bubbles` reports L-CA's run beside
+  L-T1's, with the same walk (`csp/bubbles.hpp`).
+  - L-CA logs protocol events, not records, so `timing/csp_records.hpp` matches them back to the
+    program's actions, as the driver handed them over (`CspDriver::Result::handovers`):
+    - a transfer's START goes to the next action of its kind on its tile;
+    - its COMPLETE goes to the oldest one started;
+    - its ready cycle is when its inputs had finished and its credit was free. A process sees a
+      completion on its next tick, so a one-cycle handoff is no wait;
+    - the first credit stall gives a Load's L3 slot wait, and a Move's or Drain's L2 slot wait.
+  - Lanes are the machine's: DMA engines (a Load's is the engine holding its request), BlockMovers,
+    streamers and compute tiles.
+  - The report names its level. `CspLevelOutcome::unmatched_events` counts events no action took;
+    it is 0 on every schedule tested.
+  - Tests: `test_csp_bubbles`, on OS, WS and IS:
+    - one leg per action, as at L-T1;
+    - the same reuse as L-T1;
+    - a report that adds up, with every bubble's cause known;
+    - records only when events are kept.
+
+    Plus the CLI test `kpu_run_csp_bubbles_lca`.
+
 - **The Combiner's integer epilogue** (#427): a requantized result's context takes a bias before
   its scale and relu after it, in the Combiner's order.
   - The bias is a vector in the accumulator's type (`vector b[..] int32`). It is added to the

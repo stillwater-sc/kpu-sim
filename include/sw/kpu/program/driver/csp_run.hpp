@@ -31,6 +31,7 @@
 #include <sw/kpu/program/tile_program_reference.hpp>
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/csp_driver.hpp>
+#include <sw/kpu/timing/csp_records.hpp>
 
 #include <cstddef>
 #include <algorithm>
@@ -212,6 +213,9 @@ struct CspLevelOutcome {
     // L-CA, when asked for (keep_events): every protocol event, in cycle order -- what its step
     // replays (#285).
     std::vector<timing::CspDriver::ProtocolEvent> events;
+    // L-CA with its events kept: `records`, `busy` and `lanes` hold its actions' legs as L-T1's
+    // do (timing/csp_records.hpp), and this counts the transfer events no action took (0).
+    std::size_t unmatched_events = 0;
 };
 
 struct CspRunRequest {
@@ -403,6 +407,16 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         timing::CspDriver drv(exec, s, inputs, window);
         drv.keep_events(keep_events);
         auto r = drv.run();
+        // Kept: its actions' legs too, matched from the events (timing/csp_records.hpp), which the
+        // reuse and bubble report reads as it reads L-T1's (#425).
+        if (keep_events) {
+            auto recs = timing::csp_records(r.handovers, r.events, cfg->config.num_dma_engines,
+                                            cfg->config.num_block_movers, cfg->config.num_compute_tiles);
+            o.records = std::move(recs.records);
+            o.busy = std::move(recs.busy);
+            o.lanes = std::move(recs.lanes);
+            o.unmatched_events = recs.unmatched;
+        }
         o.events = std::move(r.events);
         if (!r.completed) {
             o.livelock = r.livelock;

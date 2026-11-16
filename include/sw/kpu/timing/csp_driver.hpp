@@ -109,6 +109,7 @@ public:
         Cycle cycle = 0;
         EventType type = EventType::DMA_LOAD_START;
         std::string component;                      // "DMA[0]", "BlockMover[1]", ...
+        std::uint32_t component_id = 0;             // the unit's index among its kind
         std::optional<program::TileCoord> tile;     // none for a memory controller's events
         std::optional<std::uint32_t> slot;          // the buffer slot, when the event names one
         Cycle duration = 0;
@@ -138,6 +139,15 @@ public:
         // With keep_events(true): every protocol event, in cycle order (each cycle's in the order
         // the executor logged them). Kept for a run that did not complete too: it shows where.
         std::vector<ProtocolEvent> events;
+        // With keep_events(true): each action as the driver handed it to its process, in program
+        // order -- what the protocol events are matched to (csp_records.hpp, #425's bubbles).
+        struct Handover {
+            std::size_t action = 0;                 // its index in program order
+            program::csp::Action::Kind kind = program::csp::Action::Kind::Call;
+            program::TileCoord tile;
+            Cycle at = 0;                           // the cycle the driver handed it over
+        };
+        std::vector<Handover> handovers;
     };
 
     void keep_events(bool keep) { keep_events_ = keep; }
@@ -207,6 +217,8 @@ public:
         inits_.clear();
         stored_.clear();
         coord_.clear();
+        handovers_.clear();
+        pulled_ = 0;
         open_.clear();
         slot_turns_.clear();
         l2_turns_.clear();
@@ -246,6 +258,7 @@ public:
         }
         r.cycles = exec_.current_cycle();
         r.completed = done();
+        if (keep_events_) r.handovers = std::move(handovers_);
         if (keep_events_) {
             const auto& ev = exec_.events();
             r.events.reserve(ev.size());
@@ -254,6 +267,7 @@ public:
                 p.cycle = e.cycle + e.duration;
                 p.type = e.type;
                 p.component = e.component_name;
+                p.component_id = e.component_id;
                 // A memory controller's events name a bank, not a tile.
                 if (e.type != EventType::MC_ACCESS_TYPE && e.type != EventType::MC_BANK_CONFLICT)
                     if (const auto c = coord_.find(e.tile_id); c != coord_.end()) p.tile = c->second;
@@ -317,6 +331,8 @@ private:
     const program::TileProgram& inputs_;
     std::size_t window_;
     bool keep_events_ = false;
+    std::vector<Result::Handover> handovers_;    // with keep_events_: each action, as handed over
+    std::size_t pulled_ = 0;                     // actions pulled, in program order
     std::map<std::string, Address> base_;
     std::size_t next_ = 0;                      // the trace's next action
     std::deque<TileDescriptor> loads_;          // the dma process's Loads not yet handed over
@@ -400,6 +416,8 @@ private:
                 check_call(*op);
             }
         }
+        if (keep_events_) handovers_.push_back({pulled_, a.kind, a.tile, exec_.current_cycle()});
+        ++pulled_;
         TileDescriptor d = descriptor(a.tile);
         d.program_seq = ++seq_;
         coord_.emplace(d.tile_id, a.tile);
