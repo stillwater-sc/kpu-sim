@@ -122,6 +122,11 @@ struct VectorStage {
     int64_t scale_m = 1;
     int scale_shift = 0;
     std::string from_type, to_type;
+    // A per-channel Scale (#427): `arg` is its multipliers' vector and `arg2` its shifts', each read
+    // from L3 as an Add's vector is -- numbered (read_seq, read_seq2) and waited for (arg_loads, arg_loads2).
+    bool channels = false;
+    TileID arg2{};
+    uint64_t read_seq2 = 0, arg_loads2 = 0;
     // Add and the activations: the type of the words they compute on (empty: fp32). A
     // requantized result's bias is in its accumulator type, its relu in its own (#427).
     std::string word_type;

@@ -1207,11 +1207,16 @@ inline void ConcurrentTimingExecutor::create_components() {
 // which the move that carries them waits for.
 inline ConcurrentTimingExecutor::ArgLoads ConcurrentTimingExecutor::track_reads(std::vector<VectorStage>& stages) {
     ArgLoads deps;
-    for (VectorStage& st : stages)
-        if (st.op == VectorStage::Op::Add) {
+    for (VectorStage& st : stages) {
+        if (st.op == VectorStage::Op::Add || (st.op == VectorStage::Op::Scale && st.channels)) {
             st.read_seq = stage_reads_scheduled_[st.arg]++;
             deps.emplace_back(st.arg, st.arg_loads ? st.arg_loads : loads_scheduled_[st.arg]);
         }
+        if (st.op == VectorStage::Op::Scale && st.channels) {     // its shifts' vector too (#427)
+            st.read_seq2 = stage_reads_scheduled_[st.arg2]++;
+            deps.emplace_back(st.arg2, st.arg_loads2 ? st.arg_loads2 : loads_scheduled_[st.arg2]);
+        }
+    }
     return deps;
 }
 
@@ -1488,6 +1493,14 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
                                              ": the vector is not in L3");
                 program::bias_tile(y.values, y.cols, b->second.payload.values,
                                    st.word_type.empty() ? program::numeric::kFp32 : st.word_type);
+            } else if (st.op == VectorStage::Op::Scale && st.channels) {
+                auto m = l3_payloads_.find(st.arg);
+                auto sh = l3_payloads_.find(st.arg2);
+                if (m == l3_payloads_.end() || sh == l3_payloads_.end())
+                    throw std::runtime_error("Tile context: scale(" + st.arg.to_string() + ", " + st.arg2.to_string() +
+                                             ") on " + id.to_string() + ": the vectors are not in L3");
+                program::requant_tile_channels(st.from_type, st.to_type, y.values, y.cols, m->second.payload.values,
+                                               sh->second.payload.values);
             } else if (st.op == VectorStage::Op::Scale) {
                 program::requant_tile(st.from_type, st.to_type, y.values, st.scale_m, st.scale_shift);
             } else if (st.op == VectorStage::Op::MxInt8 || st.op == VectorStage::Op::MxFp8) {
@@ -1503,15 +1516,18 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
         }
         write_payload(level, id, std::move(y), slot);
     }
-    for (const VectorStage& st : stages)
-        if (st.op == VectorStage::Op::Add) {
-            // Advance the arg's applied prefix: a Release waits for the reads before its count,
-            // whatever order the drains of different tiles complete in.
-            auto& done = stage_reads_done_[st.arg];
-            done.insert(st.read_seq);
-            uint64_t& prefix = stage_reads_applied_[st.arg];
-            for (auto d = done.begin(); d != done.end() && *d == prefix; d = done.erase(d)) ++prefix;
-        }
+    // Advance each read vector's applied prefix: a Release waits for the reads before its count,
+    // whatever order the drains of different tiles complete in.
+    auto applied = [&](const TileID& arg, uint64_t seq) {
+        auto& done = stage_reads_done_[arg];
+        done.insert(seq);
+        uint64_t& prefix = stage_reads_applied_[arg];
+        for (auto d = done.begin(); d != done.end() && *d == prefix; d = done.erase(d)) ++prefix;
+    };
+    for (const VectorStage& st : stages) {
+        if (st.op == VectorStage::Op::Add || (st.op == VectorStage::Op::Scale && st.channels)) applied(st.arg, st.read_seq);
+        if (st.op == VectorStage::Op::Scale && st.channels) applied(st.arg2, st.read_seq2);
+    }
 }
 
 inline void ConcurrentTimingExecutor::publish_result(const TileID& id) {

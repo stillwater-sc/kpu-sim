@@ -469,6 +469,22 @@ private:
                 bias_tile(v, cols, slot_of(b).values, word);
             } else if (is_block_format(st.op)) {
                 numeric::block_convert(block_format_of(st.op), v.data(), v.size());
+            } else if (st.op == VeOp::Scale && st.channels) {   // per channel: m and s from L3 (#427)
+                std::vector<const std::vector<float>*> mv;
+                for (const TileCoord* c : {&st.arg, &st.arg2}) {
+                    const std::string k = c->to_string();
+                    if (!l3_index_.count(k))
+                        throw BehavioralError(where + ": scale(" + st.arg.to_string() + ", " + st.arg2.to_string() +
+                                              ") @ " + to_string(st.place) + ": " + k + " is not resident in L3");
+                    mv.push_back(&slot_of(k).values);
+                }
+                try {
+                    requant_tile_channels(t.acc_type(), t.type, v, cols, *mv[0], *mv[1]);
+                } catch (const std::invalid_argument& e) {
+                    throw BehavioralError(where + ": scale(" + st.arg.to_string() + ", " + st.arg2.to_string() +
+                                          "): " + e.what());
+                }
+                word = t.type;
             } else if (st.op == VeOp::Scale) {     // the accumulator's values into the tensor's type
                 requant_tile(t.acc_type(), t.type, v, st.m, st.shift);
                 word = t.type;

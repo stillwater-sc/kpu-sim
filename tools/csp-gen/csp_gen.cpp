@@ -69,6 +69,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 even, saturated; C is declared `<dtype> ... out acc <accumulator>`.
                                 A linear's epilogue is then add(b[j]), scale, relu, all @ combiner
                                 (--place combiner): b is in the accumulator's type
+  --requant-channels            with --requant: per channel, each column's multiplier and shift
+                                from the int32 vectors qm and qs, scale(qm[j], qs[j]); their
+                                values come with the inputs (--inputs), shifts in 0..62
   --format <none|mxint8|mxfp8>  linear: convert the result into an OCP Microscaling block format,
                                 after the activation, at --place (combiner | bm.egress)
                                 (default none)
@@ -94,7 +97,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (k.rfind("-", 0) != 0) return usage("unexpected argument '" + k + "'");
-        if (k == "--stage-a") {                  // the one option without a value
+        if (k == "--stage-a" || k == "--requant-channels") {   // the options without a value
             if (a.count(k)) return usage(k + " given twice");
             a[k] = "";
             continue;
@@ -111,7 +114,7 @@ int main(int argc, char** argv) {
     for (const auto& [k, v] : a)
         if (k != "--algo" && k != "--size" && k != "--tile" && k != "--l3" && k != "--target" && k != "--orient" &&
             k != "--act" && k != "--place" && k != "--stage-a" && k != "--init" && k != "--dtype" &&
-            k != "--dataflow" && k != "--format" && k != "--requant" && k != "-o")
+            k != "--dataflow" && k != "--format" && k != "--requant" && k != "--requant-channels" && k != "-o")
             return usage("unknown option '" + k + "'");
     for (const char* k : {"--algo", "--size", "--tile"})
         if (!a.count(k)) return usage(std::string(k) + " is required");
@@ -162,6 +165,7 @@ int main(int argc, char** argv) {
         }
         o.requant = true;
     }
+    if (a.count("--requant-channels")) o.requant_channels = true;
     if (a.count("--format")) {
         if (o.algo != "linear") return usage("--format is linear's; --algo is '" + o.algo + "'");
         o.format = a["--format"];

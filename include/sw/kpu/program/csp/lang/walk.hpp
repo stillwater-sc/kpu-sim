@@ -529,15 +529,29 @@ private:
             st.place = r.place;
             st.m = r.m;
             st.shift = r.shift;
-            if (r.arg) {
-                if (!vectors_.count(r.arg->name))
-                    throw CompileError(r.arg->line, "add(" + r.arg->name + "[..]): add takes a vector operand");
-                st.arg = one(*r.arg);
-                const std::string k = st.arg.to_string();
+            // An add's vector, or a per-channel scale's two (#427): each a vector tile, resident in
+            // L3 (the stage reads it there), and as wide as the result tile.
+            const std::string what = r.op == VeOp::Scale ? "scale" : "add";
+            auto vector_tile = [&](const TileRef& ref) {
+                if (!vectors_.count(ref.name))
+                    throw CompileError(ref.line, what + "(" + ref.name + "[..]): " + what + " takes a vector operand");
+                const TileCoord t = one(ref);
+                const std::string k = t.to_string();
                 if (!resident_.count(k))
-                    throw CompileError(r.arg->line, "add(" + k + ") @ " + to_string(r.place) + " reads " + k +
-                                                    ", which is not resident; make it resident first");
-                check_width(st.arg, y, r.arg->line);
+                    throw CompileError(ref.line, what + "(" + k + ") @ " + to_string(r.place) + " reads " + k +
+                                                 ", which is not resident; make it resident first");
+                check_width(t, y, ref.line);
+                return t;
+            };
+            if (r.arg) st.arg = vector_tile(*r.arg);
+            if (r.arg2) {
+                st.arg2 = vector_tile(*r.arg2);
+                st.channels = true;
+                for (const TileCoord& t : {st.arg, st.arg2})
+                    if (operands_.operand(t.operand).type != "int32")
+                        throw CompileError(r.arg->line, "scale(" + t.to_string() + "): a per-channel scale's multipliers "
+                                                        "and shifts are int32; " + t.operand + " is " +
+                                                        operands_.operand(t.operand).type);
             }
             (r.place == Place::BmEgress ? out.second : out.first).push_back(st);
         }
@@ -558,6 +572,9 @@ private:
                 } else if (is_block_format(st.op)) {
                     op.kind = TileOpKind::BlockConvert;
                     op.format = block_format_of(st.op);
+                } else if (st.op == VeOp::Scale && st.channels) {
+                    op.kind = TileOpKind::RequantChannels;   // opset 1.9
+                    op.inputs = {st.arg, st.arg2};
                 } else if (st.op == VeOp::Scale) {
                     op.kind = TileOpKind::Requant;
                     op.scale_m = st.m;

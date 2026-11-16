@@ -458,6 +458,43 @@ inline void requant_tile(const std::string& from, const std::string& to, std::ve
         std::memcpy(&f, &q, sizeof q);
     }
 }
+// Per channel (opset 1.9): column c of a row-major tile of `cols` columns takes its multiplier
+// and shift from m[c] and s[c], int32 words. numeric::requantize refuses an out-of-range one.
+inline void requant_tile_channels(const std::string& from, const std::string& to, std::vector<float>& v,
+                                  std::size_t cols, const std::vector<float>& m, const std::vector<float>& s) {
+    if (m.size() != cols || s.size() != cols)
+        throw std::invalid_argument("Requant: a per-channel scale of " + std::to_string(m.size()) + " multipliers and " +
+                                    std::to_string(s.size()) + " shifts on a tile of " + std::to_string(cols) + " columns");
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        const std::size_t c = i % cols;
+        const auto mc = static_cast<std::int64_t>(numeric::decode("int32", numeric::word_of(m[c])));
+        const auto sc = static_cast<int>(numeric::decode("int32", numeric::word_of(s[c])));
+        v[i] = numeric::float_of(numeric::requantize(from, to, numeric::word_of(v[i]), mc, sc));
+    }
+}
+// Y's words, per channel: inputs = {m's tile, s's tile}, each a vector tile as wide as Y's.
+inline void kernel_requant_channels(TileProgram& prog, const TileOp& op) {
+    const TileCoord& yc = op.outputs.at(0);
+    TensorOperand& Y = prog.operand(yc.operand);
+    const TileCoord& mc = op.inputs.at(0);
+    const TileCoord& sc = op.inputs.at(1);
+    const TensorOperand& M = prog.operand(mc.operand);
+    const TensorOperand& S = prog.operand(sc.operand);
+    const Dim c0 = Y.col_begin(yc.tj), c1 = Y.col_end(yc.tj);
+    for (const auto* v : {&mc, &sc}) {
+        const TensorOperand& t = prog.operand(v->operand);
+        if (t.cols != 1 || t.type != "int32" || t.row_end(v->ti) - t.row_begin(v->ti) != c1 - c0)
+            throw std::invalid_argument("RequantChannels: " + v->to_string() + " is not an int32 vector tile as wide as " +
+                                        yc.to_string());
+    }
+    const Dim m0 = M.row_begin(mc.ti), s0 = S.row_begin(sc.ti);
+    for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
+        for (Dim c = c0; c < c1; ++c) {
+            const auto m = static_cast<std::int64_t>(numeric::decode("int32", M.word(m0 + (c - c0), 0)));
+            const auto s = static_cast<int>(numeric::decode("int32", S.word(s0 + (c - c0), 0)));
+            Y.set_word(r, c, numeric::requantize(Y.acc_type(), Y.type, Y.word(r, c), m, s));
+        }
+}
 inline void kernel_requant(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
     TensorOperand& Y = prog.operand(yc.operand);
@@ -508,6 +545,7 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::MatMulMerge:    kernel_matmul_merge(prog, op); break;
         case TileOpKind::BlockConvert:   kernel_block_convert(prog, op); break;
         case TileOpKind::Requant:        kernel_requant(prog, op); break;
+        case TileOpKind::RequantChannels: kernel_requant_channels(prog, op); break;
         case TileOpKind::L3Load:
         case TileOpKind::L3Store:
         case TileOpKind::L3Move:

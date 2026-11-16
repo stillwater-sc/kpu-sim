@@ -491,3 +491,147 @@ TEST_CASE("Requant: the generator writes a requantized linear on the Combiner on
     o.requant = false;
     CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("dtype is matmul's (and a requantized linear's)"));
 }
+
+namespace {
+
+// A requantized linear with a per-channel scale (#427): scale(qm[j], qs[j]) @ combiner.
+std::string linear_pc(const std::string& dataflow) {
+    gen::Options o;
+    o.algo = "linear";
+    o.size = 64;
+    o.tile = 16;
+    o.l3 = 14;
+    o.dtype = "int8";
+    o.dataflow = dataflow;
+    o.place = "combiner";
+    o.requant = true;
+    o.requant_channels = true;
+    return gen::generate(o);
+}
+
+// Each column's multiplier and shift: valid, and varying, so a level that read the wrong column's
+// would be caught.
+void set_channels(TileProgram& in) {
+    TensorOperand& m = in.operand("qm");
+    TensorOperand& s = in.operand("qs");
+    for (Dim c = 0; c < m.rows; ++c) {
+        m.set_word(c, 0, numeric::encode("int32", double(1 + (c * 5) % 7)));
+        s.set_word(c, 0, numeric::encode("int32", double(6 + (c * 3) % 7)));
+    }
+}
+
+}  // namespace
+
+TEST_CASE("Requant: a per-channel scale, on every dataflow and level", "[program][csp][run][requant]") {
+    // Each column c: round((x + b[c]) * qm[c] / 2^qs[c]), saturated, then relu. The reference is
+    // computed here from the int32 matmul, as the uniform scale's is.
+    const auto d = s1_with_full_combiner();
+    CHECK_THAT(linear_pc("os"), ContainsSubstring("via add(b[j]) @ combiner, scale(qm[j], qs[j]) @ combiner, relu @ combiner;"));
+    CHECK_THAT(linear_pc("os"), ContainsSubstring("vector qs[64] int32 tile 16 in;"));
+    for (const char* df : {"os", "ws", "is"}) {
+        CAPTURE(df);
+        const lang::Program ast = lang::parse(linear_pc(df));
+        TileProgram in = driver::csp_inputs(ast);
+        set_channels(in);
+        const lang::Program plain_ast = lang::parse(matmul(df, false));
+        TileProgram plain_in = driver::csp_inputs(plain_ast);
+        for (const char* n : {"A", "B"}) plain_in.operand(n).values = in.operand(n).values;
+        const auto plain = driver::csp_reference(plain_ast, plain_in, 1'000'000);
+        REQUIRE(plain.values);
+        const TensorOperand& c32 = plain.values->operand("C");
+        const TensorOperand& b = in.operand("b");
+        const TensorOperand& qm = in.operand("qm");
+        const TensorOperand& qs = in.operand("qs");
+        std::vector<long long> want;
+        for (Dim r = 0; r < c32.rows; ++r)
+            for (Dim c = 0; c < c32.cols; ++c) {
+                const long long x = static_cast<long long>(static_cast<std::int32_t>(static_cast<std::uint32_t>(
+                    static_cast<std::int64_t>(c32.value(r, c)) + static_cast<std::int64_t>(b.value(c, 0)))));
+                const long long q = expected(x, static_cast<long long>(qm.value(c, 0)), static_cast<int>(qs.value(c, 0)));
+                want.push_back(std::max(q, 0LL));
+            }
+        driver::CspRunRequest req{ast, &d, in,
+                                  {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential, ExecutionLevel::CycleAccurate}};
+        const auto r = driver::run_csp(req);
+        REQUIRE(r.reference);
+        CHECK(r.reference_note.empty());               // the trace (REQUANT_CHANNELS) replays L-B
+        for (const auto& o : r.levels) {
+            CAPTURE(to_string(o.level));
+            INFO(o.skipped.value_or(""));
+            REQUIRE_FALSE(o.skipped);
+            const TensorOperand& got = o.values.operand("C");
+            std::size_t n = 0, bad = 0;
+            for (Dim rr = 0; rr < got.rows; ++rr)
+                for (Dim cc = 0; cc < got.cols; ++cc)
+                    if (static_cast<long long>(got.value(rr, cc)) != want[n++]) ++bad;
+            CHECK(bad == 0);
+        }
+        // The channels differ: a uniform scale by column 0's values would not give these results.
+        std::size_t differ = 0;
+        for (Dim c = 1; c < c32.cols; ++c)
+            differ += qm.value(c, 0) != qm.value(0, 0) || qs.value(c, 0) != qs.value(0, 0);
+        CHECK(differ > 0);
+    }
+}
+
+TEST_CASE("Requant: a per-channel scale's trace is opset 1.9, and refuses bad values", "[program][csp][requant]") {
+    const lang::Program ast = lang::parse(linear_pc("os"));
+    TileProgram in = driver::csp_inputs(ast);
+    set_channels(in);
+    const auto ref = driver::csp_reference(ast, in, 1'000'000);
+    REQUIRE(ref.trace);
+    std::ostringstream os;
+    serialize::WriteOptions with_values;
+    with_values.include_values = true;
+    serialize::write_l0(os, *ref.trace, with_values);
+    CHECK_THAT(os.str(), ContainsSubstring("OPSET tile 1.9.0"));
+    CHECK_THAT(os.str(), ContainsSubstring("kind=REQUANT_CHANNELS in=qm:0,0;qs:0,0 out=C:0,0"));
+    std::istringstream is(os.str());
+    TileProgram back = serialize::read_l0(is);
+    (void)TileProgramReference().run(back);
+    const auto& a = back.operand("C").values;
+    const auto& w = ref.values->operand("C").values;
+    CHECK((a.size() == w.size() && std::memcmp(a.data(), w.data(), a.size() * sizeof(float)) == 0));
+    // A shift outside 0..62 is refused where it is used, naming the stage.
+    TileProgram bad = in;
+    bad.operand("qs").set_word(3, 0, numeric::encode("int32", 63.0));
+    CHECK_THROWS_WITH(driver::csp_reference(ast, bad, 1'000'000), ContainsSubstring("the shift 63 is outside 0..62"));
+}
+
+TEST_CASE("Requant: what a per-channel scale refuses", "[program][csp][lang][requant]") {
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8) {\n"
+                             "  tensor A[16,16] int8 tile 16x16 in;\n  tensor B[16,16] int8 tile 16x16 in;\n"
+                             "  tensor C[16,16] int8 tile 16x16 out acc int32;\n"
+                             "  vector qm[16] int32 tile 16 in;\n  vector qs[16] int32 tile 16 in;\n"
+                             "  vector q8[16] int8 tile 16 in;\n";
+    const std::string fab = "  resident A[0, 0], B[0, 0], qm[0], qs[0], q8[0];\n"
+                            "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n";
+    const std::string end = "  release A[0, 0], B[0, 0], qm[0], qs[0], q8[0];\n}\n";
+    BOTH_ACCEPT(head + fab + "  store C[0, 0] via scale(qm[0], qs[0]) @ combiner;\n" + end);
+    BOTH_REFUSE(head + fab + "  store C[0, 0] via scale(qm[0]) @ combiner;\n" + end,
+                "a vector of multipliers and one of shifts");
+    BOTH_REFUSE(head + fab + "  store C[0, 0] via scale(qm[0], q8[0]) @ combiner;\n" + end,
+                "a per-channel scale's multipliers and shifts are int32; q8 is int8");
+    BOTH_REFUSE(head + fab + "  store C[0, 0] via scale(qm[0], A[0, 0]) @ combiner;\n" + end, "scale takes a vector operand");
+    // Resident, as an add's vector must be.
+    BOTH_REFUSE(head + "  resident A[0, 0], B[0, 0];\n  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
+                       "  store C[0, 0] via scale(qm[0], qs[0]) @ combiner;\n  release A[0, 0], B[0, 0];\n}\n",
+                "resident");
+    // The text round-trips.
+    const std::string ok = head + fab + "  store C[0, 0] via scale(qm[0], qs[0]) @ combiner;\n" + end;
+    const std::string text = lang::format(lang::parse(ok));
+    CHECK_THAT(text, ContainsSubstring("scale(qm[0], qs[0]) @ combiner"));
+    CHECK(lang::format(lang::parse(text)) == text);
+    // Synthesized inputs span int32, so their shifts are refused, naming the stage and the value.
+    const lang::Program ast = lang::parse(linear_pc("os"));
+    CHECK_THROWS_WITH(driver::csp_reference(ast, driver::csp_inputs(ast), 1'000'000),
+                      ContainsSubstring("scale(qm[0,0], qs[0,0]): requantize: the shift"));
+    gen::Options o;
+    o.algo = "matmul";
+    o.size = 64;
+    o.tile = 16;
+    o.l3 = 12;
+    o.dtype = "int8";
+    o.requant_channels = true;
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("it needs --requant"));
+}

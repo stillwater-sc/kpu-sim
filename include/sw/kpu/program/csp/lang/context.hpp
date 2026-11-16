@@ -75,7 +75,8 @@ inline const char* site_of(Place p) {
 struct ResolvedStage {
     VeOp op = VeOp::Relu;
     Place place = Place::Fabric;
-    std::optional<TileRef> arg;
+    std::optional<TileRef> arg;         // add's vector; a per-channel scale's multipliers
+    std::optional<TileRef> arg2;        // a per-channel scale's shifts
     std::int64_t m = 1;                 // scale
     int shift = 0;
 };
@@ -111,17 +112,29 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
         }
         // The Combiner's order: bias, scale, activation, format.
         if (r.op == VeOp::Scale) {
-            if (s.nums.size() != 2) fail(s.line, "scale takes a multiplier and a shift: scale(m, shift)");
-            if (s.nums[0] <= -(1LL << 31) || s.nums[0] >= (1LL << 31))
-                fail(s.line, "scale: the multiplier " + std::to_string(s.nums[0]) + " is outside (-2^31, 2^31)");
-            if (s.nums[1] < 0 || s.nums[1] > 62) fail(s.line, "scale: the shift " + std::to_string(s.nums[1]) + " is outside 0..62");
+            // Per channel (#427): scale(m[j], s[j]), a vector of multipliers and one of shifts, as
+            // wide as the result tile; their values are checked as they are used.
+            if (!s.args.empty()) {
+                if (s.args.size() != 2)
+                    fail(s.line, "scale per channel takes a vector of multipliers and one of shifts: scale(m[j], s[j])");
+                r.arg = s.args[0];
+                r.arg2 = s.args[1];
+            } else {
+                if (s.nums.size() != 2) fail(s.line, "scale takes a multiplier and a shift: scale(m, shift)");
+                if (s.nums[0] <= -(1LL << 31) || s.nums[0] >= (1LL << 31))
+                    fail(s.line, "scale: the multiplier " + std::to_string(s.nums[0]) + " is outside (-2^31, 2^31)");
+                if (s.nums[1] < 0 || s.nums[1] > 62)
+                    fail(s.line, "scale: the shift " + std::to_string(s.nums[1]) + " is outside 0..62");
+            }
             if (r.place != Place::Combiner)
                 fail(s.line, "scale @ " + s.place + ": the requantization runs on the Combiner, as the result enters L2");
             if (after_scale)
                 fail(s.line, "scale follows " + after_scale->op + ": the order is bias, scale, activation, format");
             if (scaled) fail(s.line, "scale: the result is already requantized");
-            r.m = s.nums[0];
-            r.shift = static_cast<int>(s.nums[1]);
+            if (!r.arg) {
+                r.m = s.nums[0];
+                r.shift = static_cast<int>(s.nums[1]);
+            }
             scaled = true;
         } else if (r.op == VeOp::Add) {
             if (scaled) fail(s.line, "add follows scale: the order is bias, scale, activation, format");
@@ -131,7 +144,7 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
         if (r.op == VeOp::Add) {
             if (s.args.size() != 1) fail(s.line, "add takes one vector tile: add(b[j])");
             r.arg = s.args.front();
-        } else if (!s.args.empty()) {
+        } else if (!s.args.empty() && r.op != VeOp::Scale) {
             fail(s.line, s.op + " takes no operand");
         }
         const int rank = static_cast<int>(r.place);   // Fabric < Combiner < BmEgress: the result's path

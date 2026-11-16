@@ -93,6 +93,9 @@ struct Options {
     bool requant = false;
     long long requant_m = 1;
     int requant_shift = 0;
+    // requant per channel (#427): each column's multiplier and shift from the int32 vectors qm and
+    // qs, resident with B's panel as a linear's b is -- scale(qm[j], qs[j]) @ combiner.
+    bool requant_channels = false;
 };
 
 // Tiles along one dimension.
@@ -109,10 +112,11 @@ inline std::string accumulator_of(const std::string& in) {
 inline std::size_t slots_needed(const Options& o) {
     const std::size_t nt = tiles(o);
     if (o.algo == "lu") return nt * nt;
+    const std::size_t qv = o.requant && o.requant_channels ? 2 : 0;     // qm's and qs's tiles
     if (o.dataflow != "os") {               // ws, is: one operand's panel and the stationary tile,
-        return nt + (o.algo == "linear" && o.place != "unfused" ? 2 : 1);   // and b's tile
+        return nt + (o.algo == "linear" && o.place != "unfused" ? 2 : 1) + qv;   // and b's tile
     }
-    const std::size_t mm = 2 * nt + 1;
+    const std::size_t mm = 2 * nt + 1 + qv;
     if (o.algo == "linear" && o.place != "unfused") return mm + 1;
     if (o.algo == "matmul" && (o.init == "bias" || o.init == "bias-row")) return mm + 1;   // D's tile, or b's
     return mm;                              // accumulate: C's tile is handed to the fabric before its calls                              // the unfused pass needs 2, which mm always covers
@@ -171,6 +175,8 @@ inline void check(const Options& o) {
         if (o.requant_m <= -(1LL << 31) || o.requant_m >= (1LL << 31) || o.requant_shift < 0 || o.requant_shift > 62)
             throw GenError("csp-gen: requant m in (-2^31, 2^31), shift in 0..62");
     }
+    if (o.requant_channels && !o.requant)
+        throw GenError("csp-gen: requant_channels is a requantization's: it needs --requant");
     if (o.dataflow != "os" && o.dataflow != "ws" && o.dataflow != "is")
         throw GenError("csp-gen: dataflow '" + o.dataflow + "' (os | ws | is)");
     if (o.dataflow != "os") {
@@ -230,9 +236,22 @@ inline std::string result_tensor(const Options& o, const char* io, const std::st
     return t.substr(0, t.size() - 2) + " acc " + acc + ";\n";     // before the ';\n'
 }
 
-// A requantized matmul's stage (#427): its result's accumulator values into its dtype.
+// A requantized matmul's stage (#427): its result's accumulator values into its dtype, by one
+// multiplier and shift, or per channel by qm[j] and qs[j].
+inline std::string scale_args(const Options& o) {
+    return o.requant_channels ? std::string("qm[j], qs[j]")
+                              : std::to_string(o.requant_m) + ", " + std::to_string(o.requant_shift);
+}
+// A per-channel scale's vectors: each column's multiplier (qm) and shift (qs), int32.
+inline std::string scale_vectors(const Options& o) {
+    if (!(o.requant && o.requant_channels)) return {};
+    std::string s;
+    for (const char* v : {"qm", "qs"})
+        s += "  vector " + std::string(v) + "[" + std::to_string(o.size) + "] int32 tile " + std::to_string(o.tile) + " in;\n";
+    return s;
+}
 inline std::string requant_stage(const Options& o) {
-    return " via scale(" + std::to_string(o.requant_m) + ", " + std::to_string(o.requant_shift) + ") @ combiner";
+    return " via scale(" + scale_args(o) + ") @ combiner";
 }
 
 // A fused linear's context: act(C + b) at its place, then its block format; requantized (#427),
@@ -240,8 +259,7 @@ inline std::string requant_stage(const Options& o) {
 inline std::string format_stage(const Options& o);
 inline std::string linear_stages(const Options& o) {
     if (o.requant)
-        return " via add(b[j]) @ combiner, scale(" + std::to_string(o.requant_m) + ", " +
-               std::to_string(o.requant_shift) + ") @ combiner, " + to_string(o.act) + " @ combiner";
+        return " via add(b[j]) @ combiner, scale(" + scale_args(o) + ") @ combiner, " + to_string(o.act) + " @ combiner";
     return std::string(" via add(b[j]) @ ") + o.place + ", " + to_string(o.act) + " @ " + o.place + format_stage(o);
 }
 
@@ -253,7 +271,8 @@ inline std::string format_stage(const Options& o) {
 // The matmul nest, and for a fused linear its bias (resident with B's panel) and context.
 inline std::string matmul_nest(const Options& o, bool linear_fused) {
     const std::string nt = std::to_string(tiles(o));
-    const std::string bias = linear_fused || o.init == "bias-row" ? ", b[j]" : "";
+    const std::string bias = std::string(linear_fused || o.init == "bias-row" ? ", b[j]" : "") +
+                             (o.requant && o.requant_channels ? ", qm[j], qs[j]" : "");
     // A fused store carries its epilogue, which reads b[j] where it is written; a late store
     // carries none (lang/validate.hpp), so only the plain matmul nest defers its stores.
     std::string via = " late";
@@ -341,8 +360,12 @@ inline std::string stationary_nest(const Options& o, bool linear_fused) {
         const std::string held = ws ? "B[" + k + ", j]" : "A[i, " + k + "]";     // the stationary tile
         const std::string in = last ? "      " : "        ";
         std::string call = "call gemm(A[i, " + k + "], B[" + k + ", j]) +-> C[i, j]" + (last ? epilogue : std::string()) + ";";
-        const std::string with_b = last && ws && bias ? std::string(", b[j]") : std::string();
-        if (last && !ws && bias) call = "resident b[j]; " + call + " release b[j];";
+        // The epilogue's vectors (b, and a per-channel scale's qm and qs), resident around the
+        // final merges: for ws with the panel's last block, for is around each call.
+        const std::string vecs = std::string(bias ? "b[j]" : "") +
+                                 (o.requant && o.requant_channels ? std::string(bias ? ", " : "") + "qm[j], qs[j]" : "");
+        const std::string with_b = last && ws && !vecs.empty() ? ", " + vecs : std::string();
+        if (last && !ws && !vecs.empty()) call = "resident " + vecs + "; " + call + " release " + vecs + ";";
         std::string t;
         t += in + "resident " + moving + ", " + held + with_b + ";\n";
         t += in + "stage " + held + " in l2 {\n";
@@ -382,6 +405,7 @@ inline std::string matmul(const Options& o) {
              ") {\n";
         const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
         s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype) + result_tensor(o, "out", acc);
+        s += scale_vectors(o);
         s += stationary_nest(o, false);
         return s + "}\n";
     }
@@ -402,6 +426,7 @@ inline std::string matmul(const Options& o) {
         s += "  vector b[" + std::to_string(o.size) + "]" + (acc == "fp32" ? std::string() : " " + acc) + " tile " +
              std::to_string(o.tile) + " in;\n";
     s += result_tensor(o, o.init == "accumulate" ? "inout" : "out", acc);
+    s += scale_vectors(o);
     s += matmul_nest(o, false);
     return s + "}\n";
 }
@@ -426,6 +451,7 @@ inline std::string linear(const Options& o) {
     s += "  vector b[" + std::to_string(o.size) + "]" + (acc == "fp32" ? std::string() : " " + acc) + " tile " +
          std::to_string(o.tile) + " in;\n";
     s += o.requant ? result_tensor(o, "out", acc) : tensor("C", o, fused ? "out" : "inout");
+    s += scale_vectors(o);
     s += o.dataflow != "os" ? stationary_nest(o, fused) : matmul_nest(o, fused);
     if (!fused) {
         // The epilogue as calls, on C read back from DRAM: a second round trip.

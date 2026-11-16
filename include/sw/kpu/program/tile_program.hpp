@@ -201,6 +201,11 @@ enum class TileOpKind {
     // Y's type -- round(x * m / 2^shift), ties to even, saturated (numeric::requantize). The
     // Combiner's scale stage. outputs = {Y}; `scale_m`, `scale_shift`.
     Requant,
+    // Per-channel requantization (opset 1.9; #427): as REQUANT, with each column c's multiplier and
+    // shift read from two int32 vector tiles as wide as Y's: round(x * m[c] / 2^s[c]). inputs =
+    // {m's tile, s's tile}, outputs = {Y}. A new op rather than inputs on REQUANT: a 1.8 reader
+    // would drop them and scale by REQUANT's defaults; this one it refuses by name.
+    RequantChannels,
 };
 
 // An L3 transaction: carries an L3 address and one tile (outputs[0]); computes nothing.
@@ -243,6 +248,7 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::MatMulMerge:    return "MATMUL_MERGE";
         case TileOpKind::BlockConvert:   return "BLOCK_CONVERT";
         case TileOpKind::Requant:        return "REQUANT";
+        case TileOpKind::RequantChannels: return "REQUANT_CHANNELS";
     }
     return "?";
 }
@@ -400,6 +406,7 @@ inline std::string TileProgram::disassemble() const {
             if (op.kind == TileOpKind::BlockConvert) s += " (" + op.format + ")";
             if (op.kind == TileOpKind::Requant)
                 s += " (scale " + std::to_string(op.scale_m) + " >> " + std::to_string(op.scale_shift) + ")";
+            if (op.kind == TileOpKind::RequantChannels) s += " (scale per channel)";
             if (op.pivot_slot >= 0) s += " {pivot#" + std::to_string(op.pivot_slot) + "}";
             if (op.kind == TileOpKind::Activation) s += std::string(" (") + to_string(op.act) + ")";
         }
