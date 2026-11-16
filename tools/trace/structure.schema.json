@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/stillwater-sc/kpu-sim/tools/trace/structure.schema.json",
+  "title": "kpu-structure v1: the machine's structure and floorplan (#392)",
+  "description": "docs/plans/shared-structure-record.md. The shape only; structure_check.py checks the semantics (S1-S5, F1-F3).",
+  "type": "object",
+  "required": ["format", "version", "provenance", "blocks"],
+  "properties": {
+    "format": {"const": "kpu-structure"},
+    "version": {"const": 1},
+    "provenance": {
+      "type": "object",
+      "required": ["producer", "source"],
+      "properties": {
+        "producer": {"type": "string", "minLength": 1},
+        "source": {"enum": ["model", "rtl"]},
+        "configuration": {"type": "string"},
+        "configuration_digest": {"type": "string"},
+        "from": {"type": "string"},
+        "details": {"type": "object"}
+      }
+    },
+    "units": {
+      "type": "object",
+      "properties": {"length": {"const": "mm"}, "area": {"const": "mm2"}}
+    },
+    "blocks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/block"}},
+    "channels": {"type": "array", "items": {"$ref": "#/$defs/channel"}},
+    "networks": {"type": "array", "items": {"$ref": "#/$defs/network"}},
+    "floorplan": {"$ref": "#/$defs/floorplan"}
+  },
+  "$defs": {
+    "rect": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+    "point": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+    "block": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["die", "array", "compute_tile", "l3_tile", "l3_bank", "l2_bank", "l1_vector",
+                          "register_file", "block_mover", "noc_router", "noc_port", "memory_controller",
+                          "dma_engine", "dram_phy", "io", "control", "host_bridge", "cpu", "cpu_hart",
+                          "cpu_sram", "descriptor_ring", "completion_ring"]},
+        "parent": {"type": "string"},
+        "label": {"type": "string"},
+        "resource": {"type": "string"},
+        "rtl_path": {"type": "string"},
+        "layer": {"enum": ["dram", "l3", "l2", "l1", "fabric"]},
+        "role": {"enum": ["dma", "block_mover", "streamer", "fabric", "combiner"]},
+        "clock_domain": {"type": "string"},
+        "class": {"type": "string"},
+        "sites": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}},
+        "generated": {"type": "boolean"},
+        "resources": {"type": "array", "items": {"$ref": "#/$defs/resource"}},
+        "rect": {"$ref": "#/$defs/rect"},
+        "area": {"type": "number", "minimum": 0},
+        "notes": {"type": "string"}
+      }
+    },
+    "resource": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["memory", "slot_pool", "queue", "stream_buffer", "result_buffer", "pe_grid", "bus"]}
+      }
+    },
+    "channel": {
+      "type": "object",
+      "required": ["id", "kind", "from", "to"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"enum": ["data", "command", "sync"]},
+        "from": {"type": "string"},
+        "to": {"type": "string"},
+        "width_bits": {"type": "integer", "minimum": 0}
+      }
+    },
+    "network": {
+      "type": "object",
+      "required": ["id", "kind", "nodes", "links"],
+      "properties": {
+        "id": {"type": "string"},
+        "kind": {"enum": ["noc_request", "noc_response", "noc", "ring", "control_tree", "dram_l3"]},
+        "routing": {"type": "string"},
+        "description": {"type": "string"},
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "kind"],
+            "properties": {
+              "id": {"type": "string"},
+              "kind": {"type": "string"},
+              "block": {"type": "string"},
+              "at": {"$ref": "#/$defs/point"},
+              "level": {"type": "integer"}
+            }
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "from", "to"],
+            "properties": {
+              "id": {"type": "string"},
+              "from": {"type": "string"},
+              "to": {"type": "string"},
+              "points": {"type": "array", "items": {"$ref": "#/$defs/point"}},
+              "length": {"type": "number", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "floorplan": {
+      "type": "object",
+      "properties": {
+        "die": {
+          "type": "object",
+          "required": ["width", "height"],
+          "properties": {"width": {"type": "number"}, "height": {"type": "number"}, "area": {"type": "number"}}
+        },
+        "estimated": {"type": "boolean"},
+        "area": {"type": "object"}
+      }
+    }
+  }
+}

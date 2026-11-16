@@ -1,0 +1,1069 @@
+{
+ "format": "kpu-structure",
+ "version": 1,
+ "provenance": {
+  "producer": "kpu-gen 756039f",
+  "source": "rtl",
+  "configuration": "kpu_2x2_systolic",
+  "configuration_digest": "d0f029f49896cebd6cef71ef11e82e1f032a5cc0fd35b85d2385976c9307242a",
+  "from": "kpu-gen-floorplan 1",
+  "details": {
+   "process_node": {
+    "id": "tsmc_n7",
+    "name": "N7"
+   },
+   "model": {
+    "package": "branes-silicon",
+    "version": "0.1.0",
+    "silicon_bin_profile": "stillwater_kpu_default",
+    "confidence": "theoretical"
+   },
+   "placement": {
+    "source": "kpu-gen",
+    "note": "the checkerboard composer's site assignment"
+   },
+   "as_built": {
+    "systolic_int8_ws": "generator"
+   },
+   "rtl": {
+    "generated": true,
+    "problems": []
+   }
+  }
+ },
+ "units": {
+  "length": "mm",
+  "area": "mm2"
+ },
+ "blocks": [
+  {
+   "id": "soc",
+   "kind": "die",
+   "rtl_path": "soc",
+   "generated": true,
+   "rect": [
+    0.0,
+    0.0,
+    9.67171428121499,
+    2.8339797529748236
+   ],
+   "area": 27.409442449520732
+  },
+  {
+   "id": "soc.checkerboard",
+   "kind": "array",
+   "rtl_path": "soc.checkerboard",
+   "parent": "soc",
+   "generated": true,
+   "rect": [
+    4.617813894569336,
+    1.3079682534683323,
+    0.4360864920763188,
+    0.21804324603815894
+   ],
+   "area": 0.09508571428571443,
+   "notes": "2x2 compute sites at a 0.1090 mm pitch (kpu-gen kind: checkerboard)"
+  },
+  {
+   "id": "soc.checkerboard.tile_0_0",
+   "kind": "compute_tile",
+   "rtl_path": "soc.checkerboard.tile_0_0",
+   "parent": "soc.checkerboard",
+   "class": "systolic_int8_ws",
+   "sites": [
+    [
+     0,
+     0
+    ]
+   ],
+   "generated": true,
+   "rect": [
+    4.617813894569336,
+    1.3079682534683323,
+    0.1090216230190795,
+    0.1090216230190795
+   ],
+   "area": 0.011885714285714286,
+   "notes": "(kpu-gen kind: systolic)",
+   "layer": "fabric"
+  },
+  {
+   "id": "soc.checkerboard.tile_0_1",
+   "kind": "compute_tile",
+   "rtl_path": "soc.checkerboard.tile_0_1",
+   "parent": "soc.checkerboard",
+   "class": "systolic_int8_ws",
+   "sites": [
+    [
+     0,
+     1
+    ]
+   ],
+   "generated": true,
+   "rect": [
+    4.835857140607495,
+    1.3079682534683323,
+    0.1090216230190795,
+    0.1090216230190795
+   ],
+   "area": 0.011885714285714286,
+   "notes": "(kpu-gen kind: systolic)",
+   "layer": "fabric"
+  },
+  {
+   "id": "soc.checkerboard.tile_1_0",
+   "kind": "compute_tile",
+   "rtl_path": "soc.checkerboard.tile_1_0",
+   "parent": "soc.checkerboard",
+   "class": "systolic_int8_ws",
+   "sites": [
+    [
+     1,
+     0
+    ]
+   ],
+   "generated": true,
+   "rect": [
+    4.617813894569336,
+    1.4169898764874118,
+    0.1090216230190795,
+    0.1090216230190795
+   ],
+   "area": 0.011885714285714286,
+   "notes": "(kpu-gen kind: systolic)",
+   "layer": "fabric"
+  },
+  {
+   "id": "soc.checkerboard.tile_1_1",
+   "kind": "compute_tile",
+   "rtl_path": "soc.checkerboard.tile_1_1",
+   "parent": "soc.checkerboard",
+   "class": "systolic_int8_ws",
+   "sites": [
+    [
+     1,
+     1
+    ]
+   ],
+   "generated": true,
+   "rect": [
+    4.835857140607495,
+    1.4169898764874118,
+    0.1090216230190795,
+    0.1090216230190795
+   ],
+   "area": 0.011885714285714286,
+   "notes": "(kpu-gen kind: systolic)",
+   "layer": "fabric"
+  },
+  {
+   "id": "soc.checkerboard.cell_0_0",
+   "kind": "l3_tile",
+   "rtl_path": "soc.checkerboard.cell_0_0",
+   "parent": "soc.checkerboard",
+   "sites": [
+    [
+     0,
+     0
+    ]
+   ],
+   "generated": true,
+   "rect": [
+    4.726835517588415,
+    1.3079682534683323,
+    0.1090216230190795,
+    0.1090216230190795
+   ],
+   "area": 0.011885714285714286,
+   "notes": "(kpu-gen kind: memory_cell)",
+   "layer": "l3"
+  },
+  {
+   "id": "soc.checkerboard.cell_0_1",
+   "kind": "l3_tile",
+   "rtl_path": "soc.checkerboard.cell_0_1",
+   "parent": "soc.checkerboard",
+   "sites": [
+    [
+     0,
+     1
+    ]
+   ],
+   "generated": true,
+   "rect": [
+    4.9448787636265745,
+    1.3079682534683323,
+    0.1090216230190795,
+    0.1090216230190795
+   ],
+   "area": 0.011885714285714286,
+   "notes": "(kpu-gen kind: memory_cell)",
+   "layer": "l3"
+  },
+  {
+   "id": "soc.checkerboard.cell_1_0",
+   "kind": "l3_tile",
+   "rtl_path": "soc.checkerboard.cell_1_0",
+   "parent": "soc.checkerboard",
+   "sites": [
+    [
+     1,
+     0
+    ]
+   ],
+   "generated": true,
+   "rect": [
+    4.726835517588415,
+    1.4169898764874118,
+    0.1090216230190795,
+    0.1090216230190795
+   ],
+   "area": 0.011885714285714286,
+   "notes": "(kpu-gen kind: memory_cell)",
+   "layer": "l3"
+  },
+  {
+   "id": "soc.checkerboard.cell_1_1",
+   "kind": "l3_tile",
+   "rtl_path": "soc.checkerboard.cell_1_1",
+   "parent": "soc.checkerboard",
+   "sites": [
+    [
+     1,
+     1
+    ]
+   ],
+   "generated": true,
+   "rect": [
+    4.9448787636265745,
+    1.4169898764874118,
+    0.1090216230190795,
+    0.1090216230190795
+   ],
+   "area": 0.011885714285714286,
+   "notes": "(kpu-gen kind: memory_cell)",
+   "layer": "l3"
+  },
+  {
+   "id": "soc.memory_phy.top_ch0",
+   "kind": "dram_phy",
+   "rtl_path": "soc.memory_phy.top_ch0",
+   "parent": "soc",
+   "generated": false,
+   "rect": [
+    2.315936506936664,
+    1.5260114995064915,
+    5.039841267341661,
+    1.0079682534683323
+   ],
+   "area": 5.08,
+   "notes": "DRAM controller and PHY: outside the generated RTL, which ends at the SoC's AXI4 dram port (kpu-gen kind: memory_phy)"
+  },
+  {
+   "id": "soc.io_ring.bottom",
+   "kind": "io",
+   "rtl_path": "soc.io_ring.bottom",
+   "parent": "soc",
+   "generated": false,
+   "rect": [
+    0.0,
+    0.0,
+    9.67171428121499,
+    0.3
+   ],
+   "area": 2.901514284364497,
+   "notes": "I/O pads: not generated (kpu-gen kind: io_ring)"
+  },
+  {
+   "id": "soc.io_ring.top",
+   "kind": "io",
+   "rtl_path": "soc.io_ring.top",
+   "parent": "soc",
+   "generated": false,
+   "rect": [
+    0.0,
+    2.533979752974824,
+    9.67171428121499,
+    0.3
+   ],
+   "area": 2.901514284364497,
+   "notes": "I/O pads: not generated (kpu-gen kind: io_ring)"
+  },
+  {
+   "id": "soc.io_ring.left",
+   "kind": "io",
+   "rtl_path": "soc.io_ring.left",
+   "parent": "soc",
+   "generated": false,
+   "rect": [
+    0.0,
+    0.3,
+    0.3,
+    2.2339797529748235
+   ],
+   "area": 0.6701939258924471,
+   "notes": "I/O pads: not generated (kpu-gen kind: io_ring)"
+  },
+  {
+   "id": "soc.io_ring.right",
+   "kind": "io",
+   "rtl_path": "soc.io_ring.right",
+   "parent": "soc",
+   "generated": false,
+   "rect": [
+    9.37171428121499,
+    0.3,
+    0.3,
+    2.2339797529748235
+   ],
+   "area": 0.6701939258924471,
+   "notes": "I/O pads: not generated (kpu-gen kind: io_ring)"
+  },
+  {
+   "id": "soc.control",
+   "kind": "control",
+   "rtl_path": "soc.control",
+   "parent": "soc",
+   "generated": false,
+   "rect": [
+    0.3,
+    0.3,
+    0.29649972666444047,
+    0.29649972666444047
+   ],
+   "area": 0.0879120879120879,
+   "notes": "Aggregates 1 control block(s); placed in bottom-left corner gap (outside mesh)"
+  },
+  {
+   "id": "soc.host_bridge",
+   "kind": "host_bridge",
+   "rtl_path": "soc.host_bridge",
+   "parent": "soc.control",
+   "generated": true,
+   "rect": [
+    0.3,
+    0.3,
+    0.14824986333222023,
+    0.29649972666444047
+   ],
+   "area": 0.04395604395604395,
+   "notes": "half of the control block (an estimate)"
+  },
+  {
+   "id": "soc.dma",
+   "kind": "dma_engine",
+   "rtl_path": "soc.dma",
+   "parent": "soc.control",
+   "generated": true,
+   "rect": [
+    0.4482498633322202,
+    0.3,
+    0.14824986333222023,
+    0.29649972666444047
+   ],
+   "area": 0.04395604395604395,
+   "notes": "half of the control block (an estimate) (kpu-gen kind: dma)"
+  }
+ ],
+ "networks": [
+  {
+   "id": "noc_req",
+   "kind": "noc_request",
+   "routing": "xy",
+   "description": "request network: XY mesh, one router per site",
+   "nodes": [
+    {
+     "id": "soc.checkerboard.noc_req.router_0_0",
+     "kind": "router",
+     "at": [
+      4.726835517588415,
+      1.3842833895816882
+     ]
+    },
+    {
+     "id": "soc.checkerboard.noc_req.router_0_1",
+     "kind": "router",
+     "at": [
+      4.9448787636265745,
+      1.3842833895816882
+     ]
+    },
+    {
+     "id": "soc.checkerboard.noc_req.router_1_0",
+     "kind": "router",
+     "at": [
+      4.726835517588415,
+      1.4933050126007676
+     ]
+    },
+    {
+     "id": "soc.checkerboard.noc_req.router_1_1",
+     "kind": "router",
+     "at": [
+      4.9448787636265745,
+      1.4933050126007676
+     ]
+    }
+   ],
+   "links": [
+    {
+     "id": "soc.checkerboard.noc_req.link_0_0_e",
+     "from": "soc.checkerboard.noc_req.router_0_0",
+     "to": "soc.checkerboard.noc_req.router_0_1",
+     "points": [
+      [
+       4.726835517588415,
+       1.3842833895816882
+      ],
+      [
+       4.9448787636265745,
+       1.3842833895816882
+      ]
+     ],
+     "length": 0.2180432460381594
+    },
+    {
+     "id": "soc.checkerboard.noc_req.link_0_0_n",
+     "from": "soc.checkerboard.noc_req.router_0_0",
+     "to": "soc.checkerboard.noc_req.router_1_0",
+     "points": [
+      [
+       4.726835517588415,
+       1.3842833895816882
+      ],
+      [
+       4.726835517588415,
+       1.4933050126007676
+      ]
+     ],
+     "length": 0.10902162301907947
+    },
+    {
+     "id": "soc.checkerboard.noc_req.link_0_1_n",
+     "from": "soc.checkerboard.noc_req.router_0_1",
+     "to": "soc.checkerboard.noc_req.router_1_1",
+     "points": [
+      [
+       4.9448787636265745,
+       1.3842833895816882
+      ],
+      [
+       4.9448787636265745,
+       1.4933050126007676
+      ]
+     ],
+     "length": 0.10902162301907947
+    },
+    {
+     "id": "soc.checkerboard.noc_req.link_1_0_e",
+     "from": "soc.checkerboard.noc_req.router_1_0",
+     "to": "soc.checkerboard.noc_req.router_1_1",
+     "points": [
+      [
+       4.726835517588415,
+       1.4933050126007676
+      ],
+      [
+       4.9448787636265745,
+       1.4933050126007676
+      ]
+     ],
+     "length": 0.2180432460381594
+    }
+   ]
+  },
+  {
+   "id": "noc_rsp",
+   "kind": "noc_response",
+   "routing": "xy",
+   "description": "response network: XY mesh, one router per site",
+   "nodes": [
+    {
+     "id": "soc.checkerboard.noc_rsp.router_0_0",
+     "kind": "router",
+     "at": [
+      4.726835517588415,
+      1.3406747403740562
+     ]
+    },
+    {
+     "id": "soc.checkerboard.noc_rsp.router_0_1",
+     "kind": "router",
+     "at": [
+      4.9448787636265745,
+      1.3406747403740562
+     ]
+    },
+    {
+     "id": "soc.checkerboard.noc_rsp.router_1_0",
+     "kind": "router",
+     "at": [
+      4.726835517588415,
+      1.4496963633931357
+     ]
+    },
+    {
+     "id": "soc.checkerboard.noc_rsp.router_1_1",
+     "kind": "router",
+     "at": [
+      4.9448787636265745,
+      1.4496963633931357
+     ]
+    }
+   ],
+   "links": [
+    {
+     "id": "soc.checkerboard.noc_rsp.link_0_0_e",
+     "from": "soc.checkerboard.noc_rsp.router_0_0",
+     "to": "soc.checkerboard.noc_rsp.router_0_1",
+     "points": [
+      [
+       4.726835517588415,
+       1.3406747403740562
+      ],
+      [
+       4.9448787636265745,
+       1.3406747403740562
+      ]
+     ],
+     "length": 0.2180432460381594
+    },
+    {
+     "id": "soc.checkerboard.noc_rsp.link_0_0_n",
+     "from": "soc.checkerboard.noc_rsp.router_0_0",
+     "to": "soc.checkerboard.noc_rsp.router_1_0",
+     "points": [
+      [
+       4.726835517588415,
+       1.3406747403740562
+      ],
+      [
+       4.726835517588415,
+       1.4496963633931357
+      ]
+     ],
+     "length": 0.10902162301907947
+    },
+    {
+     "id": "soc.checkerboard.noc_rsp.link_0_1_n",
+     "from": "soc.checkerboard.noc_rsp.router_0_1",
+     "to": "soc.checkerboard.noc_rsp.router_1_1",
+     "points": [
+      [
+       4.9448787636265745,
+       1.3406747403740562
+      ],
+      [
+       4.9448787636265745,
+       1.4496963633931357
+      ]
+     ],
+     "length": 0.10902162301907947
+    },
+    {
+     "id": "soc.checkerboard.noc_rsp.link_1_0_e",
+     "from": "soc.checkerboard.noc_rsp.router_1_0",
+     "to": "soc.checkerboard.noc_rsp.router_1_1",
+     "points": [
+      [
+       4.726835517588415,
+       1.4496963633931357
+      ],
+      [
+       4.9448787636265745,
+       1.4496963633931357
+      ]
+     ],
+     "length": 0.2180432460381594
+    }
+   ]
+  },
+  {
+   "id": "control_tree",
+   "kind": "control_tree",
+   "routing": "tree",
+   "description": "status/control distribution as an H-tree (topology only; the RTL uses a flat AXI-Lite configuration bus)",
+   "nodes": [
+    {
+     "id": "control_tree.root_0_0_2_2",
+     "kind": "root",
+     "block": "soc.checkerboard",
+     "at": [
+      4.835857140607495,
+      1.4169898764874118
+     ],
+     "level": 0
+    },
+    {
+     "id": "control_tree.branch_0_0_2_1",
+     "kind": "branch",
+     "at": [
+      4.726835517588415,
+      1.4169898764874118
+     ],
+     "level": 1
+    },
+    {
+     "id": "control_tree.leaf_0_0",
+     "kind": "leaf",
+     "block": "soc.checkerboard.tile_0_0",
+     "at": [
+      4.672324706078876,
+      1.3624790649778722
+     ],
+     "level": 2
+    },
+    {
+     "id": "control_tree.leaf_1_0",
+     "kind": "leaf",
+     "block": "soc.checkerboard.tile_1_0",
+     "at": [
+      4.672324706078876,
+      1.4715006879969517
+     ],
+     "level": 2
+    },
+    {
+     "id": "control_tree.branch_0_1_2_2",
+     "kind": "branch",
+     "at": [
+      4.9448787636265745,
+      1.4169898764874118
+     ],
+     "level": 1
+    },
+    {
+     "id": "control_tree.leaf_0_1",
+     "kind": "leaf",
+     "block": "soc.checkerboard.tile_0_1",
+     "at": [
+      4.890367952117035,
+      1.3624790649778722
+     ],
+     "level": 2
+    },
+    {
+     "id": "control_tree.leaf_1_1",
+     "kind": "leaf",
+     "block": "soc.checkerboard.tile_1_1",
+     "at": [
+      4.890367952117035,
+      1.4715006879969517
+     ],
+     "level": 2
+    },
+    {
+     "id": "control_tree.source",
+     "kind": "source",
+     "block": "soc.host_bridge",
+     "at": [
+      0.3741249316661101,
+      0.4482498633322202
+     ]
+    }
+   ],
+   "links": [
+    {
+     "id": "control_tree.branch_0_0_2_1->leaf_0_0",
+     "from": "control_tree.branch_0_0_2_1",
+     "to": "control_tree.leaf_0_0",
+     "points": [
+      [
+       4.726835517588415,
+       1.4169898764874118
+      ],
+      [
+       4.672324706078876,
+       1.4169898764874118
+      ],
+      [
+       4.672324706078876,
+       1.3624790649778722
+      ]
+     ],
+     "length": 0.1090216230190788
+    },
+    {
+     "id": "control_tree.branch_0_0_2_1->leaf_1_0",
+     "from": "control_tree.branch_0_0_2_1",
+     "to": "control_tree.leaf_1_0",
+     "points": [
+      [
+       4.726835517588415,
+       1.4169898764874118
+      ],
+      [
+       4.672324706078876,
+       1.4169898764874118
+      ],
+      [
+       4.672324706078876,
+       1.4715006879969517
+      ]
+     ],
+     "length": 0.10902162301907903
+    },
+    {
+     "id": "control_tree.root_0_0_2_2->branch_0_0_2_1",
+     "from": "control_tree.root_0_0_2_2",
+     "to": "control_tree.branch_0_0_2_1",
+     "points": [
+      [
+       4.835857140607495,
+       1.4169898764874118
+      ],
+      [
+       4.726835517588415,
+       1.4169898764874118
+      ]
+     ],
+     "length": 0.10902162301908014
+    },
+    {
+     "id": "control_tree.branch_0_1_2_2->leaf_0_1",
+     "from": "control_tree.branch_0_1_2_2",
+     "to": "control_tree.leaf_0_1",
+     "points": [
+      [
+       4.9448787636265745,
+       1.4169898764874118
+      ],
+      [
+       4.890367952117035,
+       1.4169898764874118
+      ],
+      [
+       4.890367952117035,
+       1.3624790649778722
+      ]
+     ],
+     "length": 0.1090216230190788
+    },
+    {
+     "id": "control_tree.branch_0_1_2_2->leaf_1_1",
+     "from": "control_tree.branch_0_1_2_2",
+     "to": "control_tree.leaf_1_1",
+     "points": [
+      [
+       4.9448787636265745,
+       1.4169898764874118
+      ],
+      [
+       4.890367952117035,
+       1.4169898764874118
+      ],
+      [
+       4.890367952117035,
+       1.4715006879969517
+      ]
+     ],
+     "length": 0.10902162301907903
+    },
+    {
+     "id": "control_tree.root_0_0_2_2->branch_0_1_2_2",
+     "from": "control_tree.root_0_0_2_2",
+     "to": "control_tree.branch_0_1_2_2",
+     "points": [
+      [
+       4.835857140607495,
+       1.4169898764874118
+      ],
+      [
+       4.9448787636265745,
+       1.4169898764874118
+      ]
+     ],
+     "length": 0.10902162301907925
+    },
+    {
+     "id": "control_tree.trunk",
+     "from": "control_tree.source",
+     "to": "control_tree.root_0_0_2_2",
+     "points": [
+      [
+       0.3741249316661101,
+       0.4482498633322202
+      ],
+      [
+       4.835857140607495,
+       0.4482498633322202
+      ],
+      [
+       4.835857140607495,
+       1.4169898764874118
+      ]
+     ],
+     "length": 5.4304722220965775
+    }
+   ]
+  },
+  {
+   "id": "dram_l3",
+   "kind": "dram_l3",
+   "description": "DRAM <-> L3 paths: memory PHY -> SoC DMA -> each memory cell",
+   "nodes": [
+    {
+     "id": "soc.dma",
+     "kind": "dma",
+     "block": "soc.dma",
+     "at": [
+      0.5223747949983304,
+      0.4482498633322202
+     ]
+    },
+    {
+     "id": "soc.checkerboard.cell_0_0",
+     "kind": "memory_cell",
+     "block": "soc.checkerboard.cell_0_0",
+     "at": [
+      4.781346329097955,
+      1.3624790649778722
+     ]
+    },
+    {
+     "id": "soc.checkerboard.cell_0_1",
+     "kind": "memory_cell",
+     "block": "soc.checkerboard.cell_0_1",
+     "at": [
+      4.999389575136115,
+      1.3624790649778722
+     ]
+    },
+    {
+     "id": "soc.checkerboard.cell_1_0",
+     "kind": "memory_cell",
+     "block": "soc.checkerboard.cell_1_0",
+     "at": [
+      4.781346329097955,
+      1.4715006879969517
+     ]
+    },
+    {
+     "id": "soc.checkerboard.cell_1_1",
+     "kind": "memory_cell",
+     "block": "soc.checkerboard.cell_1_1",
+     "at": [
+      4.999389575136115,
+      1.4715006879969517
+     ]
+    },
+    {
+     "id": "soc.memory_phy.top_ch0",
+     "kind": "memory_phy",
+     "block": "soc.memory_phy.top_ch0",
+     "at": [
+      4.835857140607494,
+      2.0299956262406575
+     ]
+    }
+   ],
+   "links": [
+    {
+     "id": "dram_l3.soc.dma->soc.checkerboard.cell_0_0",
+     "from": "soc.dma",
+     "to": "soc.checkerboard.cell_0_0",
+     "points": [
+      [
+       0.5223747949983304,
+       0.4482498633322202
+      ],
+      [
+       4.781346329097955,
+       0.4482498633322202
+      ],
+      [
+       4.781346329097955,
+       1.3624790649778722
+      ]
+     ],
+     "length": 5.173200735745277
+    },
+    {
+     "id": "dram_l3.soc.dma->soc.checkerboard.cell_0_1",
+     "from": "soc.dma",
+     "to": "soc.checkerboard.cell_0_1",
+     "points": [
+      [
+       0.5223747949983304,
+       0.4482498633322202
+      ],
+      [
+       4.999389575136115,
+       0.4482498633322202
+      ],
+      [
+       4.999389575136115,
+       1.3624790649778722
+      ]
+     ],
+     "length": 5.391243981783436
+    },
+    {
+     "id": "dram_l3.soc.dma->soc.checkerboard.cell_1_0",
+     "from": "soc.dma",
+     "to": "soc.checkerboard.cell_1_0",
+     "points": [
+      [
+       0.5223747949983304,
+       0.4482498633322202
+      ],
+      [
+       4.781346329097955,
+       0.4482498633322202
+      ],
+      [
+       4.781346329097955,
+       1.4715006879969517
+      ]
+     ],
+     "length": 5.282222358764356
+    },
+    {
+     "id": "dram_l3.soc.dma->soc.checkerboard.cell_1_1",
+     "from": "soc.dma",
+     "to": "soc.checkerboard.cell_1_1",
+     "points": [
+      [
+       0.5223747949983304,
+       0.4482498633322202
+      ],
+      [
+       4.999389575136115,
+       0.4482498633322202
+      ],
+      [
+       4.999389575136115,
+       1.4715006879969517
+      ]
+     ],
+     "length": 5.500265604802515
+    },
+    {
+     "id": "dram_l3.soc.memory_phy.top_ch0->soc.dma",
+     "from": "soc.memory_phy.top_ch0",
+     "to": "soc.dma",
+     "points": [
+      [
+       4.835857140607494,
+       2.0299956262406575
+      ],
+      [
+       0.5223747949983304,
+       2.0299956262406575
+      ],
+      [
+       0.5223747949983304,
+       0.4482498633322202
+      ]
+     ],
+     "length": 5.8952281085176015
+    }
+   ]
+  }
+ ],
+ "floorplan": {
+  "die": {
+   "width": 9.67171428121499,
+   "height": 2.8339797529748236,
+   "area": 27.409442449520732
+  },
+  "estimated": true,
+  "area": {
+   "items": [
+    {
+     "name": "systolic_int8_cells",
+     "category": "compute",
+     "library": "balanced_logic",
+     "source": "silicon_bin",
+     "class": "systolic_int8_ws",
+     "transistors_mtx": 0.256,
+     "area": 0.002813186813186813
+    },
+    {
+     "name": "l1_sram",
+     "category": "sram",
+     "library": "sram_hd",
+     "source": "silicon_bin",
+     "class": null,
+     "transistors_mtx": 0.0,
+     "area": 0.0
+    },
+    {
+     "name": "l2_sram",
+     "category": "sram",
+     "library": "sram_hd",
+     "source": "silicon_bin",
+     "class": null,
+     "transistors_mtx": 0.0,
+     "area": 0.0
+    },
+    {
+     "name": "l3_sram",
+     "category": "l3",
+     "library": "sram_hd",
+     "source": "silicon_bin",
+     "class": null,
+     "transistors_mtx": 13.312,
+     "area": 0.047542857142857144
+    },
+    {
+     "name": "noc_routers",
+     "category": "noc",
+     "library": "hp_logic",
+     "source": "silicon_bin",
+     "class": null,
+     "transistors_mtx": 3.2,
+     "area": 0.04266666666666667
+    },
+    {
+     "name": "memory_phys",
+     "category": "memory_phy",
+     "library": "analog",
+     "source": "silicon_bin",
+     "class": null,
+     "transistors_mtx": 6.0,
+     "area": 0.75
+    },
+    {
+     "name": "io_pads",
+     "category": "io",
+     "library": "io",
+     "source": "silicon_bin",
+     "class": null,
+     "transistors_mtx": 5.0,
+     "area": 2.5
+    },
+    {
+     "name": "control_logic",
+     "category": "control",
+     "library": "balanced_logic",
+     "source": "silicon_bin",
+     "class": null,
+     "transistors_mtx": 8.0,
+     "area": 0.08791208791208792
+    },
+    {
+     "name": "systolic_int8_ws.memory.weight_buffer",
+     "category": "local_memory",
+     "library": "sram_hp",
+     "source": "tile",
+     "class": "systolic_int8_ws",
+     "transistors_mtx": 0.2773333333333333,
+     "area": 0.0015407407407407407
+    },
+    {
+     "name": "systolic_int8_ws.memory.accumulator",
+     "category": "local_memory",
+     "library": "sram_hp",
+     "source": "tile",
+     "class": "systolic_int8_ws",
+     "transistors_mtx": 0.5546666666666666,
+     "area": 0.0030814814814814815
+    }
+   ],
+   "silicon": 3.4355570207570207,
+   "whitespace": 23.97388542876371,
+   "die": 27.409442449520732
+  }
+ }
+}

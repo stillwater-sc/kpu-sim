@@ -1,0 +1,1250 @@
+{
+ "format": "kpu-structure",
+ "version": 1,
+ "provenance": {
+  "producer": "kpu-floorplan",
+  "source": "model",
+  "configuration": "t4",
+  "from": "kpu-floorplan 1 (generated:checkerboard)"
+ },
+ "units": {
+  "length": "mm",
+  "area": "mm2"
+ },
+ "blocks": [
+  {
+   "id": "t4/die",
+   "kind": "die",
+   "rect": [
+    0.0,
+    0.0,
+    6.4,
+    5.07
+   ],
+   "area": 32.448
+  },
+  {
+   "id": "t4/array",
+   "kind": "array",
+   "parent": "t4/die",
+   "label": "array",
+   "rect": [
+    3.6,
+    1.73,
+    2.0,
+    2.0
+   ],
+   "area": 4.0
+  },
+  {
+   "id": "t4/l3[0]",
+   "kind": "l3_tile",
+   "parent": "t4/array",
+   "label": "l3[0]",
+   "resource": "t4/l3[0]",
+   "clock_domain": "l3",
+   "rect": [
+    3.62,
+    1.75,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/l3[0]/bm[1]",
+   "kind": "block_mover",
+   "parent": "t4/l3[0]",
+   "label": "E",
+   "resource": "t4/l3[0]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    4.522399999999999,
+    2.0380000000000003,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "t4/l3[0]/bm[2]",
+   "kind": "block_mover",
+   "parent": "t4/l3[0]",
+   "label": "S",
+   "resource": "t4/l3[0]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    3.908,
+    2.6524,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "t4/l3[0]/noc",
+   "kind": "noc_router",
+   "parent": "t4/l3[0]",
+   "label": "hub",
+   "resource": "t4/l3[0]/noc",
+   "clock_domain": "l3",
+   "rect": [
+    4.3304,
+    2.4604,
+    0.1536,
+    0.1536
+   ],
+   "area": 0.023592959999999996
+  },
+  {
+   "id": "t4/l3[0]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "t4/l3[0]",
+   "resource": "t4/l3[0]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    3.716,
+    1.846,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/l3[0]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "t4/l3[0]",
+   "resource": "t4/l3[0]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    4.1096,
+    1.846,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/l3[0]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "t4/l3[0]",
+   "resource": "t4/l3[0]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    3.716,
+    2.1436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/l3[0]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "t4/l3[0]",
+   "resource": "t4/l3[0]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    4.1096,
+    2.1436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/cf[0]",
+   "kind": "compute_tile",
+   "parent": "t4/array",
+   "label": "cf[0]",
+   "resource": "t4/cf[0]",
+   "clock_domain": "cf",
+   "rect": [
+    4.62,
+    1.75,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "t4/cf[0]/regs",
+   "kind": "register_file",
+   "parent": "t4/cf[0]",
+   "label": "regs",
+   "resource": "t4/cf[0]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    4.716,
+    1.846,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "t4/cf[0]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "t4/cf[0]",
+   "resource": "t4/cf[0]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    4.716,
+    2.326,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "t4/cf[0]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "t4/cf[0]",
+   "resource": "t4/cf[0]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    4.9656,
+    2.326,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "t4/cf[0]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "t4/cf[0]",
+   "resource": "t4/cf[0]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    4.716,
+    2.4796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "t4/cf[0]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "t4/cf[0]",
+   "resource": "t4/cf[0]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    4.9656,
+    2.4796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "t4/cf[0]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "t4/cf[0]",
+   "resource": "t4/cf[0]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    5.244,
+    2.326,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "t4/cf[0]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "t4/cf[0]",
+   "resource": "t4/cf[0]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    5.244,
+    2.4796,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "t4/cf[1]",
+   "kind": "compute_tile",
+   "parent": "t4/array",
+   "label": "cf[1]",
+   "resource": "t4/cf[1]",
+   "clock_domain": "cf",
+   "rect": [
+    3.62,
+    2.75,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "t4/cf[1]/regs",
+   "kind": "register_file",
+   "parent": "t4/cf[1]",
+   "label": "regs",
+   "resource": "t4/cf[1]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    3.716,
+    2.846,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "t4/cf[1]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "t4/cf[1]",
+   "resource": "t4/cf[1]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    3.716,
+    3.326,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "t4/cf[1]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "t4/cf[1]",
+   "resource": "t4/cf[1]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    3.9656,
+    3.326,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "t4/cf[1]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "t4/cf[1]",
+   "resource": "t4/cf[1]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    3.716,
+    3.4796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "t4/cf[1]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "t4/cf[1]",
+   "resource": "t4/cf[1]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    3.9656,
+    3.4796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "t4/cf[1]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "t4/cf[1]",
+   "resource": "t4/cf[1]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    4.244,
+    3.326,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "t4/cf[1]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "t4/cf[1]",
+   "resource": "t4/cf[1]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    4.244,
+    3.4796,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "t4/l3[1]",
+   "kind": "l3_tile",
+   "parent": "t4/array",
+   "label": "l3[1]",
+   "resource": "t4/l3[1]",
+   "clock_domain": "l3",
+   "rect": [
+    4.62,
+    2.75,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/l3[1]/bm[0]",
+   "kind": "block_mover",
+   "parent": "t4/l3[1]",
+   "label": "N",
+   "resource": "t4/l3[1]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    4.908,
+    2.75,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "t4/l3[1]/bm[3]",
+   "kind": "block_mover",
+   "parent": "t4/l3[1]",
+   "label": "W",
+   "resource": "t4/l3[1]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    4.62,
+    3.0380000000000003,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "t4/l3[1]/noc",
+   "kind": "noc_router",
+   "parent": "t4/l3[1]",
+   "label": "hub",
+   "resource": "t4/l3[1]/noc",
+   "clock_domain": "l3",
+   "rect": [
+    5.3304,
+    3.4604000000000004,
+    0.1536,
+    0.1536
+   ],
+   "area": 0.023592959999999996
+  },
+  {
+   "id": "t4/l3[1]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "t4/l3[1]",
+   "resource": "t4/l3[1]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    4.716,
+    2.846,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/l3[1]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "t4/l3[1]",
+   "resource": "t4/l3[1]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.1096,
+    2.846,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/l3[1]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "t4/l3[1]",
+   "resource": "t4/l3[1]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    4.716,
+    3.1436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/l3[1]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "t4/l3[1]",
+   "resource": "t4/l3[1]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    5.1096,
+    3.1436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "t4/noc/port[0]",
+   "kind": "noc_port",
+   "parent": "t4/die",
+   "label": "row0.W",
+   "resource": "t4/noc/port[0]",
+   "clock_domain": "l3",
+   "rect": [
+    3.3000000000000003,
+    2.9372,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "t4/noc/port[1]",
+   "kind": "noc_port",
+   "parent": "t4/die",
+   "label": "row0.E",
+   "resource": "t4/noc/port[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.7,
+    2.9372,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "t4/noc/port[2]",
+   "kind": "noc_port",
+   "parent": "t4/die",
+   "label": "col0.N",
+   "resource": "t4/noc/port[2]",
+   "clock_domain": "l3",
+   "rect": [
+    4.8072,
+    1.43,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "t4/noc/port[3]",
+   "kind": "noc_port",
+   "parent": "t4/die",
+   "label": "col0.S",
+   "resource": "t4/noc/port[3]",
+   "clock_domain": "l3",
+   "rect": [
+    4.8072,
+    3.83,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "t4/phy[0]",
+   "kind": "dram_phy",
+   "parent": "t4/die",
+   "label": "PHY",
+   "rect": [
+    3.64,
+    0.4,
+    1.92,
+    0.25
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "t4/mc[0]",
+   "kind": "memory_controller",
+   "parent": "t4/die",
+   "label": "MC0",
+   "resource": "t4/mc[0]",
+   "clock_domain": "dram",
+   "rect": [
+    3.64,
+    0.6900000000000001,
+    1.92,
+    0.6
+   ],
+   "area": 1.152
+  },
+  {
+   "id": "t4/mc[0]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "t4/mc[0]",
+   "label": "DMA0",
+   "resource": "t4/mc[0]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    3.68,
+    1.04,
+    0.195,
+    0.21
+   ],
+   "area": 0.04095,
+   "role": "dma"
+  },
+  {
+   "id": "t4/mc[0]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "t4/mc[0]",
+   "label": "DMA1",
+   "resource": "t4/mc[0]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    3.915,
+    1.04,
+    0.195,
+    0.21
+   ],
+   "area": 0.04095,
+   "role": "dma"
+  },
+  {
+   "id": "t4/mc[0]/dma[2]",
+   "kind": "dma_engine",
+   "parent": "t4/mc[0]",
+   "label": "DMA2",
+   "resource": "t4/mc[0]/dma[2]",
+   "clock_domain": "dram",
+   "rect": [
+    4.15,
+    1.04,
+    0.195,
+    0.21
+   ],
+   "area": 0.04095,
+   "role": "dma"
+  },
+  {
+   "id": "t4/mc[0]/dma[3]",
+   "kind": "dma_engine",
+   "parent": "t4/mc[0]",
+   "label": "DMA3",
+   "resource": "t4/mc[0]/dma[3]",
+   "clock_domain": "dram",
+   "rect": [
+    4.385,
+    1.04,
+    0.195,
+    0.21
+   ],
+   "area": 0.04095,
+   "role": "dma"
+  },
+  {
+   "id": "t4/mc[0]/dma[4]",
+   "kind": "dma_engine",
+   "parent": "t4/mc[0]",
+   "label": "DMA4",
+   "resource": "t4/mc[0]/dma[4]",
+   "clock_domain": "dram",
+   "rect": [
+    4.62,
+    1.04,
+    0.195,
+    0.21
+   ],
+   "area": 0.04095,
+   "role": "dma"
+  },
+  {
+   "id": "t4/mc[0]/dma[5]",
+   "kind": "dma_engine",
+   "parent": "t4/mc[0]",
+   "label": "DMA5",
+   "resource": "t4/mc[0]/dma[5]",
+   "clock_domain": "dram",
+   "rect": [
+    4.855,
+    1.04,
+    0.195,
+    0.21
+   ],
+   "area": 0.04095,
+   "role": "dma"
+  },
+  {
+   "id": "t4/mc[0]/dma[6]",
+   "kind": "dma_engine",
+   "parent": "t4/mc[0]",
+   "label": "DMA6",
+   "resource": "t4/mc[0]/dma[6]",
+   "clock_domain": "dram",
+   "rect": [
+    5.09,
+    1.04,
+    0.195,
+    0.21
+   ],
+   "area": 0.04095,
+   "role": "dma"
+  },
+  {
+   "id": "t4/mc[0]/dma[7]",
+   "kind": "dma_engine",
+   "parent": "t4/mc[0]",
+   "label": "DMA7",
+   "resource": "t4/mc[0]/dma[7]",
+   "clock_domain": "dram",
+   "rect": [
+    5.325,
+    1.04,
+    0.195,
+    0.21
+   ],
+   "area": 0.04095,
+   "role": "dma"
+  },
+  {
+   "id": "t4/cpu",
+   "kind": "cpu",
+   "parent": "t4/die",
+   "label": "CPU",
+   "rect": [
+    0.4,
+    1.73,
+    2.4,
+    1.86
+   ],
+   "area": 4.464
+  },
+  {
+   "id": "t4/cpu/hart[0]",
+   "kind": "cpu_hart",
+   "parent": "t4/cpu",
+   "label": "hart0",
+   "resource": "t4/cpu/hart[0]",
+   "clock_domain": "cpu",
+   "rect": [
+    0.44,
+    1.77,
+    2.32,
+    0.7000000000000001
+   ],
+   "area": 1.624
+  },
+  {
+   "id": "t4/cpu/sram",
+   "kind": "cpu_sram",
+   "parent": "t4/cpu",
+   "label": "SRAM",
+   "resource": "t4/cpu/sram",
+   "clock_domain": "cpu",
+   "rect": [
+    0.44,
+    2.5100000000000002,
+    2.32,
+    0.6
+   ],
+   "area": 1.392
+  },
+  {
+   "id": "t4/cpu/dring",
+   "kind": "descriptor_ring",
+   "parent": "t4/cpu",
+   "label": "desc ring",
+   "resource": "t4/cpu/dring",
+   "clock_domain": "cpu",
+   "rect": [
+    0.44,
+    3.15,
+    1.1400000000000001,
+    0.4
+   ],
+   "area": 0.45600000000000007
+  },
+  {
+   "id": "t4/cpu/cring",
+   "kind": "completion_ring",
+   "parent": "t4/cpu",
+   "label": "cpl ring",
+   "resource": "t4/cpu/cring",
+   "clock_domain": "cpu",
+   "rect": [
+    1.62,
+    3.15,
+    1.1400000000000001,
+    0.4
+   ],
+   "area": 0.45600000000000007
+  },
+  {
+   "id": "t4/io",
+   "kind": "io",
+   "parent": "t4/die",
+   "label": "IO",
+   "rect": [
+    0.4,
+    3.67,
+    2.4,
+    1.0
+   ],
+   "area": 2.4
+  }
+ ],
+ "networks": [
+  {
+   "id": "noc",
+   "kind": "noc",
+   "routing": "ring",
+   "description": "the NoC's ring, port and attach links (kpu-floorplan)",
+   "nodes": [
+    {
+     "id": "t4/l3[0]/noc",
+     "kind": "router",
+     "block": "t4/l3[0]/noc",
+     "at": [
+      4.4072000000000005,
+      2.5372
+     ]
+    },
+    {
+     "id": "t4/l3[1]/noc",
+     "kind": "router",
+     "block": "t4/l3[1]/noc",
+     "at": [
+      5.4072000000000005,
+      3.5372000000000003
+     ]
+    },
+    {
+     "id": "t4/noc/port[0]",
+     "kind": "port",
+     "block": "t4/noc/port[0]",
+     "at": [
+      3.4000000000000004,
+      3.0372
+     ]
+    },
+    {
+     "id": "t4/noc/port[1]",
+     "kind": "port",
+     "block": "t4/noc/port[1]",
+     "at": [
+      5.8,
+      3.0372
+     ]
+    },
+    {
+     "id": "t4/noc/port[2]",
+     "kind": "port",
+     "block": "t4/noc/port[2]",
+     "at": [
+      4.9072,
+      1.53
+     ]
+    },
+    {
+     "id": "t4/noc/port[3]",
+     "kind": "port",
+     "block": "t4/noc/port[3]",
+     "at": [
+      4.9072,
+      3.93
+     ]
+    },
+    {
+     "id": "t4/mc[0]/dma[0]",
+     "kind": "attach",
+     "block": "t4/mc[0]/dma[0]",
+     "at": [
+      3.7775000000000003,
+      1.145
+     ]
+    },
+    {
+     "id": "t4/mc[0]/dma[1]",
+     "kind": "attach",
+     "block": "t4/mc[0]/dma[1]",
+     "at": [
+      4.0125,
+      1.145
+     ]
+    },
+    {
+     "id": "t4/mc[0]/dma[2]",
+     "kind": "attach",
+     "block": "t4/mc[0]/dma[2]",
+     "at": [
+      4.2475000000000005,
+      1.145
+     ]
+    },
+    {
+     "id": "t4/mc[0]/dma[3]",
+     "kind": "attach",
+     "block": "t4/mc[0]/dma[3]",
+     "at": [
+      4.4825,
+      1.145
+     ]
+    },
+    {
+     "id": "t4/mc[0]/dma[4]",
+     "kind": "attach",
+     "block": "t4/mc[0]/dma[4]",
+     "at": [
+      4.7175,
+      1.145
+     ]
+    },
+    {
+     "id": "t4/mc[0]/dma[5]",
+     "kind": "attach",
+     "block": "t4/mc[0]/dma[5]",
+     "at": [
+      4.952500000000001,
+      1.145
+     ]
+    },
+    {
+     "id": "t4/mc[0]/dma[6]",
+     "kind": "attach",
+     "block": "t4/mc[0]/dma[6]",
+     "at": [
+      5.1875,
+      1.145
+     ]
+    },
+    {
+     "id": "t4/mc[0]/dma[7]",
+     "kind": "attach",
+     "block": "t4/mc[0]/dma[7]",
+     "at": [
+      5.4225,
+      1.145
+     ]
+    }
+   ],
+   "links": [
+    {
+     "id": "ring_0",
+     "from": "t4/l3[0]/noc",
+     "to": "t4/l3[1]/noc",
+     "points": [
+      [
+       4.4072,
+       2.5372000000000003
+      ],
+      [
+       5.4072,
+       3.5372000000000003
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "port_1",
+     "from": "t4/noc/port[0]",
+     "to": "t4/l3[1]/noc",
+     "points": [
+      [
+       3.4,
+       3.0372
+      ],
+      [
+       5.4072,
+       3.5372000000000003
+      ]
+     ],
+     "length": 2.5072
+    },
+    {
+     "id": "port_2",
+     "from": "t4/noc/port[0]",
+     "to": "t4/l3[0]/noc",
+     "points": [
+      [
+       3.4,
+       3.0372
+      ],
+      [
+       4.4072,
+       2.5372000000000003
+      ]
+     ],
+     "length": 1.5071999999999992
+    },
+    {
+     "id": "port_3",
+     "from": "t4/noc/port[1]",
+     "to": "t4/l3[0]/noc",
+     "points": [
+      [
+       5.8,
+       3.0372
+      ],
+      [
+       4.4072,
+       2.5372000000000003
+      ]
+     ],
+     "length": 1.8927999999999998
+    },
+    {
+     "id": "port_4",
+     "from": "t4/noc/port[1]",
+     "to": "t4/l3[1]/noc",
+     "points": [
+      [
+       5.8,
+       3.0372
+      ],
+      [
+       5.4072,
+       3.5372000000000003
+      ]
+     ],
+     "length": 0.8928000000000007
+    },
+    {
+     "id": "port_5",
+     "from": "t4/noc/port[2]",
+     "to": "t4/l3[1]/noc",
+     "points": [
+      [
+       4.9072,
+       1.53
+      ],
+      [
+       5.4072,
+       3.5372000000000003
+      ]
+     ],
+     "length": 2.5072
+    },
+    {
+     "id": "port_6",
+     "from": "t4/noc/port[2]",
+     "to": "t4/l3[0]/noc",
+     "points": [
+      [
+       4.9072,
+       1.53
+      ],
+      [
+       4.4072,
+       2.5372000000000003
+      ]
+     ],
+     "length": 1.5072000000000003
+    },
+    {
+     "id": "port_7",
+     "from": "t4/noc/port[3]",
+     "to": "t4/l3[0]/noc",
+     "points": [
+      [
+       4.9072,
+       3.93
+      ],
+      [
+       4.4072,
+       2.5372000000000003
+      ]
+     ],
+     "length": 1.8927999999999998
+    },
+    {
+     "id": "port_8",
+     "from": "t4/noc/port[3]",
+     "to": "t4/l3[1]/noc",
+     "points": [
+      [
+       4.9072,
+       3.93
+      ],
+      [
+       5.4072,
+       3.5372000000000003
+      ]
+     ],
+     "length": 0.8927999999999998
+    },
+    {
+     "id": "attach_9",
+     "from": "t4/mc[0]/dma[0]",
+     "to": "t4/noc/port[2]",
+     "points": [
+      [
+       3.7775,
+       1.145
+      ],
+      [
+       4.9072,
+       1.53
+      ]
+     ],
+     "length": 1.5146999999999997
+    },
+    {
+     "id": "attach_10",
+     "from": "t4/mc[0]/dma[1]",
+     "to": "t4/noc/port[2]",
+     "points": [
+      [
+       4.0125,
+       1.145
+      ],
+      [
+       4.9072,
+       1.53
+      ]
+     ],
+     "length": 1.2796999999999994
+    },
+    {
+     "id": "attach_11",
+     "from": "t4/mc[0]/dma[2]",
+     "to": "t4/noc/port[2]",
+     "points": [
+      [
+       4.2475000000000005,
+       1.145
+      ],
+      [
+       4.9072,
+       1.53
+      ]
+     ],
+     "length": 1.044699999999999
+    },
+    {
+     "id": "attach_12",
+     "from": "t4/mc[0]/dma[3]",
+     "to": "t4/noc/port[2]",
+     "points": [
+      [
+       4.4825,
+       1.145
+      ],
+      [
+       4.9072,
+       1.53
+      ]
+     ],
+     "length": 0.8096999999999996
+    },
+    {
+     "id": "attach_13",
+     "from": "t4/mc[0]/dma[4]",
+     "to": "t4/noc/port[2]",
+     "points": [
+      [
+       4.7175,
+       1.145
+      ],
+      [
+       4.9072,
+       1.53
+      ]
+     ],
+     "length": 0.5746999999999993
+    },
+    {
+     "id": "attach_14",
+     "from": "t4/mc[0]/dma[5]",
+     "to": "t4/noc/port[2]",
+     "points": [
+      [
+       4.9525,
+       1.145
+      ],
+      [
+       4.9072,
+       1.53
+      ]
+     ],
+     "length": 0.4303000000000001
+    },
+    {
+     "id": "attach_15",
+     "from": "t4/mc[0]/dma[6]",
+     "to": "t4/noc/port[2]",
+     "points": [
+      [
+       5.1875,
+       1.145
+      ],
+      [
+       4.9072,
+       1.53
+      ]
+     ],
+     "length": 0.6653000000000004
+    },
+    {
+     "id": "attach_16",
+     "from": "t4/mc[0]/dma[7]",
+     "to": "t4/noc/port[2]",
+     "points": [
+      [
+       5.4225,
+       1.145
+      ],
+      [
+       4.9072,
+       1.53
+      ]
+     ],
+     "length": 0.9003000000000008
+    }
+   ]
+  }
+ ],
+ "floorplan": {
+  "die": {
+   "width": 6.4,
+   "height": 5.07,
+   "area": 32.448
+  },
+  "estimated": true
+ }
+}

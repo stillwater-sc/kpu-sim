@@ -28,6 +28,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The shared structure record, `kpu-structure` v1** (#392; ADR 0005's first shared format): one
+  description of a machine's hardware (blocks, resources, channels, networks and floorplan),
+  written by kpu-sim's model or an RTL generator, for every view to lay out what the record
+  declares.
+  - The spec: `docs/plans/shared-structure-record.md`. Blocks are a flat tree with stable ids.
+    The block vocabulary is the KPU model's, mapped from both existing formats. Networks carry
+    their routing rule, so a view derives a route instead of hard-coding one. An optional
+    floorplan in mm carries `estimated` when it is not silicon.
+  - `tools/trace/structure.schema.json` (the shape), and `tools/trace/structure_check.py`, which
+    checks the semantics: S1 to S5 (format, ids, tree, references, resources), and F1 to F3 when
+    there is a floorplan (inside, area, networks). Exit 0, 1 or 2, like the other checkers.
+  - `tools/trace/structure_from_floorplan.py` converts both existing floorplans: esg's
+    `floorplan.json` v1, and `kpu-floorplan`'s JSON.
+  - Samples in `tests/program/structure/`: the model's T4, and the RTL generator's
+    `kpu_2x2_systolic` and `kpu_edge_hetero`.
+  - CTest: the T4 regenerated from `kpu-floorplan` and checked, and the checker's self-test, which
+    breaks each invariant on purpose.
+
 - **The Combiner's per-channel scale** (#427): `scale(qm[j], qs[j]) @ combiner`.
   - Each column c of the result is requantized with its own multiplier and shift, from two int32
     vectors: `round(x * qm[c] / 2^qs[c])`, ties to even, saturated.
