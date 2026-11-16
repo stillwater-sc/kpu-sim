@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Combiner's order holds for a bias.** A scale after an activation was refused, but an add
+  after one was accepted (`relu, add(b[j])`), so the bias was applied after the activation it
+  should feed. An add after an activation or format is now refused (#439's review).
 - **L-CA no longer livelocks on a vector tile made resident for one result's context** (#434).
   A Release waited for every stage read of the tile that had been scheduled, including those of
   its next residency. The driver's window hands those over early, and they wait for this Release
