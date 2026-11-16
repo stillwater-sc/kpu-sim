@@ -705,3 +705,54 @@ TEST_CASE("acc init: an in-place writeback of the init's tile waits for the merg
     REQUIRE(wrote);
     CHECK(wb_finish >= merge_read);
 }
+
+TEST_CASE("acc init: a first merge reads only its own tile's init, and a loop that may not run merges nothing",
+          "[program][csp][init][l2acc][refuse]") {
+    // The third review of #446. Each case is checked by the walker and the validator alike.
+    auto verdicts = [](const std::string& src) {
+        std::pair<std::string, std::string> v{"accepted", "accepted"};
+        try { (void)lang::compile(src); } catch (const std::exception& e) { v.first = e.what(); }
+        try { (void)lang::validate(src); } catch (const std::exception& e) { v.second = e.what(); }
+        return v;
+    };
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+                             "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
+                             "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n";
+    // 1. C[0, 1]'s first merge reads D[0, 1] alone: D[0, :] released and D[0, 1] made resident
+    //    again is enough. The whole family is checked at the acc statement, not at each merge.
+    {
+        const auto v = verdicts(head + "  resident D[0, :];\n  acc C[0, :] in l2 init D[0, :] {\n"
+                                       "    resident A[0, 0], B[0, :];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "    release D[0, :];\n    resident D[0, 1];\n"
+                                       "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                                       "    release D[0, 1];\n    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK(v.first == "accepted");
+        CHECK(v.second == "accepted");
+    }
+    // 2. The inner loop runs zero times when i = 0, so the second call is then C[0, 0]'s first
+    //    merge, after D[0, 0] is released.
+    {
+        const auto v = verdicts(head + "  resident D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                                       "    resident A[0, 0], B[0, 0];\n    for i in 0..2 {\n"
+                                       "      for k in 0..i {\n        call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n      }\n"
+                                       "      release D[0, 0];\n      call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "      resident D[0, 0];\n    }\n    release A[0, 0], B[0, 0];\n  }\n"
+                                       "  release D[0, 0];\n  store C[0, 0];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("its first merge adds the init"));
+        CHECK_THAT(v.second, ContainsSubstring("its first merge adds the init"));
+    }
+    // 3. A loop over exactly C's columns merged every tile: past it, a call into C[0, 1] is not a
+    //    first merge, and needs no init.
+    {
+        const auto v = verdicts(head + "  resident D[0, :];\n  acc C[0, :] in l2 init D[0, :] {\n"
+                                       "    resident A[0, 0], B[0, :];\n    for j in 0..2 {\n"
+                                       "      call gemm(A[0, 0], B[0, j]) +-> C[0, j];\n    }\n    release D[0, :];\n"
+                                       "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                                       "    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK(v.first == "accepted");
+        CHECK(v.second == "accepted");
+    }
+}

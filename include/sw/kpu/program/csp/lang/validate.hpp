@@ -766,8 +766,9 @@ private:
         const std::vector<Entry> before = state_;
         const std::vector<Acc> accs_found = accs_;
         const std::size_t accs_before = accs_.size();
-        std::vector<std::size_t> finals_before;
+        std::vector<std::size_t> finals_before, merged_before;
         for (const Acc& a : accs_) finals_before.push_back(a.finals.size());
+        for (const Acc& a : accs_) merged_before.push_back(a.merged.size());
         for (const Stmt& b : s.body) stmt(b, depth + 1, definite && trips.lo >= 1);
 
         // Residency-balanced: an iteration leaves exactly the families it found.
@@ -822,6 +823,32 @@ private:
                         auto c = d.a.coeff.find(s.var);
                         if (!d.all && c != d.a.coeff.end() && c->second != 0) d.all = true;
                     }
+        // The tiles merged in the body (#446's review). A body that may run zero times guarantees
+        // no merge after the loop, so its merges are forgotten. A merge over the loop's variable
+        // stands, past the loop, for the tiles the loop provably covered: the whole dimension when
+        // the loop runs over exactly its tiles, from 0; otherwise it is forgotten. Forgetting is
+        // the conservative side: a later call then checks its init again.
+        for (std::size_t n = 0; n < merged_before.size() && n < accs_.size(); ++n)
+            if (trips.lo < 1) accs_[n].merged.resize(merged_before[n]);
+        for (Acc& a : accs_) {
+            std::vector<Family> kept;
+            for (Family f : a.merged) {
+                bool keep = true;
+                const TensorOperand& op = operands_.operand(f.operand);
+                const long long tiles[2] = {static_cast<long long>(op.n_tile_rows()), static_cast<long long>(op.n_tile_cols())};
+                for (std::size_t i = 0; i < f.dims.size(); ++i) {
+                    Dimension& d = f.dims[i];
+                    auto c = d.a.coeff.find(s.var);
+                    if (d.all || c == d.a.coeff.end() || c->second == 0) continue;
+                    const bool whole = d.a.coeff.size() == 1 && c->second == 1 && d.a.constant == 0 && rectangular &&
+                                       lo.constant == 0 && i < 2 && hi.constant == tiles[i];
+                    if (whole) d.all = true;
+                    else keep = false;
+                }
+                if (keep) kept.push_back(f);
+            }
+            a.merged = std::move(kept);
+        }
         multiplier_ = saved_mult;
         if (!rectangular) --nonrect_;
         loop_order_.pop_back();
@@ -943,14 +970,21 @@ private:
                                                "make it resident first");
             // A tile's first merge adds the init, so the init is still resident there (#446's review). A
             // call is the first merge of the tiles no earlier call has merged into, as written: each
-            // call statement whose tiles are not covered by one before it checks it.
+            // call statement whose tiles are not covered by one before it checks it. It reads only
+            // its own tiles' init, as the walker does: X's tile in the same place for a tensor init,
+            // and X at the tile's column for a bias row (init_l2).
             const bool first = std::none_of(acc->merged.begin(), acc->merged.end(),
                                             [&](const Family& m) { return contains(m, y); });
-            if (acc->init && first &&
-                std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return contains(e.family, *acc->init); }))
-                throw CompileError(s.line, "call gemm +-> " + text(y) + ": its first merge adds the init " +
-                                           text(*acc->init) + " (csp line " + std::to_string(acc->init->line) +
-                                           "), which is not provably resident; make it resident until then");
+            if (acc->init && first) {
+                Family need = *acc->init;
+                if (need.dims.size() == y.dims.size()) need.dims = y.dims;
+                else if (need.dims.size() == 1 && y.dims.size() == 2) need.dims = {y.dims[1]};
+                if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return contains(e.family, need); }))
+                    throw CompileError(s.line, "call gemm +-> " + text(y) + ": its first merge adds the init " +
+                                               text(need) + " (from " + text(*acc->init) + ", csp line " +
+                                               std::to_string(acc->init->line) + "), which is not provably resident; "
+                                               "make it resident until then");
+            }
             if (first) acc->merged.push_back(y);
             if (definite || depth <= acc->depth) acc->fed = true;
             calls_ += multiplier_;
