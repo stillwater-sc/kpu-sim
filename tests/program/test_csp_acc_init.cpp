@@ -756,3 +756,42 @@ TEST_CASE("acc init: a first merge reads only its own tile's init, and a loop th
         CHECK(v.second == "accepted");
     }
 }
+
+TEST_CASE("acc init: an L2 credit that arrives before the init is not an L2 stall", "[program][csp][init][l2acc][lt1]") {
+    // The second review of #446: the init's Load bounds the first merge's Drain, so an L2 credit
+    // that arrives before it decides nothing and is no L2 stall. One L2 slot, one slow DMA
+    // engine: D[0, 1] loads last. The streamer's in-order issue already frees C[0, 0]'s slot
+    // before C[0, 1]'s partial is ready, so this pins the invariant rather than reproducing a
+    // failure: the stage inputs are applied before the credit comparison.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 1) {\n"
+                            "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
+                            "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n"
+                            "  resident A[0, 0], B[0, :];\n"
+                            "  acc C[0, 0] in l2 {\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n  store C[0, 0];\n"
+                            "  resident D[0, 1];\n"
+                            "  acc C[0, 1] in l2 init D[0, 1] {\n    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n  }\n"
+                            "  release A[0, 0], B[0, :], D[0, 1];\n  store C[0, 1];\n}\n";
+    auto dev = characterize::DeviceDescriptor::single();
+    dev.dma_engines = 1;
+    dev.dma_bytes_per_cycle = 1.0;
+    dev.bm_bytes_per_cycle = 4096.0;
+    dev.str_bytes_per_cycle = 4096.0;
+    CspProgram p = lang::compile(src);
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
+    TransactionalInterpreter lt(dev, p.channel(Chan::L3).capacity, 0);
+    lt.begin(p.source);
+    for (const Action& a : p.actions) lt.step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+    (void)lt.finish();
+    std::uint64_t d_loaded = 0;
+    const TransactionalInterpreter::Record* drain = nullptr;
+    for (const auto& r : lt.records()) {
+        if (r.kind == Action::Kind::Load && r.tile.operand == "D") d_loaded = r.finish;
+        if (r.kind == Action::Kind::Drain && r.tile.operand == "C" && r.tile.tj == 1) drain = &r;
+    }
+    REQUIRE(drain != nullptr);
+    REQUIRE(d_loaded > 0);
+    INFO("D loaded " << d_loaded << ", drain start " << drain->start << ", l2_wait " << drain->l2_wait);
+    CHECK(drain->start >= d_loaded);
+    CHECK(drain->l2_wait == 0);
+}

@@ -369,6 +369,9 @@ public:
                     if (!chains_[oc->second].closed) close_chain(oc->second);
                     ready = std::max(ready, chains_[oc->second].out1);
                 }
+                // Its stages' vectors are in L3 (#446's review): applied before the L2 credit, so a
+                // credit that an init's Load already outlasts is not counted as an L2 stall.
+                ready = std::max(ready, stage_inputs(a));
                 if (a.merge == Merge::Overwrite) {              // the partial's slot: after its credit
                     const Cycle credit = get_l2(*a.l2);
                     if (credit > ready) {
@@ -397,7 +400,6 @@ public:
                     auto it = l2_open_.find(k);
                     if (it != l2_open_.end()) ++l2_slots_[it->second].merges;
                 }
-                ready = std::max(ready, stage_inputs(a));       // its stages' vectors are in L3 (#446's review)
                 drained_[k] = fabric() ? run_drain(ready, transfer(Proc::Str, bytes), a)
                                        : run(Proc::Str, ready, transfer(Proc::Str, bytes), a);
                 records_.back().l2_wait = l2_wait;
