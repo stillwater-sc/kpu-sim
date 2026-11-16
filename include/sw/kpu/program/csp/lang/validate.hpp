@@ -155,7 +155,8 @@ private:
     // variable when the loop ends, as finals are; a requantized result's store must be covered.
     struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false;
                  std::vector<Family> finals = {}; bool formatted = false; std::vector<Family> requantized = {};
-                 std::optional<Family> init = {}; bool merged = false; };   // `in l2 init X`: X until the first merge
+                 std::optional<Family> init = {};          // `in l2 init X`: X until each tile's first merge
+                 std::vector<Family> merged = {}; };       // the tiles a call has merged into, as written
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
@@ -627,6 +628,9 @@ private:
                                        std::to_string(yo.rows) + "x" + std::to_string(yo.cols) + " in " +
                                        std::to_string(yo.tile_rows) + "x" + std::to_string(yo.tile_cols) + " tiles)");
         } else {
+            if (x.dims.size() != y.dims.size())
+                throw CompileError(s.line, what + ": a tensor init needs a tensor accumulator, and " + y.operand +
+                                           " is a vector");
             // Each tile's init is X's tile in the same place: X names the same tiles as Y.
             for (std::size_t i = 0; i < y.dims.size() && i < x.dims.size(); ++i)
                 if (!same_dim(x.dims[i], y.dims[i]))
@@ -937,14 +941,17 @@ private:
                 if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, a); }))
                     throw CompileError(s.line, "call " + s.fn + " reads " + text(a) + ", which is not provably resident; "
                                                "make it resident first");
-            // The first merge adds the init, so it is still resident here (#446's review): the first
-            // call into the accumulator, as written, is the first merge of the tiles it reaches.
-            if (acc->init && !acc->merged &&
+            // A tile's first merge adds the init, so the init is still resident there (#446's review). A
+            // call is the first merge of the tiles no earlier call has merged into, as written: each
+            // call statement whose tiles are not covered by one before it checks it.
+            const bool first = std::none_of(acc->merged.begin(), acc->merged.end(),
+                                            [&](const Family& m) { return contains(m, y); });
+            if (acc->init && first &&
                 std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return contains(e.family, *acc->init); }))
                 throw CompileError(s.line, "call gemm +-> " + text(y) + ": its first merge adds the init " +
                                            text(*acc->init) + " (csp line " + std::to_string(acc->init->line) +
                                            "), which is not provably resident; make it resident until then");
-            acc->merged = true;
+            if (first) acc->merged.push_back(y);
             if (definite || depth <= acc->depth) acc->fed = true;
             calls_ += multiplier_;
             return;

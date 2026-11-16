@@ -413,6 +413,8 @@ public:
                 const bool in_place = it != residency_.end() && it->second.slot;
                 if (in_place) {
                     ready = std::max(ready, it->second.readers);   // WAR: earlier reads of the slot
+                    // ...and its stages' reads of it: an add's bias, a scale's vectors, an init (#446's review)
+                    if (auto sr = stage_reads_.find(k); sr != stage_reads_.end()) ready = std::max(ready, sr->second);
                 } else {
                     ready = std::max({ready, take_slot(a), get(released_, k)});   // opens a residency
                 }

@@ -631,3 +631,77 @@ TEST_CASE("acc init: L-T1's first merge waits for its init's Load (#446's review
     REQUIRE(d_loaded > 0);
     CHECK(drain_start >= d_loaded);
 }
+
+TEST_CASE("acc init: each tile's first merge finds its init resident, and a vector takes no tensor init",
+          "[program][csp][init][l2acc][refuse]") {
+    auto verdicts = [](const std::string& src) {
+        std::pair<std::string, std::string> v{"accepted", "accepted"};
+        try { (void)lang::compile(src); } catch (const std::exception& e) { v.first = e.what(); }
+        try { (void)lang::validate(src); } catch (const std::exception& e) { v.second = e.what(); }
+        return v;
+    };
+    // The second review of #446: C[0, 1]'s first merge comes after the init is released, in a
+    // second call statement. Marking the whole family merged at the first call let it through.
+    {
+        const auto v = verdicts("csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+                                "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
+                                "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n"
+                                "  resident D[0, :];\n  acc C[0, :] in l2 init D[0, :] {\n"
+                                "    resident A[0, 0], B[0, :];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                "    release D[0, :];\n    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                                "    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("its first merge adds the init"));
+        CHECK_THAT(v.second, ContainsSubstring("call gemm +-> C[0, 1]: its first merge adds the init"));
+    }
+    // A tensor init on a vector accumulator: refused, not compared past the vector's one dimension.
+    {
+        const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                                "  vector Y[16] tile 16 out;\n  tensor X[16,1] tile 16x1 in;\n"
+                                "  resident X[0, 0];\n  acc Y[0] in l2 init X[0, 0] { }\n  release X[0, 0];\n}\n";
+        std::string sym = "accepted";
+        try { (void)lang::validate(src); } catch (const std::exception& e) { sym = e.what(); }
+        CHECK_THAT(sym, ContainsSubstring("a tensor init needs a tensor accumulator, and Y is a vector"));
+    }
+}
+
+TEST_CASE("acc init: an in-place writeback of the init's tile waits for the merge that reads it",
+          "[program][csp][init][l2acc][lt1]") {
+    // The second review of #446: D is the init of C's first merge, then updated in place. The
+    // Writeback of D must not finish before C's first merge has read D. A slow gemm makes that late.
+    // The streamer's in-order issue orders them already (D's Feed follows C's Drain); the in-place
+    // Writeback's bound on the stages' reads, as Release and Retain have it, keeps this so if
+    // that order ever loosens. The test pins the invariant.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                            "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+                            "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 inout;\n"
+                            "  resident A[0, 0], B[0, 0], D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                            "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                            "  call relu(D[0, 0]) -> D[0, 0];\n  store D[0, 0];\n"
+                            "  release A[0, 0], B[0, 0], D[0, 0];\n  store C[0, 0];\n}\n";
+    auto dev = characterize::DeviceDescriptor::single();
+    dev.fabric_macs_per_cycle = 1.0;               // the gemm, and so C's first merge, is late
+    dev.compute_tiles = 2;                         // and the relu on D runs beside it, on the other tile
+    CspProgram p = lang::compile(src);
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
+    TransactionalInterpreter lt(dev, p.channel(Chan::L3).capacity, 0);
+    lt.begin(p.source);
+    for (const Action& a : p.actions) lt.step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+    (void)lt.finish();
+    std::uint64_t merge_read = 0, wb_finish = 0;
+    bool merged = false, wrote = false;
+    for (const auto& r : lt.records()) {
+        if (r.kind == Action::Kind::Drain && r.tile.operand == "C") {
+            merge_read = r.finish;                 // the init is read as the merge's Drain runs
+            merged = true;
+        }
+        if (r.kind == Action::Kind::Writeback && r.tile.operand == "D") {
+            wb_finish = r.finish;
+            wrote = true;
+        }
+    }
+    REQUIRE(merged);
+    REQUIRE(wrote);
+    CHECK(wb_finish >= merge_read);
+}
