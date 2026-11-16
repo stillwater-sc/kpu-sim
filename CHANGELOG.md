@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--deploy`, where it used to read the first. Exit 1 when values disagree, 2 when a deployment
   refused the program, 0 otherwise. `driver::arg_all` reads a repeated option.
 
+- **`kpu-run --step` at L-CA** (#285): one cycle per step, a replay of the run's protocol
+  events. Only cycles at which something happened are steps: a credit taken or returned, a
+  transfer begun or ended, a stall begun. A stall continuing from the cycle before is counted,
+  not listed. Each event is named by the program's tile and, for the DMA engines, BlockMovers
+  and credit pools, its buffer slot. Each step shows the transfers in flight per process. A
+  COMPLETE event is placed at the cycle its transfer ends (the executor stamps it with the
+  start and a duration). `--step` walks the finest level that ran. In the API:
+  `VirtualPlatform::step_begin(h, CycleAccurate, window)`, `driver::CspCycleStepper`, and
+  `CspDriver::keep_events`, which is off for every other run.
+
 ### Changed
 
 - **Docs: kpu-sim leads the RTL.** kpu-sim is the architecture simulator: the RTL generator
