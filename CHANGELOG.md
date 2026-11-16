@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`kpu-run`: a sweep over deployments** (#285). `--deploy` repeated runs the same program, on
+  the same inputs, on each deployment. Each deployment's levels are checked against its own L-B,
+  and L-B must compute the same values, bit for bit, on every deployment. Each run is reported
+  with its deployment's label, digest and run identity, and a table gives every level's makespan
+  per deployment. What records one run (`--tflow`, `--dflow`, `--timeline`, `--tile-commands`,
+  `--emit-l0*`, `--step`) is refused in a sweep, by name. An L0 program refuses a repeated
+  `--deploy`, where it used to read the first. Exit 1 when values disagree, 2 when a deployment
+  refused the program, 0 otherwise. `driver::arg_all` reads a repeated option.
+
+### Changed
+
+- **Docs: kpu-sim leads the RTL.** kpu-sim is the architecture simulator: the RTL generator
+  implements what kpu-sim has shown to work. The Combiner's docs and comments no longer describe
+  its order of operations or its rounding mode as the RTL's (esg#68's): they are the
+  architecture's, and the RTL implements them.
+
 ### Fixed
 
 - **L-CA no longer livelocks on a vector tile made resident for one result's context** (#434).
@@ -78,7 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `scale(m, shift) @ combiner` computes `round(x * m / 2^shift)`, ties to even, saturated;
     - every store of such a tensor (an L2 accumulator: its final merge) must carry the scale and
       no other stage. A scale on a tensor without `acc` is refused, as is one off the Combiner or
-      out of esg#68's order.
+      out of the Combiner's order (bias, scale, activation, format).
   - `numeric::requantize` does the arithmetic exactly in int64, for any registered integer
     types.
   - The L0 trace: `REQUANT m= shift=` (opset 1.7), and `OPERAND acc=` (container 1.4.0,
@@ -87,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - L-B, the replay, L-T1 and L-CA store the same int8 results under OS, WS and IS. The test
     checks them against an independent requantization of the int32 matmul.
   - `kpu-csp-gen --algo matmul --dtype int8 --requant m,shift`.
-  - The rounding mode (ties to even) is kpu-sim's choice until the RTL (esg#68) fixes one.
+  - The rounding mode (ties to even) is the architecture's; the RTL implements it (esg#68).
 
 - **The Combiner's block-format conversion: MXINT8 and MXFP8** (#427, part 2a).
   - The language: `mxint8 @ <place>` and `mxfp8 @ <place>` stages convert a result into an OCP
@@ -148,9 +166,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     weight-stationary timing of the array (each merge's gemm is timed as a one-call chain). These
     are #427's. `lang::print` refuses a program with an L2 accumulator; `lang::format` prints it.
 
-- **Docs: the Combiner** (#427, 2026-11-14). A new concept for the KPU tile, defined for the
-  KPU RTL generator (branes-ai/embodied-ai-soc-generator#68) and not modelled in kpu-sim
-  yet. The Combiner sits on the result path between L1 and L2. It merges intermediate
+- **Docs: the Combiner** (#427, 2026-11-14). A new concept in the KPU tile's architecture, not
+  modelled in kpu-sim yet; the KPU RTL generator implements it once kpu-sim has demonstrated it
+  (branes-ai/embodied-ai-soc-generator#68). The Combiner sits on the result path between L1 and
+  L2. It merges intermediate
   partials (the WS/IS reduction across K blocks), fuses bias, activation, scaling and
   block-format conversion as results are written to L2, and replaces the separate
   accumulator memory: the KPU tile has none. Results spill through the BlockMover and L3 to

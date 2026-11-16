@@ -98,7 +98,7 @@ inline bool parse_place(const std::string& s, Place& out) {
 // A vector operation: the epilogue (decision Q4). add takes a vector tile, broadcast down the
 // rows; relu, gelu, silu and atan are the activations; mxint8 and mxfp8 are the block-format
 // conversions into the OCP Microscaling formats (#427; numeric::block_convert), the last of a
-// result's operations (esg#68's order: bias, scale, activation, format).
+// result's operations (the Combiner's order: bias, scale, activation, format).
 // scale(m, shift) is the requantization (#427): an accumulator's values into its tensor's type,
 // round(x * m / 2^shift), ties to even, saturated (numeric::requantize).
 enum class VeOp : std::uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8, Scale };

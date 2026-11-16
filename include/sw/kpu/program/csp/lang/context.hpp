@@ -109,7 +109,7 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
                 fail(s.line, s.op + " @ fabric: a block-format conversion runs where the result leaves for memory, "
                              "on the Combiner or at bm.egress");
         }
-        // esg#68's order: bias, scale, activation, format.
+        // The Combiner's order: bias, scale, activation, format.
         if (r.op == VeOp::Scale) {
             if (s.nums.size() != 2) fail(s.line, "scale takes a multiplier and a shift: scale(m, shift)");
             if (s.nums[0] <= -(1LL << 31) || s.nums[0] >= (1LL << 31))
@@ -140,6 +140,10 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
                          ", which the tile reaches later; list the stages in the order the tile passes their places");
         last_rank = rank;
         last = r.place;
+        // A bias comes before the activation or format it feeds (after the places are checked,
+        // whose order is the tile's path).
+        if (r.op == VeOp::Add && after_scale)
+            fail(s.line, "add follows " + after_scale->op + ": the order is bias, scale, activation, format");
         if (target) {
             const auto& site = r.place == Place::Fabric ? target->fabric
                                : r.place == Place::Combiner ? target->combiner : target->bm;

@@ -151,6 +151,27 @@ TEST_CASE("an option present without a value is an error, not an absence",
     CHECK(out == "run.json");
 }
 
+TEST_CASE("a repeated option yields every value, in order", "[program][driver]") {
+    // A sweep is --deploy repeated (#285); arg_required reads only the first, so a repeated
+    // option read through it drops the rest without a word.
+    std::vector<std::string> out;
+    std::string err;
+    const std::vector<std::string> two{"--deploy", "a.json", "--level", "all", "--deploy", "b.json"};
+    REQUIRE(arg_all(two, "--deploy", out, err));
+    CHECK(out == std::vector<std::string>{"a.json", "b.json"});
+    REQUIRE(arg_all(two, "--inputs", out, err));
+    CHECK(out.empty());                                   // absent: no values, not an error
+    // Each occurrence is checked as arg_required checks one.
+    const std::vector<std::string> terminal{"--deploy", "a.json", "--deploy"};
+    CHECK_FALSE(arg_all(terminal, "--deploy", out, err));
+    CHECK(err.find("missing value") != std::string::npos);
+    const std::vector<std::string> flag_as_value{"--deploy", "a.json", "--deploy", "--step"};
+    CHECK_FALSE(arg_all(flag_as_value, "--deploy", out, err));
+    CHECK(err.find("--step") != std::string::npos);
+    const std::vector<std::string> empty{"--deploy", ""};
+    CHECK_FALSE(arg_all(empty, "--deploy", out, err));
+}
+
 // ============================================================================
 // Increment 3 — single-stepping (§D4)
 //
