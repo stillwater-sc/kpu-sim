@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`kpu-floorplan --structure`** (#392): the model writes the structure record, `kpu-structure`
+  v1, natively (`floorplan_to_structure`). CTest `structure_native_t4` holds it to the converted
+  record, block for block. **`tools/trace/structure_diff.py`** compares two records by id,
+  provenance aside, within a relative tolerance; exit 0, 1 or 2.
+
+## [0.9.0] - 2026-11-16
+
+v0.9.0 closes its milestone: one tile at three levels (L-B, L-T1, L-CA), and the first RTL
+cross-check (the tile command stream, #397, whose RTL half continues in v0.10.0). It is `main` as
+merged, so it also carries v0.10.0 work that landed before the milestone's last issue closed:
+the Combiner's epilogue and per-channel scale, the L2 accumulator's init, the structure record
+and the floorplan view.
+
 ### Documentation
 
 - **ADR 0005: viewers and debug tools live in the architecture simulator.** esg (the RTL
@@ -27,11 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `docs/archive/superseded/` with a pointer: it still drew the retired L0 L-T1 executor.
 
 ### Added
-
-- **`kpu-floorplan --structure`** (#392): the model writes the structure record, `kpu-structure`
-  v1, natively (`floorplan_to_structure`). CTest `structure_native_t4` holds it to the converted
-  record, block for block. **`tools/trace/structure_diff.py`** compares two records by id,
-  provenance aside, within a relative tolerance; exit 0, 1 or 2.
 
 - **An L2 accumulator's init, through the Combiner** (#427): `acc C[:, j] in l2 init D[:, j]`, or
   a bias row `init b[j]`.
