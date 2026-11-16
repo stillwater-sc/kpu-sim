@@ -437,7 +437,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_->slot_id;
+                events.back().set_slot(in_flight_->slot_id);
                 events.back().store_ticket = in_flight_ticket_;
                 if (credit_released) {
                     events.push_back(TimingEvent(
@@ -447,7 +447,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
-                    events.back().slot_id = in_flight_->slot_id;
+                    events.back().set_slot(in_flight_->slot_id);
                 }
                 in_flight_target_ = nullptr;
                 in_flight_ticket_ = 0;
@@ -483,7 +483,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_->slot_id;
+                events.back().set_slot(in_flight_->slot_id);
 
                 events.push_back(TimingEvent(
                     EventType::TILE_ARRIVED_L2,
@@ -492,7 +492,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_->slot_id;
+                events.back().set_slot(in_flight_->slot_id);
 
                 if (credit_released) {
                     events.push_back(TimingEvent(
@@ -527,7 +527,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_->slot_id;
+                events.back().set_slot(in_flight_->slot_id);
 
                 events.push_back(TimingEvent(
                     EventType::TILE_ARRIVED_L3,
@@ -536,7 +536,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_->slot_id;
+                events.back().set_slot(in_flight_->slot_id);
 
                 if (credit_released) {
                     events.push_back(TimingEvent(
@@ -596,7 +596,7 @@ private:
             if (credit_released) {
                 events.push_back(TimingEvent(EventType::CREDIT_RELEASED, current_cycle,
                                              config_.mover_id, id, name()));
-                events.back().slot_id = entry->slot_id;
+                events.back().set_slot(entry->slot_id);
             }
             it = release_queue_.erase(it);
         }
@@ -664,7 +664,7 @@ private:
                 dedup_tile.tile_id,
                 name()
             ));
-            events.back().slot_id = l2_entry->slot_id;
+            events.back().set_slot(l2_entry->slot_id);
 
             if (credit_released) {
                 events.push_back(TimingEvent(
@@ -820,7 +820,7 @@ private:
             move_tile.tile_id,
             name()
         ));
-        events.back().slot_id = l2_slot;
+        events.back().set_slot(l2_slot);
 
         events.push_back(TimingEvent(
             EventType::CREDIT_ACQUIRED,
@@ -829,7 +829,7 @@ private:
             move_tile.tile_id,
             name()
         ));
-        events.back().slot_id = l2_slot;
+        events.back().set_slot(l2_slot);
 
         return true;
     }

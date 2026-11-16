@@ -39,7 +39,6 @@
 #include <optional>
 #include <queue>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -282,13 +281,27 @@ public:
         // The driver keeps them in cycle order; a stable sort keeps each cycle's logged order.
         std::stable_sort(events.begin(), events.end(), [](const Event& a, const Event& b) { return a.cycle < b.cycle; });
         // A stall is continuing when the same process logged it, on the same tile, the cycle before.
-        std::map<std::tuple<timing::EventType, std::string, std::string>, std::uint64_t> stalled;   // -> last cycle
+        // A process may log one stall twice in a cycle (a BlockMover's Move and Writeback queues
+        // both waiting on one tile), so every report in a cycle is classified against the key's
+        // previous distinct cycle, as the first report of that cycle was.
+        struct Seen {
+            std::uint64_t cycle;
+            bool continuing;
+        };
+        std::map<std::tuple<timing::EventType, std::string, std::string>, Seen> stalled;
         for (auto& ev : events) {
             if (is_stall(ev.type)) {
                 const auto key = std::make_tuple(ev.type, ev.component, ev.tile ? ev.tile->to_string() : std::string());
-                const auto it = stalled.find(key);
-                const bool continuing = it != stalled.end() && it->second + 1 == ev.cycle;
-                stalled[key] = ev.cycle;
+                auto it = stalled.find(key);
+                bool continuing = false;
+                if (it == stalled.end()) {
+                    stalled.emplace(key, Seen{ev.cycle, false});
+                } else if (it->second.cycle == ev.cycle) {
+                    continuing = it->second.continuing;
+                } else {
+                    continuing = it->second.cycle + 1 == ev.cycle;
+                    it->second = Seen{ev.cycle, continuing};
+                }
                 if (continuing) {
                     if (!steps_.empty() && steps_.back().cycle == ev.cycle) ++steps_.back().continuing;
                     else pending_[ev.cycle]++;
@@ -385,11 +398,7 @@ inline std::string describe(const timing::CspDriver::ProtocolEvent& e) {
     std::string out = timing::to_string(e.type);
     if (!e.component.empty()) out += "  " + e.component;
     if (e.tile) out += "  " + e.tile->to_string();
-    // The DMA engines, the BlockMovers and the credit pools name the buffer slot (slot 0 among
-    // them); the streamers' and the fabric's events carry none.
-    const std::string_view name = timing::to_string(e.type);
-    if (name.rfind("DMA_", 0) == 0 || name.rfind("BM_", 0) == 0 || name.rfind("CREDIT_", 0) == 0)
-        out += "  slot " + std::to_string(e.slot);
+    if (e.slot) out += "  slot " + std::to_string(*e.slot);       // only when the producer named one
     if (e.duration) out += "  (" + std::to_string(e.duration) + " cycles)";
     if (!e.detail.empty()) out += "  " + e.detail;
     return out;

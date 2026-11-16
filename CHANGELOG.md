@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`kpu-run --step` at L-CA** (#285): one cycle per step, a replay of the run's protocol
   events. Only cycles at which something happened are steps: a credit taken or returned, a
   transfer begun or ended, a stall begun. A stall continuing from the cycle before is counted,
-  not listed. Each event is named by the program's tile and, for the DMA engines, BlockMovers
-  and credit pools, its buffer slot. Each step shows the transfers in flight per process. A
+  not listed. Each event is named by the program's tile and by its buffer slot when it names one
+  (`TimingEvent::has_slot`, set through `set_slot()`, since slot 0 is a slot). Each step shows the transfers in flight per process. A
   COMPLETE event is placed at the cycle its transfer ends (the executor stamps it with the
   start and a duration). `--step` walks the finest level that ran. In the API:
   `VirtualPlatform::step_begin(h, CycleAccurate, window)`, `driver::CspCycleStepper`, and

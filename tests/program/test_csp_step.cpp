@@ -164,6 +164,11 @@ TEST_CASE("csp step: L-CA replays its protocol events, one cycle per step", "[cs
                 CHECK(e.cycle == s.start);
                 loads += e.type == sw::kpu::timing::EventType::DMA_LOAD_COMPLETE;
                 stores += e.type == sw::kpu::timing::EventType::DMA_STORE_COMPLETE;
+                // A slot only where the producer names one: a DMA engine's L3 credit, never the
+                // memory controller's load (whose slot field is left at its default).
+                if (e.type == sw::kpu::timing::EventType::CREDIT_ACQUIRED && e.component.rfind("DMA", 0) == 0)
+                    CHECK(e.slot.has_value());
+                if (e.type == sw::kpu::timing::EventType::DMA_LOAD_START) CHECK_FALSE(e.slot.has_value());
                 if (e.tile) {
                     ++tiled;
                     CHECK(operands.count(e.tile->operand) == 1);   // named by the program's tile
@@ -189,6 +194,41 @@ TEST_CASE("csp step: L-CA replays its protocol events, one cycle per step", "[cs
         CHECK(tiled > 0);
         CHECK(cur.stepper().lanes_busy().empty());        // every transfer begun has ended
     }
+}
+
+TEST_CASE("csp step: L-CA lists a stall once, however often a cycle reports it", "[csp][step]") {
+    // A BlockMover's Move and Writeback queues can both wait on one tile, so one cycle carries the
+    // same stall twice (#440's review). Both reports of a cycle are classified alike.
+    using E = sw::kpu::timing::CspDriver::ProtocolEvent;
+    using T = sw::kpu::timing::EventType;
+    auto stall = [](std::uint64_t c) {
+        E e;
+        e.cycle = c;
+        e.type = T::BM_STALL_TAG;
+        e.component = "L3(0,0):BM";
+        e.tile = TileCoord{"C", 0, 0};
+        return e;
+    };
+    E start;
+    start.cycle = 12;
+    start.type = T::BM_MOVE_START;
+    start.component = "L3(0,0):BM";
+    start.slot = 0;                                   // slot 0 is a slot
+    std::vector<E> ev{stall(10), stall(10), stall(11), stall(11), stall(12), stall(12), start};
+    driver::CspCycleStepper st(ev);
+    REQUIRE(st.size() == 2);                          // cycle 10 (the stall begins) and 12 (the start)
+    REQUIRE(st.step());
+    CHECK(st.current().start == 10);
+    CHECK(st.current().events.size() == 2);           // both reports of the stall's first cycle
+    CHECK(st.current().stalls_continuing == 0);
+    REQUIRE(st.step());
+    CHECK(st.current().start == 12);
+    REQUIRE(st.current().events.size() == 1);
+    CHECK(st.current().stalls_continuing == 2);
+    CHECK_THAT(driver::describe(st.current().events.front()), ContainsSubstring("slot 0"));
+    CHECK_THAT(driver::describe(stall(10)), !ContainsSubstring("slot"));
+    CHECK(st.quiet_stalls() == 2);                    // cycle 11: only the continuing stall
+    CHECK_FALSE(st.step());
 }
 
 TEST_CASE("csp step: a level that cannot run is refused with its reason", "[csp][step]") {

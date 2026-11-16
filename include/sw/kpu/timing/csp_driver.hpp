@@ -110,7 +110,7 @@ public:
         EventType type = EventType::DMA_LOAD_START;
         std::string component;                      // "DMA[0]", "BlockMover[1]", ...
         std::optional<program::TileCoord> tile;     // none for a memory controller's events
-        std::uint32_t slot = 0;
+        std::optional<std::uint32_t> slot;          // the buffer slot, when the event names one
         Cycle duration = 0;
         std::string detail;
     };
@@ -257,7 +257,7 @@ public:
                 // A memory controller's events name a bank, not a tile.
                 if (e.type != EventType::MC_ACCESS_TYPE && e.type != EventType::MC_BANK_CONFLICT)
                     if (const auto c = coord_.find(e.tile_id); c != coord_.end()) p.tile = c->second;
-                p.slot = e.slot_id;
+                if (e.has_slot) p.slot = e.slot_id;
                 p.duration = e.duration;
                 p.detail = e.detail;
                 r.events.push_back(std::move(p));

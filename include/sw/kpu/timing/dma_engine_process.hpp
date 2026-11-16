@@ -587,7 +587,7 @@ private:
                     req.tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = entry->slot_id;
+                events.back().set_slot(entry->slot_id);
                 events.back().matrix_base_address = req.tile.matrix_base_address;
                 events.back().dram_address = req.tile.dram_address;
 
@@ -659,7 +659,7 @@ private:
                 req.tile.tile_id,
                 name()
             ));
-            events.back().slot_id = req.slot_id;
+            events.back().set_slot(req.slot_id);
         }
 
         // Stall accounting: at most one stall cycle per tick (matches BM/STR)
@@ -754,7 +754,7 @@ private:
             req.tile.tile_id,
             name()
         ));
-        events.back().slot_id = req.slot_id;
+        events.back().set_slot(req.slot_id);
         events.back().matrix_base_address = req.tile.matrix_base_address;
         events.back().dram_address = req.tile.dram_address;
     }

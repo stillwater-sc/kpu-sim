@@ -215,8 +215,8 @@ lists. #286 renders this; it does not come for free with it.
      listed, and a cycle with nothing else is no step. The 48x48 matmul on S1 runs 1948 cycles
      and steps 294.
    - **Events are named by the program's tile** (`A[0,1]`), through the driver's map from
-     executor tiles to program tiles. The DMA engines', BlockMovers' and credit pools' events
-     carry their buffer slot.
+     executor tiles to program tiles, and by their buffer slot when the producer named one
+     (`TimingEvent::has_slot`).
 
    Each step also shows the transfers in flight per process. kpu-run's `--step` walks the
    finest level that ran, which is L-CA whenever L-CA ran.

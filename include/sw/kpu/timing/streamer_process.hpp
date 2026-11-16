@@ -294,7 +294,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_l2_slot_;
+                events.back().set_slot(in_flight_l2_slot_);
 
                 events.push_back(TimingEvent(
                     EventType::TILE_FED_TO_COMPUTE,
@@ -303,7 +303,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_l2_slot_;
+                events.back().set_slot(in_flight_l2_slot_);
 
                 if (credit_released) {
                     events.push_back(TimingEvent(
@@ -330,7 +330,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_->slot_id;
+                events.back().set_slot(in_flight_->slot_id);
 
                 events.push_back(TimingEvent(
                     EventType::TILE_DRAINED,
@@ -339,7 +339,7 @@ private:
                     in_flight_->tile.tile_id,
                     name()
                 ));
-                events.back().slot_id = in_flight_->slot_id;
+                events.back().set_slot(in_flight_->slot_id);
             }
 
             in_flight_.reset();
@@ -418,7 +418,7 @@ private:
             feed_tile.tile_id,
             name()
         ));
-        events.back().slot_id = found_entry->slot_id;
+        events.back().set_slot(found_entry->slot_id);
 
         return true;
     }
@@ -532,7 +532,7 @@ private:
             drain_tile.tile_id,
             name()
         ));
-        events.back().slot_id = l2_slot;
+        events.back().set_slot(l2_slot);
 
         if (!accumulate)
             events.push_back(TimingEvent(
