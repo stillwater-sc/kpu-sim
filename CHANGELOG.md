@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **ADR 0005: viewers and debug tools live in the architecture simulator.** esg (the RTL
+  generator) produces records of the implementation in kpu-sim's formats; kpu-sim defines those
+  formats, checks them, and owns the views and the tools that read them.
+  - The assessment and the plan: `docs/plans/viewers-and-debug-in-the-architecture-simulator.md`.
+  - esg's viewer issues were moved here: esg#59 to #447 (Overview), esg#61 to #448
+    (Investigate), esg#60 to #449 (publishing).
+  - The structure record (#392) becomes the one floorplan format too, and comes first.
+
 - **`docs/02-simulation/simulator-architecture.md`: how a program runs.**
   - The pipeline from a `.csp` program to the records the viewers read, as a diagram.
   - Each stage with its code path: writing, parsing and validating, the platform and the
