@@ -1,0 +1,10 @@
+# CodeRabbit configuration (https://docs.coderabbit.ai/reference/configuration).
+# PRs start as drafts here (the issue workflow opens them so), and CodeRabbit's default is to
+# skip drafts: every review then needed a manual "@coderabbitai review", each one spent from the
+# included hourly allowance. Review drafts automatically, incrementally on each push.
+language: en-US
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    drafts: true
