@@ -209,6 +209,9 @@ struct CspLevelOutcome {
     // and each staged copy's L2 slot (#399).
     std::vector<std::pair<TileCoord, std::uint32_t>> l3_placement;
     std::vector<std::pair<TileCoord, std::uint32_t>> l2_placement;
+    // L-CA, when asked for (keep_events): every protocol event, in cycle order -- what its step
+    // replays (#285).
+    std::vector<timing::CspDriver::ProtocolEvent> events;
 };
 
 struct CspRunRequest {
@@ -331,7 +334,7 @@ inline CspReference csp_reference(const csp::lang::Program& ast, const TileProgr
 // One level's run of the program on `inputs` (skipped, with the reason, when it cannot run).
 inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Program& ast,
                                      const platform::DeviceSpecification* device, const TileProgram& inputs,
-                                     std::size_t window = 256) {
+                                     std::size_t window = 256, bool keep_events = false) {
     CspLevelOutcome o;
     o.level = level;
     o.skipped = csp_level_supported(level, ast, device);
@@ -397,7 +400,10 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.unmodelled = cfg->unmapped;
         timing::ConcurrentTimingExecutor exec(cfg->config);
         csp::lang::ActionStream s(ast, target);
-        const auto r = timing::CspDriver(exec, s, inputs, window).run();
+        timing::CspDriver drv(exec, s, inputs, window);
+        drv.keep_events(keep_events);
+        auto r = drv.run();
+        o.events = std::move(r.events);
         if (!r.completed) {
             o.livelock = r.livelock;
             o.skipped = r.livelock ? std::string("L-CA livelocked at cycle ") + std::to_string(r.cycles)

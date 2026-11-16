@@ -27,6 +27,7 @@
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/lang/walk.hpp>
 #include <sw/kpu/program/csp/transactional.hpp>
+#include <sw/kpu/timing/csp_driver.hpp>
 
 #include <algorithm>
 #include <array>
@@ -38,6 +39,7 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -65,6 +67,11 @@ struct CspStep {
     // Station occupancy: L-B after the action; L-T1 at `start`.
     std::size_t l3_held = 0;
     std::size_t l2_held = 0, cf_held = 0;   // L-B only
+    // L-CA only: the cycle (`start`) and its protocol events, in the order logged. A stall the
+    // same process logged on the previous cycle too is not listed again; `stalls_continuing`
+    // counts those.
+    std::vector<timing::CspDriver::ProtocolEvent> events;
+    std::size_t stalls_continuing = 0;
 };
 
 class CspStepper {
@@ -259,6 +266,143 @@ private:
     std::map<std::string, std::size_t> busy_;
     CspStep cur_{};
 };
+
+// ----------------------------------------------------------------------------
+// L-CA: one cycle per step, a replay of the run's protocol events (#285). Only the cycles at
+// which something happened are steps: a credit taken or returned, a transfer begun or ended, a
+// stall begun. A stalled process logs its stall every cycle it waits, so a stall that was also
+// logged on the previous cycle is counted, not listed, and a cycle with nothing else is no step.
+// ----------------------------------------------------------------------------
+class CspCycleStepper final : public CspStepper {
+public:
+    using Event = timing::CspDriver::ProtocolEvent;
+
+    explicit CspCycleStepper(std::vector<Event> events) {
+        // The driver keeps them in cycle order; a stable sort keeps each cycle's logged order.
+        std::stable_sort(events.begin(), events.end(), [](const Event& a, const Event& b) { return a.cycle < b.cycle; });
+        // A stall is continuing when the same process logged it, on the same tile, the cycle before.
+        // A process may log one stall twice in a cycle (a BlockMover's Move and Writeback queues
+        // both waiting on one tile), so every report in a cycle is classified against the key's
+        // previous distinct cycle, as the first report of that cycle was.
+        struct Seen {
+            std::uint64_t cycle;
+            bool continuing;
+        };
+        std::map<std::tuple<timing::EventType, std::string, std::string>, Seen> stalled;
+        for (auto& ev : events) {
+            if (is_stall(ev.type)) {
+                const auto key = std::make_tuple(ev.type, ev.component, ev.tile ? ev.tile->to_string() : std::string());
+                auto it = stalled.find(key);
+                bool continuing = false;
+                if (it == stalled.end()) {
+                    stalled.emplace(key, Seen{ev.cycle, false});
+                } else if (it->second.cycle == ev.cycle) {
+                    continuing = it->second.continuing;
+                } else {
+                    continuing = it->second.cycle + 1 == ev.cycle;
+                    it->second = Seen{ev.cycle, continuing};
+                }
+                if (continuing) {
+                    if (!steps_.empty() && steps_.back().cycle == ev.cycle) ++steps_.back().continuing;
+                    else pending_[ev.cycle]++;
+                    continue;
+                }
+            }
+            if (steps_.empty() || steps_.back().cycle != ev.cycle) {
+                steps_.push_back(Step{ev.cycle, {}, 0});
+                if (const auto p = pending_.find(ev.cycle); p != pending_.end()) {
+                    steps_.back().continuing += p->second;
+                    pending_.erase(p);
+                }
+            }
+            steps_.back().events.push_back(std::move(ev));
+        }
+        for (const auto& [c, n] : pending_) quiet_stalls_ += n;   // cycles with only continuing stalls
+        pending_.clear();
+    }
+
+    bool step() override {
+        if (next_ >= steps_.size()) return false;
+        Step& st = steps_[next_++];
+        cur_ = CspStep{};
+        cur_.start = cur_.finish = st.cycle;
+        cur_.events = std::move(st.events);
+        cur_.stalls_continuing = st.continuing;
+        for (const Event& ev : cur_.events) track(ev);
+        busy_.clear();
+        for (const auto& [p, n] : in_flight_)
+            if (n > 0) busy_[p] = n;
+        return true;
+    }
+    const CspStep& current() const override { return cur_; }
+    std::size_t position() const override { return next_; }
+    std::size_t size() const override { return steps_.size(); }
+    bool executes() const override { return false; }
+    // Transfers in flight per process after the step's cycle: begun and not yet ended.
+    const std::map<std::string, std::size_t>& lanes_busy() const override { return busy_; }
+    // Continuing stalls logged on cycles that are no step (nothing else happened then).
+    std::size_t quiet_stalls() const { return quiet_stalls_; }
+
+    static bool is_stall(timing::EventType t) {
+        using T = timing::EventType;
+        switch (t) {
+            case T::DMA_STALL_CREDIT: case T::DMA_STALL_TAG: case T::BM_STALL_TAG: case T::BM_STALL_CREDIT:
+            case T::STR_STALL_TAG: case T::STR_STALL_CREDIT: case T::STR_STALL_COMPUTE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // The process an event's transfer belongs to, and whether it begins (+1) or ends (-1) one.
+    // Stalls, credits and a memory controller's events neither begin nor end a transfer.
+    static std::optional<std::pair<const char*, int>> transfer(timing::EventType t) {
+        using T = timing::EventType;
+        switch (t) {
+            case T::DMA_LOAD_START: case T::DMA_STORE_START: return std::pair{"dma", +1};
+            case T::DMA_LOAD_COMPLETE: case T::DMA_STORE_COMPLETE: return std::pair{"dma", -1};
+            case T::BM_MOVE_START: case T::BM_WRITEBACK_START: case T::BM_EJECT_START: return std::pair{"bm", +1};
+            case T::BM_MOVE_COMPLETE: case T::BM_WRITEBACK_COMPLETE: case T::BM_EJECT_COMPLETE: return std::pair{"bm", -1};
+            case T::STR_FEED_START: case T::STR_DRAIN_START: return std::pair{"str", +1};
+            case T::STR_FEED_COMPLETE: case T::STR_DRAIN_COMPLETE: return std::pair{"str", -1};
+            case T::COMPUTE_START: return std::pair{"cf", +1};
+            case T::COMPUTE_COMPLETE: return std::pair{"cf", -1};
+            default: return std::nullopt;
+        }
+    }
+
+private:
+    void track(const Event& ev) {
+        const auto t = transfer(ev.type);
+        if (!t) return;
+        std::size_t& n = in_flight_[t->first];
+        if (t->second > 0) ++n;
+        else if (n > 0) --n;                        // an end whose begin the log does not hold
+    }
+
+    struct Step {
+        std::uint64_t cycle;
+        std::vector<Event> events;
+        std::size_t continuing;
+    };
+    std::vector<Step> steps_;
+    std::map<std::uint64_t, std::size_t> pending_;  // continuing stalls of a cycle with no step yet
+    std::size_t quiet_stalls_ = 0;
+    std::size_t next_ = 0;
+    CspStep cur_;
+    std::map<std::string, std::size_t> in_flight_, busy_;
+};
+
+// One protocol event, as a step prints it: what happened, where, to which program tile.
+inline std::string describe(const timing::CspDriver::ProtocolEvent& e) {
+    std::string out = timing::to_string(e.type);
+    if (!e.component.empty()) out += "  " + e.component;
+    if (e.tile) out += "  " + e.tile->to_string();
+    if (e.slot) out += "  slot " + std::to_string(*e.slot);       // only when the producer named one
+    if (e.duration) out += "  (" + std::to_string(e.duration) + " cycles)";
+    if (!e.detail.empty()) out += "  " + e.detail;
+    return out;
+}
 
 // One line per step, for a terminal. `--step` prints these.
 inline std::string describe(const CspStep& s, bool timed) {

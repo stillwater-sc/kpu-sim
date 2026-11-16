@@ -1311,7 +1311,7 @@ inline void ConcurrentTimingExecutor::retire_l2_releases() {
             continue;
         }
         TimingEvent e(EventType::CREDIT_RELEASED, current_cycle_, 0, tile, "L2:release");
-        e.slot_id = entry->slot_id;
+        e.set_slot(entry->slot_id);
         if (l2_tag_cam_.invalidate(tile)) l2_credits_.release(static_cast<size_t>(tile.matrix));
         apply_payload_event(e);
         events_.push_back(e);

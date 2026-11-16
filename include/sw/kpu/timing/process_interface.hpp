@@ -129,7 +129,8 @@ struct TimingEvent {
     uint32_t component_id;    ///< Which component (DMA engine 0, BlockMover 1, etc.)
     TileID tile_id;           ///< Which tile (if applicable)
     Cycle duration;           ///< Duration in cycles (for COMPLETE events)
-    uint32_t slot_id;         ///< Buffer/bank slot (if applicable)
+    uint32_t slot_id;         ///< Buffer/bank slot (if applicable: see has_slot)
+    bool has_slot = false;    ///< slot_id was set by the producer (slot 0 is a slot)
     std::string component_name; ///< Human-readable component name
     std::string detail;         ///< Additional detail (e.g., "ROW_HIT" for MC_ACCESS_TYPE)
     uint64_t store_ticket = 0;  ///< Which STORE an eject/retire event belongs to (0 = none):
@@ -138,6 +139,13 @@ struct TimingEvent {
     Address dram_address = 0;  ///< DRAM address for this tile
 
     TimingEvent() = default;
+
+    /// The buffer slot the event names. Producers set it through here, so a reader can tell a
+    /// slot 0 from no slot at all.
+    void set_slot(uint32_t s) {
+        slot_id = s;
+        has_slot = true;
+    }
 
     TimingEvent(EventType t, Cycle c, uint32_t comp_id, const std::string& comp_name = "")
         : type(t), cycle(c), component_id(comp_id), duration(0), slot_id(0),

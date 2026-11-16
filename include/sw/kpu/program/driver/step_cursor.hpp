@@ -5,7 +5,7 @@
 // An L0 program is a trace (ADR 0004 §4) and runs at L-B only, so its one stepper is
 // behavioral: it holds the kernel state and applies one op per step, so values are
 // observable as they form. The timed levels step the CSP program the trace came from
-// (csp_step.hpp): L-T1 replays its records, and L-CA's step is a cycle (#283). The L0 L-T1
+// (csp_step.hpp): L-T1 replays its records, and L-CA replays its protocol events, a cycle per step (#285). The L0 L-T1
 // replay stepper retired with the L0 L-T1 executor (kpu-run-csp-programs step 4e).
 //
 // SPDX-License-Identifier: MIT

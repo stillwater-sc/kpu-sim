@@ -6,7 +6,8 @@
 //     computes, and station occupancy never exceeds the program's L3.
 //   - L-T1: one record per step, in start order. Every record of the run is replayed once;
 //     lanes busy never exceed the process's lanes, and L3 slots held never exceed L-T1's peak.
-//   - L-CA steps cycles (#283): refused, with the reason.
+//   - L-CA: one cycle per step, a replay of its protocol events (#285). Cycles strictly increase,
+//     every event of the run is replayed once, and every transfer begun has ended at the last.
 //   - The timeline: one Chrome-trace event per leg; a Release is not an interval.
 //
 // SPDX-License-Identifier: MIT
@@ -22,6 +23,7 @@
 
 #include <fstream>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -124,11 +126,123 @@ TEST_CASE("csp step: L-T1 replays every record in start order, within its lanes 
     }
 }
 
-TEST_CASE("csp step: L-CA's step is a cycle, and is refused", "[csp][step]") {
-    platform::VirtualPlatform vp(platform::read_spec_file("tests/program/deploy/kpu_s1.json"));
+TEST_CASE("csp step: L-CA replays its protocol events, one cycle per step", "[csp][step]") {
+    // LU's tile functions are not L-CA's; matmul and the fused linear are.
+    for (const char* name : {"matmul_48x48x48_t16.csp", "linear_64_t16_relu.csp"}) {
+        CAPTURE(name);
+        platform::VirtualPlatform vp(platform::read_spec_file("tests/program/deploy/kpu_s1.json"));
+        const lang::Program ast = corpus(name);
+        const auto h = vp.load_csp(ast, driver::csp_inputs(ast));
+        // A run keeps no events unless asked: they are the step's, not every run's.
+        const auto plain = vp.run_csp(h, ExecutionLevel::CycleAccurate, 64);
+        REQUIRE_FALSE(plain.outcome.skipped.has_value());
+        CHECK(plain.outcome.events.empty());
+
+        auto cur = vp.step_begin(h, ExecutionLevel::CycleAccurate, 64);
+        CHECK_FALSE(cur.executes());
+        REQUIRE(cur.run_result().has_value());
+        const auto& o = cur.run_result()->outcome;
+        CHECK(cur.run_result()->identity.level == ExecutionLevel::CycleAccurate);
+        CHECK(cur.run_result()->identity.schedule == "window=64");
+        REQUIRE_FALSE(o.events.empty());
+        // The run behind the replay computes what a run without events computes.
+        CHECK(o.makespan == plain.outcome.makespan);
+        for (const auto& op : o.values.operand_order())
+            CHECK(o.values.operand(op).values == plain.outcome.values.operand(op).values);
+
+        std::set<std::string> operands;
+        for (const auto& op : o.values.operand_order()) operands.insert(op);
+        std::optional<std::uint64_t> last;
+        std::size_t events = 0, loads = 0, stores = 0, tiled = 0, stalls_begun = 0;
+        while (cur.step()) {
+            const auto& s = cur.current();
+            if (last) CHECK(s.start > *last);                 // one step per cycle, in order
+            last = s.start;
+            CHECK(s.start <= o.makespan);
+            REQUIRE_FALSE(s.events.empty());
+            for (const auto& e : s.events) {
+                CHECK(e.cycle == s.start);
+                loads += e.type == sw::kpu::timing::EventType::DMA_LOAD_COMPLETE;
+                stores += e.type == sw::kpu::timing::EventType::DMA_STORE_COMPLETE;
+                // A slot only where the producer names one: a DMA engine's L3 credit, never the
+                // memory controller's load (whose slot field is left at its default).
+                // Every credit, and every transfer's start, names the slot it takes or frees.
+                using T = sw::kpu::timing::EventType;
+                if (e.type == T::CREDIT_ACQUIRED || e.type == T::CREDIT_RELEASED || e.type == T::BM_MOVE_START ||
+                    e.type == T::BM_WRITEBACK_START || e.type == T::BM_EJECT_START || e.type == T::STR_DRAIN_START) {
+                    CAPTURE(sw::kpu::timing::to_string(e.type), e.component);
+                    CHECK(e.slot.has_value());
+                }
+                if (e.type == sw::kpu::timing::EventType::DMA_LOAD_START) CHECK_FALSE(e.slot.has_value());
+                if (e.tile) {
+                    ++tiled;
+                    CHECK(operands.count(e.tile->operand) == 1);   // named by the program's tile
+                }
+                CHECK_FALSE(driver::describe(e).empty());
+            }
+            events += s.events.size() + s.stalls_continuing;
+            for (const auto& e : s.events)                  // a listed stall is one that begins
+                if (driver::CspCycleStepper::is_stall(e.type)) ++stalls_begun;
+            for (const auto& [p, n] : cur.stepper().lanes_busy()) {
+                CAPTURE(p);
+                CHECK(n >= 1);
+            }
+        }
+        CHECK(cur.position() == cur.size());
+        const auto& cyc = dynamic_cast<const driver::CspCycleStepper&>(cur.stepper());
+        // Every event replayed once: listed, or counted as a stall continuing from the cycle before.
+        CHECK(events + cyc.quiet_stalls() == o.events.size());
+        CHECK(stalls_begun > 0);
+        CHECK(cur.size() < o.makespan);                   // the stalls' cycles alone are no steps
+        CHECK(loads == o.dram_loads);
+        CHECK(stores == o.dram_stores);
+        CHECK(tiled > 0);
+        CHECK(cur.stepper().lanes_busy().empty());        // every transfer begun has ended
+    }
+}
+
+TEST_CASE("csp step: L-CA lists a stall once, however often a cycle reports it", "[csp][step]") {
+    // A BlockMover's Move and Writeback queues can both wait on one tile, so one cycle carries the
+    // same stall twice (#440's review). Both reports of a cycle are classified alike.
+    using E = sw::kpu::timing::CspDriver::ProtocolEvent;
+    using T = sw::kpu::timing::EventType;
+    auto stall = [](std::uint64_t c) {
+        E e;
+        e.cycle = c;
+        e.type = T::BM_STALL_TAG;
+        e.component = "L3(0,0):BM";
+        e.tile = TileCoord{"C", 0, 0};
+        return e;
+    };
+    E start;
+    start.cycle = 12;
+    start.type = T::BM_MOVE_START;
+    start.component = "L3(0,0):BM";
+    start.slot = 0;                                   // slot 0 is a slot
+    std::vector<E> ev{stall(10), stall(10), stall(11), stall(11), stall(12), stall(12), start};
+    driver::CspCycleStepper st(ev);
+    REQUIRE(st.size() == 2);                          // cycle 10 (the stall begins) and 12 (the start)
+    REQUIRE(st.step());
+    CHECK(st.current().start == 10);
+    CHECK(st.current().events.size() == 2);           // both reports of the stall's first cycle
+    CHECK(st.current().stalls_continuing == 0);
+    REQUIRE(st.step());
+    CHECK(st.current().start == 12);
+    REQUIRE(st.current().events.size() == 1);
+    CHECK(st.current().stalls_continuing == 2);
+    CHECK_THAT(driver::describe(st.current().events.front()), ContainsSubstring("slot 0"));
+    CHECK_THAT(driver::describe(stall(10)), !ContainsSubstring("slot"));
+    CHECK(st.quiet_stalls() == 2);                    // cycle 11: only the continuing stall
+    CHECK_FALSE(st.step());
+}
+
+TEST_CASE("csp step: a level that cannot run is refused with its reason", "[csp][step]") {
+    // T4's placement distributes, which a level-1 program's L-CA does not; L-T2 does not exist.
+    platform::VirtualPlatform vp(platform::read_spec_file("tests/program/deploy/kpu_t4.json"));
     const lang::Program ast = corpus("matmul_48x48x48_t16.csp");
     const auto h = vp.load_csp(ast, driver::csp_inputs(ast));
-    CHECK_THROWS_WITH(vp.step_begin(h, ExecutionLevel::CycleAccurate), ContainsSubstring("#283"));
+    CHECK_THROWS_WITH(vp.step_begin(h, ExecutionLevel::CycleAccurate), ContainsSubstring("level 2 distributes"));
+    CHECK_THROWS_WITH(vp.step_begin(h, ExecutionLevel::ResourceTransactional), ContainsSubstring("#283"));
 }
 
 TEST_CASE("csp timeline: one event per leg on its process and lane", "[csp][timeline]") {

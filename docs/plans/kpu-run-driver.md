@@ -160,7 +160,7 @@ lists. #286 renders this; it does not come for free with it.
    `--timeline` is **refused** when only L-B was asked for, because L-B models no
    intervals; and `--streams` is refused for LU, which has no stream derivation, rather
    than silently ignoring the flag.
-3. **`--step`** with the cursor of D4, at L-B and L-T1. — **done.** `--step` prints one
+3. **`--step`** with the cursor of D4, at L-B and L-T1, and at L-CA since 2026-11-15. — **done.** `--step` prints one
    line per transaction, `--step-limit n` windows it.
 
    **The two levels step by different mechanisms, and the difference is honest rather
@@ -201,6 +201,25 @@ lists. #286 renders this; it does not come for free with it.
    is a usable recording primitive. Turning it into a record with **spatial resource
    addresses** — from #282's naming map, not a scheme invented here — plus causality edges,
    and a viewer that lays resources out spatially and slices by resource, is **#286**.
+
+   **L-CA steps cycles** (2026-11-15, #285). L-CA replays too, for the same reason as L-T1:
+   the program runs with the requested `--window`, its driver keeps the executor's protocol
+   events (`CspDriver::keep_events`, off for every other run), and the cursor
+   (`CspCycleStepper`) gives one step per cycle at which something happened. Three choices make
+   the replay readable:
+   - **A completion is placed where it ends.** The executor stamps a COMPLETE event with its
+     transfer's start and its duration (a Chrome-trace span). Left there, a completion printed
+     at its start, and the in-flight count never rose.
+   - **A stall is listed when it begins.** A waiting process logs its stall every cycle. A stall
+     the same process logged on the same tile the cycle before is counted as continuing, not
+     listed, and a cycle with nothing else is no step. The 48x48 matmul on S1 runs 1948 cycles
+     and steps 294.
+   - **Events are named by the program's tile** (`A[0,1]`), through the driver's map from
+     executor tiles to program tiles, and by their buffer slot when the producer named one
+     (`TimingEvent::has_slot`).
+
+   Each step also shows the transfers in flight per process. kpu-run's `--step` walks the
+   finest level that ran, which is L-CA whenever L-CA ran.
 4. **Program from a file** — **done**, now that #265 has landed: `--program foo.l0` is
    literal rather than a derivation spec, and refused *together* with `--algo/--size/--tile`
    rather than silently picking one. A file with no values is refused unless `--fill-inputs`

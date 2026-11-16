@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--deploy`, where it used to read the first. Exit 1 when values disagree, 2 when a deployment
   refused the program, 0 otherwise. `driver::arg_all` reads a repeated option.
 
+- **`kpu-run --step` at L-CA** (#285): one cycle per step, a replay of the run's protocol
+  events. Only cycles at which something happened are steps: a credit taken or returned, a
+  transfer begun or ended, a stall begun. A stall continuing from the cycle before is counted,
+  not listed. Each event is named by the program's tile and by its buffer slot when it names one
+  (`TimingEvent::has_slot`, set through `set_slot()`, since slot 0 is a slot). Each step shows the transfers in flight per process. A
+  COMPLETE event is placed at the cycle its transfer ends (the executor stamps it with the
+  start and a duration). `--step` walks the finest level that ran. In the API:
+  `VirtualPlatform::step_begin(h, CycleAccurate, window)`, `driver::CspCycleStepper`, and
+  `CspDriver::keep_events`, which is off for every other run.
+
 ### Changed
 
 - **Docs: kpu-sim leads the RTL.** kpu-sim is the architecture simulator: the RTL generator
@@ -27,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A BlockMover's or streamer's completion records when it completed.** A completion delivered
+  after its scheduled end (an ejection a full NoC hub held back) spanned its schedule, not its
+  actual duration. It now spans to the cycle it completed, as the DMA engine's already did
+  (#440's review).
+- **The Combiner's order holds for a bias.** A scale after an activation was refused, but an add
+  after one was accepted (`relu, add(b[j])`), so the bias was applied after the activation it
+  should feed. An add after an activation or format is now refused (#439's review).
 - **L-CA no longer livelocks on a vector tile made resident for one result's context** (#434).
   A Release waited for every stage read of the tile that had been scheduled, including those of
   its next residency. The driver's window hands those over early, and they wait for this Release

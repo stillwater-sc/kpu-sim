@@ -106,6 +106,18 @@ TEST_CASE("CSP driver: S1 runs a written program at L-CA -- L-B's values, the pr
     CHECK(r.dram_loads == 576);
     CHECK(r.dram_stores == 64);
     CHECK(exec.l3_credits_available() == cfg.l3_buffer_count);              // every slot came home
+    // Every event is logged at the cycle it happens: a span (cycle, duration) ends where it is
+    // logged, so in log order the ends never go back. A completion delivered late under
+    // backpressure must carry its actual duration, not its schedule's (#440's review).
+    {
+        Cycle end = 0;
+        std::size_t back = 0;
+        for (const auto& e : exec.events()) {
+            if (e.cycle + e.duration < end) ++back;
+            end = std::max(end, e.cycle + e.duration);
+        }
+        CHECK(back == 0);
+    }
     Cycle last_load = 0, first_compute = ~Cycle{0}, last_feed = 0, last_move = 0;
     for (const auto& e : exec.events()) {
         if (e.type == EventType::DMA_LOAD_COMPLETE) last_load = std::max(last_load, e.cycle + e.duration);
