@@ -2,12 +2,13 @@
 """
 Compare two structure records, kpu-structure v1, block for block (#392).
 
-    structure_diff.py <a.structure.json> <b.structure.json> [--rel 1e-9] [--max 20]
+    structure_diff.py <a.structure.json> <b.structure.json> [--rel 1e-9] [--abs 1e-9] [--max 20]
 
 Everything but `provenance` is compared: the blocks by id (each field), the networks by id
-(their nodes and links by id), the channels by id, and the floorplan. Numbers agree within a
-relative tolerance (default 1e-9; the same geometry written by two producers differs only in
-rounding). Lists that are not keyed by id (a rect, a link's points) compare element by element.
+(their nodes and links by id), the channels by id, and the floorplan. Two numbers agree when
+they differ by at most --rel times the larger of them, or by at most --abs (mm or mm², for
+values at or near zero, where a relative bound means nothing). Both default to 1e-9: the same
+geometry written by two producers differs only in rounding. Lists that are not keyed by id (a rect, a link's points) compare element by element.
 
 Uses: the model's native record against its converted one (CTest structure_native_t4); and,
 once the RTL writes the record, the model's against the RTL's for the same configuration, where
@@ -28,13 +29,13 @@ import sys
 KEYED = {"blocks", "networks", "nodes", "links", "channels"}
 
 
-def diff(a, b, path: str, rel: float, out: list[str]) -> None:
+def diff(a, b, path: str, rel: float, out: list[str], abs_tol: float = 1e-9) -> None:
     if isinstance(a, bool) or isinstance(b, bool):
         if a is not b:
             out.append(f"{path}: {a!r} != {b!r}")
         return
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        if not math.isclose(a, b, rel_tol=rel, abs_tol=rel):
+        if not math.isclose(a, b, rel_tol=rel, abs_tol=abs_tol):
             out.append(f"{path}: {a!r} != {b!r}")
         return
     if isinstance(a, dict) and isinstance(b, dict):
@@ -44,26 +45,26 @@ def diff(a, b, path: str, rel: float, out: list[str]) -> None:
             elif k not in b:
                 out.append(f"{path}.{k}: only in the first")
             elif k in KEYED and isinstance(a[k], list) and isinstance(b[k], list):
-                keyed(a[k], b[k], f"{path}.{k}", rel, out)
+                keyed(a[k], b[k], f"{path}.{k}", rel, out, abs_tol)
             else:
-                diff(a[k], b[k], f"{path}.{k}", rel, out)
+                diff(a[k], b[k], f"{path}.{k}", rel, out, abs_tol)
         return
     if isinstance(a, list) and isinstance(b, list):
         if len(a) != len(b):
             out.append(f"{path}: {len(a)} items != {len(b)}")
             return
         for i, (x, y) in enumerate(zip(a, b)):
-            diff(x, y, f"{path}[{i}]", rel, out)
+            diff(x, y, f"{path}[{i}]", rel, out, abs_tol)
         return
     if a != b:
         out.append(f"{path}: {a!r} != {b!r}")
 
 
-def keyed(a: list, b: list, path: str, rel: float, out: list[str]) -> None:
+def keyed(a: list, b: list, path: str, rel: float, out: list[str], abs_tol: float = 1e-9) -> None:
     ia = {x.get("id"): x for x in a if isinstance(x, dict)}
     ib = {x.get("id"): x for x in b if isinstance(x, dict)}
     if len(ia) != len(a) or len(ib) != len(b):            # not keyed after all: compare in order
-        diff(list(a), list(b), path + "[]", rel, out)
+        diff(list(a), list(b), path + "[]", rel, out, abs_tol)
         return
     for k in [x for x in ia if x not in ib]:
         out.append(f"{path}[{k}]: only in the first")
@@ -71,13 +72,13 @@ def keyed(a: list, b: list, path: str, rel: float, out: list[str]) -> None:
         out.append(f"{path}[{k}]: only in the second")
     for k in ia:
         if k in ib:
-            diff(ia[k], ib[k], f"{path}[{k}]", rel, out)
+            diff(ia[k], ib[k], f"{path}[{k}]", rel, out, abs_tol)
 
 
-def compare(a: dict, b: dict, rel: float = 1e-9) -> list[str]:
+def compare(a: dict, b: dict, rel: float = 1e-9, abs_tol: float = 1e-9) -> list[str]:
     out: list[str] = []
     diff({k: v for k, v in a.items() if k != "provenance"},
-         {k: v for k, v in b.items() if k != "provenance"}, "$", rel, out)
+         {k: v for k, v in b.items() if k != "provenance"}, "$", rel, out, abs_tol)
     return out
 
 
@@ -86,6 +87,8 @@ def main(argv=None) -> int:
     ap.add_argument("a")
     ap.add_argument("b")
     ap.add_argument("--rel", type=float, default=1e-9, help="relative tolerance for numbers")
+    ap.add_argument("--abs", type=float, default=1e-9, dest="abs_tol",
+                    help="absolute tolerance for numbers (mm, mm2), for values near zero")
     ap.add_argument("--max", type=int, default=20, help="differences to print")
     args = ap.parse_args(argv)
     recs = []
@@ -100,7 +103,7 @@ def main(argv=None) -> int:
             print(f"structure_diff: {p}: not a kpu-structure 1 record", file=sys.stderr)
             return 2
         recs.append(r)
-    d = compare(*recs, rel=args.rel)
+    d = compare(*recs, rel=args.rel, abs_tol=args.abs_tol)
     for line in d[:args.max]:
         print(line)
     if len(d) > args.max:

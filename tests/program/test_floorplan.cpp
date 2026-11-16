@@ -500,6 +500,11 @@ TEST_CASE("an imported floorplan that does not fit the deployment is refused, by
         return std::string("accepted");
     };
 
+    SECTION("a block named as the die, whose id the structure record reserves") {
+        SocFloorplan fp = good;
+        edit(fp.blocks, "t64/array", [](FloorplanBlock& b) { b.name = "t64/die"; });
+        CHECK_THAT(refuse(fp), ContainsSubstring("\"t64/die\" uses the id the die reserves"));
+    }
     SECTION("a resource with no block") {
         SocFloorplan fp = good;
         edit(fp.blocks, "t64/l3[0]", [](FloorplanBlock& b) {

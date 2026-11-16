@@ -149,6 +149,15 @@ def main(samples: str) -> int:
     lid = model["networks"][0]["links"][0]["id"]
     differs(lambda r: r["networks"][0]["links"].pop(0), f"$.networks[noc].links[{lid}]: only in the first")
 
+    # Relative and absolute tolerances are apart: at --rel 0.01, 0.005 and 0.01 differ (the
+    # relative bound is 0.0001), which a relative tolerance reused as an absolute one hid.
+    small = copy.deepcopy(model)
+    small["blocks"][placed]["rect"][0] = 0.005
+    smaller = copy.deepcopy(small)
+    smaller["blocks"][placed]["rect"][0] = 0.01
+    expect(bool(structure_diff.compare(small, smaller, rel=0.01)), "diff: 0.005 and 0.01 differ at --rel 0.01")
+    expect(not structure_diff.compare(small, smaller, rel=0.01, abs_tol=0.01), "diff: --abs 0.01 accepts them")
+
     # The exit codes.
     chk = os.path.join(HERE, "structure_check.py")
     first = os.path.join(samples, files[0])

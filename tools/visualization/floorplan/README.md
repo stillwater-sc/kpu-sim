@@ -12,7 +12,7 @@ kpu-sim, and the RTL writes records in kpu-sim's formats.
 
 ```bash
 # The model writes a record directly:
-kpu-floorplan --deploy tests/program/deploy/kpu_t64.json --structure t64.structure.json
+kpu-floorplan --deploy tests/program/deploy/kpu_t64.json --structure fp.structure.json
 # A record from the RTL generator's floorplan.json (or the model's older --json):
 python3 tools/trace/structure_from_floorplan.py floorplan.json -o fp.structure.json
 # One self-contained page, to open, share or attach (pack.py converts a floorplan itself too):

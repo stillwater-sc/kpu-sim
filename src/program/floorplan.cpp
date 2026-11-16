@@ -476,6 +476,9 @@ std::string validate_floorplan(const SocFloorplan& fp, const DeploymentSpec& spe
         for (std::size_t i = 0; i < bs.size() && err.empty(); ++i) {
             const FloorplanBlock& b = bs[i];
             const std::string w = "block \"" + b.name + "\"";
+            // The structure record's die root is `<device>/die` (floorplan_to_structure, #392): a
+            // block of that name would duplicate its id and be its own parent there.
+            if (b.name == fp.device + "/die") { err = w + " uses the id the die reserves"; return; }
             if (!names.insert(b.name).second) { err = w + " appears twice"; return; }
             const auto rk = resource_kind_of(b.kind);
             if (rk) {
