@@ -1,3 +1,9 @@
+> **Superseded (2026-11-16).** Retired, not redrawn. The current description of how a program runs
+> is [`docs/02-simulation/simulator-architecture.md`](../../02-simulation/simulator-architecture.md):
+> the pipeline from a `.csp` program to the records, with the code path of each stage. This
+> document drew `TileTransactionExecutor` as L-T1, which retired in kpu-run-csp-programs step 4e,
+> and an L0 program at every level. It is kept for its history only.
+
 # UML — how the classes deliver a simulated domain-flow program execution
 
 **Scope:** the classes that turn a domain-flow program into a simulated execution, and how

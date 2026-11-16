@@ -472,7 +472,9 @@ is exactly "write and test Domain Flow Programs at different abstraction levels"
 - [x] PR #275 — `fidelity-framework.md` framed the tiers as value/timing fidelity; it now
       leads with transaction granularity (#278). The value correction stayed right either way.
 - [x] `docs/architecture/program-execution-uml.md` — the "CSP tier" headings are gone and the
-      level set carries L-T2 (#278).
+      level set carries L-T2 (#278). (Retired on 2026-11-16 to
+      `docs/archive/superseded/program-execution-uml-2026-10-11.md`; the current description is
+      `docs/02-simulation/simulator-architecture.md`.)
 - [x] ADR 0001 — carries the forward pointer for the tier/engine naming.
 - [ ] `TileTransactionExecutor` is the **L-T1 block-sequential interpreter**; naming to
       follow, behaviour unchanged. **Still outstanding** — no `BlockSequentialInterpreter`

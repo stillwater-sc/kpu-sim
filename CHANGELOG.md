@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **`docs/02-simulation/simulator-architecture.md`: how a program runs.**
+  - The pipeline from a `.csp` program to the records the viewers read, as a diagram.
+  - Each stage with its code path: writing, parsing and validating, the platform and the
+    deployment, the walker, L-B and its L0 trace, L-T1, L-CA, the value check, the records.
+  - What `kpu-run` does in order, and what lies outside the pipeline (the L0 path, the
+    orchestration path, the frozen executors).
+  - `docs/architecture/program-execution-uml.md` is retired, not redrawn, to
+    `docs/archive/superseded/` with a pointer: it still drew the retired L0 L-T1 executor.
+
 ### Added
 
 - **The reuse and bubble report at L-CA** (#425). `kpu-run --bubbles` reports L-CA's run beside
