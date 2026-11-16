@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A BlockMover's or streamer's completion records when it completed.** A completion delivered
+  after its scheduled end (an ejection a full NoC hub held back) spanned its schedule, not its
+  actual duration. It now spans to the cycle it completed, as the DMA engine's already did
+  (#440's review).
 - **The Combiner's order holds for a bias.** A scale after an activation was refused, but an add
   after one was accepted (`relu, add(b[j])`), so the bias was applied after the activation it
   should feed. An add after an activation or format is now refused (#439's review).

@@ -289,7 +289,7 @@ private:
                 events.push_back(TimingEvent::duration_event(
                     EventType::STR_FEED_COMPLETE,
                     in_flight_->start_cycle,
-                    in_flight_->duration(),
+                    current_cycle - in_flight_->start_cycle,   // as completed, after any backpressure
                     config_.streamer_id,
                     in_flight_->tile.tile_id,
                     name()
@@ -325,7 +325,7 @@ private:
                 events.push_back(TimingEvent::duration_event(
                     EventType::STR_DRAIN_COMPLETE,
                     in_flight_->start_cycle,
-                    in_flight_->duration(),
+                    current_cycle - in_flight_->start_cycle,   // as completed, after any backpressure
                     config_.streamer_id,
                     in_flight_->tile.tile_id,
                     name()

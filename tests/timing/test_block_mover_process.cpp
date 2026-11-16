@@ -8,6 +8,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <optional>
+
 #include <sw/kpu/timing/block_mover_process.hpp>
 
 using namespace sw::kpu::timing;
@@ -323,6 +325,45 @@ TEST_CASE("BlockMoverProcess eject waits for the tile in L3 and a store-buffer s
     REQUIRE(l3_credits.available() == 8);
     REQUIRE(bm.total_tiles_ejected() == 1);
     REQUIRE_FALSE(bm.has_pending_work());
+}
+
+TEST_CASE("BlockMoverProcess: an ejection a full hub holds back records when it completed",
+          "[timing][block_mover_process]") {
+    // A routed ejection is offered to its hub at its scheduled end; a full hub refuses it and the
+    // mover offers it again each cycle. The completion's span must end at the cycle it was taken,
+    // not at the schedule's end, or a replay of the events ends the transfer early (#440's review).
+    struct Refusing : EjectSink {
+        int refusals = 3;
+        bool accept(const TileDescriptor&, uint64_t) override { return refusals-- <= 0; }
+    } hub;
+    CreditPool l3_credits(8);
+    TagCAM l3_tag_cam(8);
+    CreditPool l2_credits(16);
+    TagCAM l2_tag_cam(16);
+    DmaStoreBuffer buffer(1);
+    BlockMoverProcess bm(default_config(0), l3_tag_cam, l3_credits, l2_credits, l2_tag_cam);
+    bm.set_eject_sink(&hub);
+
+    auto c = make_tile(MatrixID::C, 0, 0);
+    l3_credits.acquire();
+    l3_tag_cam.insert(c.tile_id, 0, 0);
+    bm.schedule_eject(c, buffer, 7);
+    Cycle cycle = 0, started = 0, taken = 0;
+    std::optional<TimingEvent> done;
+    while (!done && cycle < 10000) {
+        for (const auto& e : bm.tick(cycle)) {
+            if (e.type == EventType::BM_EJECT_START) started = e.cycle;
+            if (e.type == EventType::BM_EJECT_COMPLETE) {
+                done = e;
+                taken = cycle;
+            }
+        }
+        ++cycle;
+    }
+    REQUIRE(done.has_value());
+    CHECK(hub.refusals < 0);                              // it was refused three times first
+    CHECK(done->cycle == started);
+    CHECK(done->cycle + done->duration == taken);         // the span ends where the hub took it
 }
 
 TEST_CASE("BlockMoverProcess ejects only after moves and writebacks cannot start",

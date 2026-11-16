@@ -432,7 +432,7 @@ private:
                 events.push_back(TimingEvent::duration_event(
                     EventType::BM_EJECT_COMPLETE,
                     in_flight_->start_cycle,
-                    in_flight_->duration(),
+                    current_cycle - in_flight_->start_cycle,   // as completed, after any backpressure
                     config_.mover_id,
                     in_flight_->tile.tile_id,
                     name()
@@ -478,7 +478,7 @@ private:
                 events.push_back(TimingEvent::duration_event(
                     EventType::BM_MOVE_COMPLETE,
                     in_flight_->start_cycle,
-                    in_flight_->duration(),
+                    current_cycle - in_flight_->start_cycle,   // as completed, after any backpressure
                     config_.mover_id,
                     in_flight_->tile.tile_id,
                     name()
@@ -522,7 +522,7 @@ private:
                 events.push_back(TimingEvent::duration_event(
                     EventType::BM_WRITEBACK_COMPLETE,
                     in_flight_->start_cycle,
-                    in_flight_->duration(),
+                    current_cycle - in_flight_->start_cycle,   // as completed, after any backpressure
                     config_.mover_id,
                     in_flight_->tile.tile_id,
                     name()
