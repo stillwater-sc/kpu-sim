@@ -458,6 +458,42 @@ inline void requant_tile(const std::string& from, const std::string& to, std::ve
         std::memcpy(&f, &q, sizeof q);
     }
 }
+// An L2 accumulator's init (opset 1.10): y += x in `type`, x a tile as long as y, or a vector of
+// `cols` broadcast down y's rows.
+inline void init_tile(std::vector<float>& y, std::size_t cols, const std::vector<float>& x, const std::string& type) {
+    if (x.size() != y.size() && x.size() != cols)
+        throw std::invalid_argument("MergeInit: an init of " + std::to_string(x.size()) + " elements on a tile of " +
+                                    std::to_string(y.size()) + " (" + std::to_string(cols) + " columns)");
+    const bool row = x.size() != y.size();
+    for (std::size_t i = 0; i < y.size(); ++i) {
+        const float xi = x[row ? i % cols : i];
+        y[i] = type == numeric::kFp32 ? y[i] + xi
+                                      : numeric::float_of(add_word(type, numeric::word_of(y[i]), numeric::word_of(xi)));
+    }
+}
+inline void kernel_merge_init(TileProgram& prog, const TileOp& op) {
+    const TileCoord& xc = op.inputs.at(0);
+    const TileCoord& yc = op.outputs.at(0);
+    const TensorOperand& X = prog.operand(xc.operand);
+    TensorOperand& Y = prog.operand(yc.operand);
+    if (X.type != Y.acc_type())
+        throw std::invalid_argument("MergeInit: " + Y.name + " accumulates in " + Y.acc_type() + "; the init " + X.name +
+                                    " is " + X.type);
+    const Dim r0 = Y.row_begin(yc.ti), r1 = Y.row_end(yc.ti), c0 = Y.col_begin(yc.tj), c1 = Y.col_end(yc.tj);
+    const bool row = X.cols == 1 && Y.cols > 1;
+    const Dim x0 = X.row_begin(xc.ti), xc0 = row ? 0 : X.col_begin(xc.tj);
+    if (row ? X.row_end(xc.ti) - x0 != c1 - c0
+            : (X.row_end(xc.ti) - x0 != r1 - r0 || X.col_end(xc.tj) - xc0 != c1 - c0))
+        throw std::invalid_argument("MergeInit: " + xc.to_string() + " is not shaped as " + yc.to_string());
+    const std::string& t = Y.acc_type();
+    for (Dim r = r0; r < r1; ++r)
+        for (Dim c = c0; c < c1; ++c) {
+            const numeric::Word xw = row ? X.word(x0 + (c - c0), 0) : X.word(x0 + (r - r0), xc0 + (c - c0));
+            Y.set_word(r, c, t == numeric::kFp32 ? numeric::word_of(numeric::float_of(Y.word(r, c)) + numeric::float_of(xw))
+                                                 : add_word(t, Y.word(r, c), xw));
+        }
+}
+
 // Per channel (opset 1.9): column c of a row-major tile of `cols` columns takes its multiplier
 // and shift from m[c] and s[c], int32 words. numeric::requantize refuses an out-of-range one.
 inline void requant_tile_channels(const std::string& from, const std::string& to, std::vector<float>& v,
@@ -546,6 +582,7 @@ inline void apply(TileProgram& prog, const TileOp& op, TileKernelState& st) {
         case TileOpKind::BlockConvert:   kernel_block_convert(prog, op); break;
         case TileOpKind::Requant:        kernel_requant(prog, op); break;
         case TileOpKind::RequantChannels: kernel_requant_channels(prog, op); break;
+        case TileOpKind::MergeInit:      kernel_merge_init(prog, op); break;
         case TileOpKind::L3Load:
         case TileOpKind::L3Store:
         case TileOpKind::L3Move:

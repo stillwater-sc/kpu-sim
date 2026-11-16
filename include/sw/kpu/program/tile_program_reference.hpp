@@ -110,7 +110,8 @@ public:
                 case TileOpKind::Activation:
                 case TileOpKind::BlockConvert:
                 case TileOpKind::Requant:
-                case TileOpKind::RequantChannels: ++sum.epilogues; break;
+                case TileOpKind::RequantChannels:
+                case TileOpKind::MergeInit:      ++sum.epilogues; break;
                 case TileOpKind::AccInit:        ++sum.acc_inits; break;
                 case TileOpKind::L3Load:
                 case TileOpKind::L3Store:

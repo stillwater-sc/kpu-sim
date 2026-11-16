@@ -204,6 +204,7 @@ private:
                                        (n == 1 ? "" : "s") + " for its partials, and " +
                                        std::to_string(static_cast<std::size_t>(ast_.l2) - std::min(l2_live_, static_cast<std::size_t>(ast_.l2))) +
                                        " of " + std::to_string(ast_.l2) + " are free");
+        if (s.init) init_l2(s, y);
         l2_live_ += n;
         peak_l2_ = std::max(peak_l2_, l2_live_);
         accs_.push_back(Acc{y, false, false, depth, true});
@@ -575,6 +576,36 @@ private:
             live_ -= count(y);
             state_.erase(it);
             return;
+        }
+        if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, x); }))
+            throw CompileError(s.line, what + " reads " + text(x) + ", which is not provably resident; make it resident "
+                                       "first");
+    }
+
+    // `acc Y in l2 init X` (#427), as the walker checks it: X in the accumulator's number system,
+    // tiled as Y (a vector: as Y's columns, indexed by its column), and provably resident at the
+    // acc statement. The Combiner adds it on each tile's first merge.
+    void init_l2(const Stmt& s, const Family& y) {
+        const Family x = family(*s.init);
+        const std::string what = "acc " + text(y) + " in l2 init " + text(x);
+        if (x.operand == y.operand)
+            throw CompileError(s.line, what + ": accumulating onto " + y.operand + " itself, through the Combiner, is not "
+                                       "built yet; init a fabric accumulator with it (`acc .. in fabric init`)");
+        if (type_of(x.operand) != acc_of(y.operand))
+            throw CompileError(s.line, what + ": " + x.operand + " is " + type_of(x.operand) + " and " + y.operand +
+                                       " accumulates in " + acc_of(y.operand) + "; an init is in the accumulator's number system");
+        const TensorOperand& xo = operands_.operand(x.operand);
+        const TensorOperand& yo = operands_.operand(y.operand);
+        if (vectors_.count(x.operand)) {
+            if (yo.cols < 2)
+                throw CompileError(s.line, what + ": a vector init is a bias row, broadcast down " + y.operand +
+                                           "'s rows; " + y.operand + " has one column, so give it a tensor init");
+            check_width(x.operand, y.operand, s.line);
+        } else if (xo.rows != yo.rows || xo.cols != yo.cols || xo.tile_rows != yo.tile_rows ||
+                   xo.tile_cols != yo.tile_cols) {
+            throw CompileError(s.line, what + ": a tensor init is tiled as the accumulator (" + y.operand + " is " +
+                                       std::to_string(yo.rows) + "x" + std::to_string(yo.cols) + " in " +
+                                       std::to_string(yo.tile_rows) + "x" + std::to_string(yo.tile_cols) + " tiles)");
         }
         if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, x); }))
             throw CompileError(s.line, what + " reads " + text(x) + ", which is not provably resident; make it resident "

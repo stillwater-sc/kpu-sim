@@ -493,7 +493,7 @@ public:
         // A context's stages read their operand from L3 when the move that carries them runs.
         for (const Stage& stg : a.context) {
             std::vector<const TileCoord*> reads;                 // an add's vector; a per-channel scale's two
-            if (stg.op == VeOp::Add) reads.push_back(&stg.arg);
+            if (stg.op == VeOp::Add || stg.op == VeOp::Init) reads.push_back(&stg.arg);
             if (stg.op == VeOp::Scale && stg.channels) reads = {&stg.arg, &stg.arg2};
             for (const TileCoord* t : reads) {
                 const std::string b = t->to_string();

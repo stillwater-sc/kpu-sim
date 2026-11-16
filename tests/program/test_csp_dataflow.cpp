@@ -152,8 +152,8 @@ TEST_CASE("Dataflow: the generator refuses what WS and IS do not take", "[progra
     CHECK_THAT(refused(x), ContainsSubstring("dataflow ws fixes its own loop order"));
     x = o;
     x.dataflow = "is";
-    x.init = "bias";
-    CHECK_THAT(refused(x), ContainsSubstring("init 'bias' is not built yet"));
+    x.init = "accumulate";                                    // init bias and bias-row are built (#427)
+    CHECK_THAT(refused(x), ContainsSubstring("init accumulate (C += A . B) onto an L2 accumulator"));
     x = o;
     x.dataflow = "ws";
     x.algo = "lu";
@@ -373,9 +373,9 @@ TEST_CASE("Dataflow: what the language refuses for an L2 accumulator, by line", 
                               "  acc C[0, 0] in l2 { }\n}\n";
     CHECK_THAT(error_of(no_l2, false), ContainsSubstring("csp line 4: acc ... in l2: the machine clause declares no L2"));
     CHECK_THAT(error_of(no_l2, true), ContainsSubstring("csp line 4: acc ... in l2: the machine clause declares no L2"));
-    // An init is refused by the parser.
+    // An init onto the accumulator itself is refused: the Combiner adds another tile's (#427).
     CHECK_THAT(error_of(head + "  acc C[0, 0] in l2 init C[0, 0] { }\n}\n", false),
-               ContainsSubstring("csp line 6: acc ... in l2 init: an L2 accumulator's first merge overwrites its slot"));
+               ContainsSubstring("csp line 6: acc C[0,0] in l2 init C[0,0]: accumulating onto C itself"));
     // More partials than the L2 holds.
     both("  acc C[:, :] in l2 {\n  }\n}\n", "csp line 6: acc C[0,0] in l2 receives no call",
          "csp line 6: acc C[:, :] in l2 receives no call");

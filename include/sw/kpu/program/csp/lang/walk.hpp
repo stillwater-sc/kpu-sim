@@ -272,7 +272,8 @@ private:
     // formatted: its final merge converted it into a block format, the last operation it may take.
     // requantized: its final merge carried the scale its accumulator values need (#427).
     struct Partial { L2Address at; TileCoord tile; std::size_t id = kNone; std::size_t merges = 0; int final_line = 0;
-                     bool formatted = false; bool requantized = false; };
+                     bool formatted = false; bool requantized = false;
+                     std::optional<TileCoord> init; int init_line = 0; };   // `init X`: the first merge adds X
     struct Staged { L2Address at; std::size_t id; TileCoord tile; };
     struct LateStore { const Stmt* s; TileCoord y; Where where; std::size_t seq; };
     struct Live { std::size_t id; bool dirty; bool inherited = false; };
@@ -566,7 +567,10 @@ private:
             for (const csp::Stage& st : *v) {
                 TileOp op;
                 op.label = std::string("context @ ") + to_string(st.place);
-                if (st.op == VeOp::Add) {
+                if (st.op == VeOp::Init) {
+                    op.kind = TileOpKind::MergeInit;     // opset 1.10
+                    op.inputs = {st.arg};
+                } else if (st.op == VeOp::Add) {
                     op.kind = TileOpKind::BiasAdd;
                     op.inputs = {st.arg};
                 } else if (is_block_format(st.op)) {
@@ -738,11 +742,15 @@ private:
 
     // `acc y in fabric init x`: x streamed into the fabric as y's initial value. The checks are the
     // symbolic validator's (validate.hpp), so the two agree.
-    void init_acc(const Stmt& s, const TileCoord& y, const TileCoord& x, bool self) {
-        const std::string yk = y.to_string(), xk = x.to_string();
-        const std::string what = "acc " + yk + " init " + xk;
+    // An init's shape: a vector as wide as the tile at its column (a bias row), or a tensor tiled
+    // as the accumulator at its place; in the accumulator's number system.
+    void check_init_shape(const Stmt& s, const TileCoord& y, const TileCoord& x) const {
+        const std::string what = "acc " + y.to_string() + " init " + x.to_string();
         const TensorOperand& xo = operands_.operand(x.operand);
         const TensorOperand& yo = operands_.operand(y.operand);
+        if (xo.type != yo.acc_type())
+            throw CompileError(s.line, what + ": " + x.operand + " is " + xo.type + " and " + y.operand +
+                                       " accumulates in " + yo.acc_type() + "; an init is in the accumulator's number system");
         if (vectors_.count(x.operand)) {
             if (yo.cols < 2)
                 throw CompileError(s.line, what + ": a vector init is a bias row, broadcast down " + y.operand +
@@ -760,6 +768,12 @@ private:
             throw CompileError(s.line, what + ": a tensor init starts the tile in the same place, " + x.operand + "[" +
                                        std::to_string(y.ti) + ", " + std::to_string(y.tj) + "]");
         }
+    }
+
+    void init_acc(const Stmt& s, const TileCoord& y, const TileCoord& x, bool self) {
+        const std::string yk = y.to_string(), xk = x.to_string();
+        const std::string what = "acc " + yk + " init " + xk;
+        check_init_shape(s, y, x);
         if (self) {
             const auto d = std::find_if(ast_.decls.begin(), ast_.decls.end(), [&](const Decl& e) { return e.name == y.operand; });
             if (d != ast_.decls.end() && d->io == "out")
@@ -808,9 +822,10 @@ private:
         if (target_ && !target_->combiner)
             throw CompileError(s.line, "acc ... in l2: the Combiner merges its partials, and the target has no Combiner "
                                        "(the deployment's `combiner` block)");
-        if (s.init)
-            throw CompileError(s.line, "acc ... in l2 init: an L2 accumulator's first merge overwrites its slot, so it "
-                                       "takes no init (not built yet)");
+        // `init X` (#427): each tile's init is X's tile in the same place (a tensor tiled as the
+        // accumulator) or at its column (a vector: a bias row). The Combiner adds it on the first merge.
+        std::vector<TileCoord> inits;
+        if (s.init) inits = expand(*s.init);
         std::vector<std::string> keys;
         for (const TileCoord& y : expand(s.out)) {
             const std::string k = y.to_string();
@@ -825,7 +840,31 @@ private:
                 throw CompileError(s.line, "acc " + k + " in l2 needs an L2 slot for its partial, and all " +
                                            std::to_string(l2_live_.size()) + " are held");
             *free = true;
-            partial_[k] = Partial{L2Address{0, static_cast<std::uint32_t>(free - l2_live_.begin())}, y};
+            Partial pt;
+            pt.at = L2Address{0, static_cast<std::uint32_t>(free - l2_live_.begin())};
+            pt.tile = y;
+            partial_[k] = pt;
+            if (s.init) {
+                const bool vec = vectors_.count(s.init->name) > 0;
+                const auto x = std::find_if(inits.begin(), inits.end(), [&](const TileCoord& t) {
+                    return vec ? t.ti == y.tj : (t.ti == y.ti && t.tj == y.tj);
+                });
+                if (x == inits.end())
+                    throw CompileError(s.line, "acc " + k + " in l2 init " + s.init->name + ": the init names no tile " +
+                                               (vec ? "at its column, " + s.init->name + "[" + std::to_string(y.tj) + "]"
+                                                    : "in its place, " + s.init->name + "[" + std::to_string(y.ti) + ", " +
+                                                          std::to_string(y.tj) + "]"));
+                if (x->operand == y.operand)
+                    throw CompileError(s.line, "acc " + k + " in l2 init " + x->to_string() + ": accumulating onto " +
+                                               y.operand + " itself, through the Combiner, is not built yet; init a fabric "
+                                               "accumulator with it (`acc .. in fabric init " + k + "`)");
+                check_init_shape(s, y, *x);
+                if (!resident_.count(x->to_string()))
+                    throw CompileError(s.line, "acc " + k + " in l2 init " + s.init->name + " reads " + x->to_string() +
+                                               ", which is not resident; make it resident first");
+                partial_[k].init = *x;
+                partial_[k].init_line = s.line;
+            }
             acc_[k] = AccState::Open;
             acc_calls_[k] = 0;
             keys.push_back(k);
@@ -864,6 +903,21 @@ private:
             pt.final_line = s.line;
             for (const csp::Stage& st : drain_ctx) pt.formatted = pt.formatted || is_block_format(st.op);
             pt.requantized = has_scale(drain_ctx);
+        }
+        // The first merge adds the accumulator's init, which the Combiner reads from L3 (#427): first,
+        // before any epilogue this call carries.
+        if (pt.merges == 0 && pt.init) {
+            const std::string xk = pt.init->to_string();
+            flush_late_until(xk);
+            if (!resident_.count(xk))
+                throw CompileError(s.line, "call gemm +-> " + yk + ": its first merge adds the init " + xk + " (csp line " +
+                                           std::to_string(pt.init_line) + "), which is not resident; make it resident "
+                                           "until then");
+            csp::Stage st;
+            st.op = VeOp::Init;
+            st.place = Place::Combiner;
+            st.arg = *pt.init;
+            drain_ctx.insert(drain_ctx.begin(), st);
         }
         for (std::size_t i = 0; i < args.size(); ++i) {
             TileOp feed;

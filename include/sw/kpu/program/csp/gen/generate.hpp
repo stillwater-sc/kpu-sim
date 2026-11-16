@@ -114,7 +114,9 @@ inline std::size_t slots_needed(const Options& o) {
     if (o.algo == "lu") return nt * nt;
     const std::size_t qv = o.requant && o.requant_channels ? 2 : 0;     // qm's and qs's tiles
     if (o.dataflow != "os") {               // ws, is: one operand's panel and the stationary tile,
-        return nt + (o.algo == "linear" && o.place != "unfused" ? 2 : 1) + qv;   // and b's tile
+        // and b's tile; an L2 accumulator's init (#427): D's panel, or b's tile (ws) or row (is).
+        const std::size_t init = o.init == "bias" ? nt : o.init == "bias-row" ? (o.dataflow == "ws" ? 1 : nt) : 0;
+        return nt + (o.algo == "linear" && o.place != "unfused" ? 2 : 1) + qv + init;
     }
     const std::size_t mm = 2 * nt + 1 + qv;
     if (o.algo == "linear" && o.place != "unfused") return mm + 1;
@@ -194,9 +196,11 @@ inline void check(const Options& o) {
                            (o.dataflow == "ws" ? std::string("B's column panels outer") : std::string("A's row panels outer")) +
                            "); orient is the output-stationary schedule's");
         if (o.stage_a) throw GenError(df + " stages its stationary operand itself; stage_a is the os schedule's");
-        if (o.init != "none")
-            throw GenError(df + ": its first merge overwrites C's L2 slot, so init '" + o.init +
-                           "' is not built yet (the init through the Combiner is #427's)");
+        if (o.init == "accumulate")
+            throw GenError(df + ": init accumulate (C += A . B) onto an L2 accumulator, through the Combiner, is not "
+                                "built yet; init bias or bias-row is");
+        if (o.init != "none" && o.algo != "matmul")
+            throw GenError(df + ": init is matmul's; --algo is '" + o.algo + "'");
     }
     const std::size_t need = slots_needed(o);
     if (need > o.l3) {
@@ -374,10 +378,16 @@ inline std::string stationary_nest(const Options& o, bool linear_fused) {
         t += in + "release " + moving + ", " + held + with_b + ";\n";
         return t;
     };
+    // The panel's init (#427), resident around its L2 accumulator: the Combiner adds it on each
+    // tile's first merge. D's panel (init bias), or the bias row: b[j] (ws), b[:] (is).
+    const std::string init = o.init == "bias"       ? (ws ? "D[:, j]" : "D[i, :]")
+                             : o.init == "bias-row" ? (ws ? "b[j]" : "b[:]")
+                                                    : "";
     std::string s;
     s += "  for " + outer + " in 0.." + nt + " {\n";
     if (at_egress) s += "    resident b[j];\n";
-    s += "    acc " + panel + " in l2 {\n";
+    if (!init.empty()) s += "    resident " + init + ";\n";
+    s += "    acc " + panel + " in l2" + (init.empty() ? std::string() : " init " + init) + " {\n";
     s += "      for k in 0.." + std::to_string(at_combiner ? n - 1 : n) + " {\n";
     s += block("k", false);
     s += "      }\n";
@@ -386,6 +396,7 @@ inline std::string stationary_nest(const Options& o, bool linear_fused) {
         s += block(std::to_string(n - 1), true);
     }
     s += "    }\n";
+    if (!init.empty()) s += "    release " + init + ";\n";
     s += "    store " + panel + (at_egress ? epilogue : std::string()) + ";\n";
     if (at_egress) s += "    release b[j];\n";
     s += "  }\n";
@@ -404,7 +415,12 @@ inline std::string matmul(const Options& o) {
         s += "program matmul machine flat(l3 = " + std::to_string(o.l3) + ", l2 = " + std::to_string(tiles(o) + 1) +
              ") {\n";
         const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
-        s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype) + result_tensor(o, "out", acc);
+        s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype);
+        if (o.init == "bias") s += tensor("D", o, "in", acc);
+        if (o.init == "bias-row")
+            s += "  vector b[" + std::to_string(o.size) + "]" + (acc == "fp32" ? std::string() : " " + acc) + " tile " +
+                 std::to_string(o.tile) + " in;\n";
+        s += result_tensor(o, "out", acc);
         s += scale_vectors(o);
         s += stationary_nest(o, false);
         return s + "}\n";

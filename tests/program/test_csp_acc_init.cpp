@@ -26,9 +26,11 @@
 #include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
 
 #include <cmath>
+#include <cstring>
 #include <cstddef>
 #include <map>
 #include <set>
@@ -422,4 +424,134 @@ TEST_CASE("acc init: kpu-csp-gen's options", "[program][csp][gen][init]") {
     o = matmul("accumulate");
     o.l3 = 5;
     CHECK_NOTHROW(gen::generate(o));                     // C's slot is handed to the fabric
+}
+
+namespace {
+
+// An L2 accumulator's init (#427): the weight- or input-stationary matmul, its panel's partials
+// merged by the Combiner, which adds the init on each tile's first merge.
+std::string stationary(const std::string& df, const std::string& init, const std::string& dtype) {
+    gen::Options o;
+    o.size = 16;
+    o.tile = 4;
+    o.l3 = 16;
+    o.dataflow = df;
+    o.init = init;
+    o.dtype = dtype;
+    return gen::generate(o);
+}
+
+platform::DeviceSpecification s1_combiner() {
+    auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    d.combiner = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu"}};
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("acc init: an L2 accumulator's init, added by the Combiner on the first merge, at every level",
+          "[program][csp][init][l2acc]") {
+    using driver::ExecutionLevel;
+    const auto d = s1_combiner();
+    CHECK_THAT(stationary("ws", "bias", "fp32"), ContainsSubstring("acc C[:, j] in l2 init D[:, j] {"));
+    CHECK_THAT(stationary("is", "bias-row", "fp32"), ContainsSubstring("acc C[i, :] in l2 init b[:] {"));
+    for (const char* df : {"ws", "is"})
+        for (const char* init : {"bias", "bias-row"})
+            for (const char* dtype : {"fp32", "int8"}) {
+                CAPTURE(df, init, dtype);
+                const lang::Program ast = lang::parse(stationary(df, init, dtype));
+                const TileProgram in = driver::csp_inputs(ast);
+                driver::CspRunRequest req{ast, &d, in,
+                                          {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential,
+                                           ExecutionLevel::CycleAccurate}};
+                const auto r = driver::run_csp(req);
+                REQUIRE(r.reference);
+                CHECK(r.reference_note.empty());                  // the trace (MERGE_INIT) replays L-B
+                // The expectation, computed here: the plain matmul, plus the init.
+                TileProgram expect = *r.reference;
+                TensorOperand& C = expect.operand("C");
+                if (std::string(dtype) == "fp32") {
+                    const auto ref = reference(in, init);
+                    for (Dim rr = 0; rr < C.rows; ++rr)
+                        for (Dim cc = 0; cc < C.cols; ++cc) C.at(rr, cc) = ref[static_cast<std::size_t>(rr) * C.rows + cc];
+                } else {
+                    const lang::Program plain_ast = lang::parse(stationary(df, "none", dtype));
+                    TileProgram plain_in = driver::csp_inputs(plain_ast);
+                    for (const char* n : {"A", "B"}) plain_in.operand(n).values = in.operand(n).values;
+                    const auto plain = driver::csp_reference(plain_ast, plain_in, 1'000'000);
+                    REQUIRE(plain.values);
+                    const TensorOperand& p = plain.values->operand("C");
+                    for (Dim rr = 0; rr < C.rows; ++rr)
+                        for (Dim cc = 0; cc < C.cols; ++cc) {
+                            const numeric::Word x = std::string(init) == "bias" ? in.operand("D").word(rr, cc)
+                                                                                : in.operand("b").word(cc, 0);
+                            C.set_word(rr, cc, numeric::encode("int32", numeric::decode("int32", p.word(rr, cc)) +
+                                                                            numeric::decode("int32", x)));
+                        }
+                }
+                CHECK(check_operands(r.reference.value(), expect).pass);    // L-B against the reference
+                for (const auto& o : r.levels) {
+                    CAPTURE(driver::to_string(o.level));
+                    INFO(o.skipped.value_or(""));
+                    REQUIRE_FALSE(o.skipped);
+                    CHECK(check_operands(o.values, *r.reference).pass);
+                }
+            }
+}
+
+TEST_CASE("acc init: an L2 accumulator's init in the trace is MERGE_INIT (opset 1.10)", "[program][csp][init][l2acc]") {
+    const lang::Program ast = lang::parse(stationary("ws", "bias", "fp32"));
+    const auto ref = driver::csp_reference(ast, driver::csp_inputs(ast), 1'000'000);
+    REQUIRE(ref.trace);
+    std::size_t inits = 0;
+    for (const TileOp& op : ref.trace->ops()) inits += op.kind == TileOpKind::MergeInit;
+    CHECK(inits == 16);                                       // one per C tile, on its first merge
+    std::ostringstream os;
+    serialize::WriteOptions with_values;
+    with_values.include_values = true;
+    serialize::write_l0(os, *ref.trace, with_values);
+    CHECK_THAT(os.str(), ContainsSubstring("OPSET tile 1.10.0"));
+    CHECK_THAT(os.str(), ContainsSubstring("kind=MERGE_INIT in=D:0,0 out=C:0,0"));
+    std::istringstream is(os.str());
+    TileProgram back = serialize::read_l0(is);
+    (void)TileProgramReference().run(back);
+    const auto& a = back.operand("C").values;
+    const auto& w = ref.values->operand("C").values;
+    CHECK((a.size() == w.size() && std::memcmp(a.data(), w.data(), a.size() * sizeof(float)) == 0));
+}
+
+TEST_CASE("acc init: what an L2 accumulator's init refuses", "[program][csp][init][l2acc][refuse]") {
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                             "  tensor A[8,8] tile 4x4 in;\n  tensor B[8,8] tile 4x4 in;\n"
+                             "  tensor C[8,8] tile 4x4 out;\n  tensor D[8,8] tile 4x4 in;\n"
+                             "  tensor E[8,8] int32 tile 4x4 in;\n  vector b[8] tile 4 in;\n";
+    auto program = [&](const std::string& before, const std::string& init, const std::string& after) {
+        return head + before + "  acc C[0, 0] in l2 init " + init + " {\n    resident A[0, 0], B[0, 0];\n"
+               "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n    release A[0, 0], B[0, 0];\n  }\n" + after +
+               "  store C[0, 0];\n}\n";
+    };
+    auto both = [&](const std::string& src, const std::string& text) {
+        std::string walk = "accepted", sym = "accepted";
+        try { (void)lang::compile(src); } catch (const std::exception& e) { walk = e.what(); }
+        try { (void)lang::validate(src); } catch (const std::exception& e) { sym = e.what(); }
+        INFO("walker: " << walk);
+        CHECK_THAT(walk, ContainsSubstring(text));
+        INFO("validator: " << sym);
+        CHECK_THAT(sym, ContainsSubstring(text));
+    };
+    const std::string ok = program("  resident D[0, 0];\n", "D[0, 0]", "  release D[0, 0];\n");
+    CHECK_NOTHROW(lang::compile(ok));
+    CHECK_NOTHROW(lang::validate(ok));
+    CHECK_NOTHROW(lang::compile(program("  resident b[0];\n", "b[0]", "  release b[0];\n")));
+    both(program("", "D[0, 0]", ""), "resident; make it resident first");
+    both(program("  resident E[0, 0];\n", "E[0, 0]", "  release E[0, 0];\n"), "an init is in the accumulator's number system");
+    // Onto the accumulator itself: not built yet, said so.
+    CHECK_THAT(lang::format(lang::parse(ok)), ContainsSubstring("acc C[0, 0] in l2 init D[0, 0] {"));
+    gen::Options o;
+    o.size = 16;
+    o.tile = 4;
+    o.l3 = 16;
+    o.dataflow = "ws";
+    o.init = "accumulate";
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("init accumulate (C += A . B) onto an L2 accumulator"));
 }

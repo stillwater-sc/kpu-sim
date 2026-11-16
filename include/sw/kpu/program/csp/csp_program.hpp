@@ -101,7 +101,9 @@ inline bool parse_place(const std::string& s, Place& out) {
 // result's operations (the Combiner's order: bias, scale, activation, format).
 // scale(m, shift) is the requantization (#427): an accumulator's values into its tensor's type,
 // round(x * m / 2^shift), ties to even, saturated (numeric::requantize).
-enum class VeOp : std::uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8, Scale };
+// Init is not written in a program: the walker puts it first on an L2 accumulator's first merge,
+// `acc .. in l2 init X` (#427): the Combiner adds X, read from L3, to the merged partial.
+enum class VeOp : std::uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8, Scale, Init };
 inline constexpr std::size_t kVeOps = 8;
 
 // A block-format conversion: its format's name (numeric.hpp); else empty.
@@ -120,6 +122,7 @@ inline const char* to_string(VeOp v) {
         case VeOp::MxInt8: return "mxint8";
         case VeOp::MxFp8: return "mxfp8";
         case VeOp::Scale: return "scale";
+        case VeOp::Init: return "init";
     }
     return "?";
 }
@@ -402,7 +405,7 @@ public:
             for (std::size_t k = 0; k < a.context.size(); ++k) {
                 const Stage& st = a.context[k];
                 o << (k ? ", " : "  via ") << to_string(st.op);
-                if (st.op == VeOp::Add) o << "(" << st.arg.to_string() << ")";
+                if (st.op == VeOp::Add || st.op == VeOp::Init) o << "(" << st.arg.to_string() << ")";
                 if (st.op == VeOp::Scale && st.channels) o << "(" << st.arg.to_string() << ", " << st.arg2.to_string() << ")";
                 else if (st.op == VeOp::Scale) o << "(" << st.m << ", " << st.shift << ")";
                 o << " @ " << to_string(st.place);

@@ -20,6 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An L2 accumulator's init, through the Combiner** (#427): `acc C[:, j] in l2 init D[:, j]`, or
+  a bias row `init b[j]`.
+  - The Combiner adds the init on each tile's first merge, and the slot is written with
+    partial + X (the user's choice, 2026-11-16).
+  - X is a tile tiled as the accumulator, or a vector broadcast down its rows. It is in the
+    accumulator's number system, and it is read from L3, so it must be resident at the `acc`
+    statement and at the first merge.
+  - Every level computes it.
+  - The trace records it as `MERGE_INIT` (opset 1.10.0), after the first merge, which stays an
+    overwrite.
+  - At the levels it is an internal stage, `init(X)` (`VeOp::Init`, which a program cannot
+    write), first on the first merge's Drain. L-T1 and L-CA time X's read for its Release.
+  - `kpu-csp-gen --dataflow ws|is --init bias|bias-row` writes it, for fp32 and int8.
+  - `init C` (accumulating onto the result itself) stays a fabric accumulator's, refused with
+    that reason.
+  - Tests: WS and IS x bias and bias-row x fp32 and int8, at L-B, L-T1 and L-CA, against a
+    reference computed independently. Also MERGE_INIT in the trace and its round trip, and the
+    refusals.
+
 - **The Combiner's per-channel scale** (#427): `scale(qm[j], qs[j]) @ combiner`.
   - Each column c of the result is requantized with its own multiplier and shift, from two int32
     vectors: `round(x * qm[c] / 2^qs[c])`, ties to even, saturated.
