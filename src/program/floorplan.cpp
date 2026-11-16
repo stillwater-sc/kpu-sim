@@ -476,9 +476,6 @@ std::string validate_floorplan(const SocFloorplan& fp, const DeploymentSpec& spe
         for (std::size_t i = 0; i < bs.size() && err.empty(); ++i) {
             const FloorplanBlock& b = bs[i];
             const std::string w = "block \"" + b.name + "\"";
-            // The structure record's die root is `<device>/die` (floorplan_to_structure, #392): a
-            // block of that name would duplicate its id and be its own parent there.
-            if (b.name == fp.device + "/die") { err = w + " uses the id the die reserves"; return; }
             if (!names.insert(b.name).second) { err = w + " appears twice"; return; }
             const auto rk = resource_kind_of(b.kind);
             if (rk) {
@@ -653,6 +650,12 @@ std::string floorplan_to_structure(const SocFloorplan& fp) {
     blocks.push_back(json{{"id", root}, {"kind", "die"}, {"rect", rect_out(die)}, {"area", die[2] * die[3]}});
     std::function<void(const FloorplanBlock&, const std::string&)> walk =
         [&](const FloorplanBlock& b, const std::string& parent) {
+            // The die root's id is reserved here, and only here: a version-1 floorplan may name a
+            // group `<device>/die`, and it still imports and draws (#453's review). Its record
+            // would duplicate the id and make the group its own parent, so the record is refused.
+            if (b.name == root)
+                throw FloorplanError("structure: block \"" + b.name + "\" uses the id the die reserves in the "
+                                     "structure record; rename the block to write one");
             const std::string kind = to_string(b.kind);
             json o = json::object();
             o["id"] = b.name;

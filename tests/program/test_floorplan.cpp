@@ -487,6 +487,19 @@ TEST_CASE("the floorplan as a structure record: every block once, in mm, in one 
     }
 }
 
+TEST_CASE("a block named as the die still imports, and only its structure record is refused",
+          "[program][platform][floorplan][structure]") {
+    // #453's review: `<device>/die` is the structure record's die root. A version-1 floorplan
+    // may name a group so, and it must still import and draw; only the record would duplicate
+    // the id (and make the group its own parent), so floorplan_to_structure refuses it.
+    const DeploymentSpec spec = t64();
+    SocFloorplan fp = generate_floorplan(spec);
+    edit(fp.blocks, "t64/array", [](FloorplanBlock& b) { b.name = "t64/die"; });
+    CHECK(validate_floorplan(fp, spec).empty());
+    CHECK_NOTHROW(floorplan_from_json(floorplan_to_json(fp), spec));
+    CHECK_THROWS_WITH(floorplan_to_structure(fp), ContainsSubstring("\"t64/die\" uses the id the die reserves"));
+}
+
 TEST_CASE("an imported floorplan that does not fit the deployment is refused, by name",
           "[program][platform][floorplan]") {
     const DeploymentSpec spec = t64();
@@ -500,11 +513,6 @@ TEST_CASE("an imported floorplan that does not fit the deployment is refused, by
         return std::string("accepted");
     };
 
-    SECTION("a block named as the die, whose id the structure record reserves") {
-        SocFloorplan fp = good;
-        edit(fp.blocks, "t64/array", [](FloorplanBlock& b) { b.name = "t64/die"; });
-        CHECK_THAT(refuse(fp), ContainsSubstring("\"t64/die\" uses the id the die reserves"));
-    }
     SECTION("a resource with no block") {
         SocFloorplan fp = good;
         edit(fp.blocks, "t64/l3[0]", [](FloorplanBlock& b) {

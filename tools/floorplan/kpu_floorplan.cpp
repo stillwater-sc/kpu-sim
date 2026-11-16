@@ -167,7 +167,14 @@ int main(int argc, char** argv) {
         std::cout << "  wrote        " << svg_out << "\n";
     }
     if (!structure_out.empty()) {
-        if (!write_file(structure_out, floorplan_to_structure(fp))) {
+        std::string record;
+        try {
+            record = floorplan_to_structure(fp);
+        } catch (const FloorplanError& e) {
+            std::cerr << "kpu-floorplan: " << e.what() << "\n";
+            return 1;
+        }
+        if (!write_file(structure_out, record)) {
             std::cerr << "kpu-floorplan: cannot write '" << structure_out << "'\n";
             return 2;
         }

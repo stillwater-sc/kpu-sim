@@ -140,7 +140,8 @@ std::string floorplan_to_json(const SocFloorplan& fp);
 // flatten into a tree linked by `parent`, under one `die` root; the NoC links become one network,
 // `noc`, routed `ring`; the geometry is flagged estimated, because the pitch is illustrative. It
 // is what tools/trace/structure_from_floorplan.py makes of floorplan_to_json's output, block for
-// block (CTest structure_native_t4); only the provenance differs.
+// block (CTest structure_native_t4); only the provenance differs. Throws FloorplanError when a block
+// is named `<device>/die`, the id the record gives the die root.
 std::string floorplan_to_structure(const SocFloorplan& fp);
 // Parses and VALIDATES; throws FloorplanError on malformed text or a floorplan that does
 // not match the deployment.
