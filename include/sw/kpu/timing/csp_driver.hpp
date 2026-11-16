@@ -164,7 +164,8 @@ public:
             // and the L2 transactions record placement: none is a call.
             if (op.kind != program::TileOpKind::Feed && op.kind != program::TileOpKind::Drain &&
                 op.kind != program::TileOpKind::AccInit && op.kind != program::TileOpKind::BlockConvert &&
-                op.kind != program::TileOpKind::Requant && !program::is_l3(op.kind) && !program::is_l2(op.kind))
+                op.kind != program::TileOpKind::Requant && op.kind != program::TileOpKind::RequantChannels &&
+                !program::is_l3(op.kind) && !program::is_l2(op.kind))
                 check_call(op);
         check_machine(p.channel(program::csp::Chan::L3).capacity, p.l2_slots);
     }
@@ -618,6 +619,15 @@ private:
                 v.scale_shift = st.shift;
                 v.from_type = t.acc_type();
                 v.to_type = t.type;
+                if (st.channels) {          // per channel (#427): its vectors, read as an Add's is
+                    v.channels = true;
+                    v.arg = id(st.arg);
+                    v.arg2 = id(st.arg2);
+                    auto n = loads_pulled_.find(v.arg);
+                    v.arg_loads = n == loads_pulled_.end() ? 0 : n->second;
+                    auto n2 = loads_pulled_.find(v.arg2);
+                    v.arg_loads2 = n2 == loads_pulled_.end() ? 0 : n2->second;
+                }
                 break;
             }
         }

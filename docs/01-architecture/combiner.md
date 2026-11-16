@@ -129,10 +129,15 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
     block formats' rounding and is unbiased. kpu-sim fixes it, and the RTL implements it
     (esg#68 asks for "a scale and shift ... with rounding and saturation" and leaves the mode
     to this specification).
-  - **A per-channel scale** (a vector of multipliers) is not built yet.
+  - **A per-channel scale:** `scale(qm[j], qs[j]) @ combiner`. Each column c takes its multiplier
+    and shift from two int32 vectors, as wide as the result tile and resident:
+    `round(x * qm[c] / 2^qs[c])`. Their values come with the inputs, so a shift outside 0..62 is
+    refused where it is first used, naming the stage and the value. The trace records it as
+    `REQUANT_CHANNELS`, with `in=` naming the two vectors (opset 1.9). It is a new op, not inputs
+    on `REQUANT`, which a 1.8 reader would drop. `kpu-csp-gen ... --requant m,shift
+    --requant-channels` writes it, with qm and qs resident beside B's panel.
 
 Not built yet:
-- a per-channel scale;
 - an init (`acc ... in l2 init ...`);
 - a weight-stationary timing of the array. L-T1 and L-CA time each merge's gemm as a
   one-call output-stationary chain.

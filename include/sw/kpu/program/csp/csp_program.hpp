@@ -154,7 +154,9 @@ struct L3Geometry {
 struct Stage {
     VeOp op = VeOp::Relu;
     Place place = Place::Fabric;
-    TileCoord arg;                      // add: the vector tile (resident in L3)
+    TileCoord arg;                      // add: the vector tile (resident in L3); a per-channel scale: its multipliers'
+    TileCoord arg2;                     // a per-channel scale: its shifts' vector tile
+    bool channels = false;              // scale: per channel, from arg and arg2 (#427), not m and shift
     std::int64_t m = 1;                 // scale: the multiplier
     int shift = 0;                      //        and the right shift
 };
@@ -401,7 +403,8 @@ public:
                 const Stage& st = a.context[k];
                 o << (k ? ", " : "  via ") << to_string(st.op);
                 if (st.op == VeOp::Add) o << "(" << st.arg.to_string() << ")";
-                if (st.op == VeOp::Scale) o << "(" << st.m << ", " << st.shift << ")";
+                if (st.op == VeOp::Scale && st.channels) o << "(" << st.arg.to_string() << ", " << st.arg2.to_string() << ")";
+                else if (st.op == VeOp::Scale) o << "(" << st.m << ", " << st.shift << ")";
                 o << " @ " << to_string(st.place);
             }
             if (a.place) o << "  @" << a.place->to_string();

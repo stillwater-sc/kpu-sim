@@ -86,7 +86,7 @@ struct TileRef {
 struct Stage {                                // a tile-context stage: op(args) @ place
     std::string op;
     std::vector<TileRef> args;
-    std::vector<long long> nums;              // scale(m, shift): its integers
+    std::vector<long long> nums;              // scale(m, shift): its integers (per channel: args, two vectors)
     std::string place;
     int line = 0;
 };
@@ -311,6 +311,10 @@ private:
     bool sym(const char* s) const { return peek().kind == Token::Kind::Sym && peek().text == s; }
     bool word(const char* s) const { return peek().kind == Token::Kind::Ident && peek().text == s; }
     Token take() { return t_[at_ < t_.size() - 1 ? at_++ : at_]; }
+    // At `(`, followed by a name: a per-channel scale's vector tiles, not its integers.
+    bool peek_is_tile_after_paren() const {
+        return sym("(") && at_ + 1 < t_.size() && t_[at_ + 1].kind == Token::Kind::Ident;
+    }
     void expect(const char* s) {
         // A missing terminator belongs to the line it should have ended, not the next one.
         if (!sym(s))
@@ -456,7 +460,11 @@ private:
             Stage s;
             s.line = line();
             s.op = ident("a vector operation");
-            if (s.op == "scale") {                // scale(m, shift): integers, m maybe negative
+            if (s.op == "scale" && peek_is_tile_after_paren()) {   // scale(m[j], s[j]): per channel
+                take();
+                s.args = tiles();
+                expect(")");
+            } else if (s.op == "scale") {         // scale(m, shift): integers, m maybe negative
                 expect("(");
                 for (int n = 0; n < 2; ++n) {
                     if (n) expect(",");

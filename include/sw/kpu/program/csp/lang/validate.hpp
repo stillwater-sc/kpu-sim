@@ -497,22 +497,39 @@ private:
                 throw CompileError(s.line, "via ...: a tile context computes in fp32; " + y.operand + " is " +
                                                type_of(y.operand));
         }
+        // Each stage's vector operands: an add's bias (in bias_type), a per-channel scale's
+        // multipliers and shifts (int32: requantize's parameters, #427). Each is a vector as wide as
+        // the result's tile, provably resident.
+        struct Read {
+            const TileRef* ref;
+            std::string type, what;
+        };
         for (const ResolvedStage& r : resolved) {
-            if (!r.arg) continue;
-            if (!vectors_.count(r.arg->name))
-                throw CompileError(r.arg->line, "add(" + r.arg->name + "[..]): add takes a vector operand");
-            const Family b = single(*r.arg);
-            check_width(b.operand, y.operand, r.arg->line);
-            if (type_of(b.operand) != bias_type)
-                throw CompileError(r.arg->line, "add(" + text(b) + "): " +
-                                                    (bias_type == numeric::kFp32
-                                                         ? std::string("a tile context computes in fp32; ")
-                                                         : "a bias before " + y.operand + "'s scale is added to its " +
-                                                               bias_type + " accumulator values; ") +
-                                                    b.operand + " is " + type_of(b.operand));
-            if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, b); }))
-                throw CompileError(r.arg->line, "add(" + text(b) + ") @ " + to_string(r.place) + " reads " + text(b) +
-                                                    ", which is not provably resident; make it resident first");
+            std::vector<Read> reads;
+            if (r.op == VeOp::Add && r.arg) reads.push_back({&*r.arg, bias_type, "add"});
+            if (r.op == VeOp::Scale && r.arg) {
+                reads.push_back({&*r.arg, "int32", "scale"});
+                reads.push_back({&*r.arg2, "int32", "scale"});
+            }
+            for (const Read& rd : reads) {
+                const TileRef& ref = *rd.ref;
+                if (!vectors_.count(ref.name))
+                    throw CompileError(ref.line, rd.what + "(" + ref.name + "[..]): " + rd.what + " takes a vector operand");
+                const Family b = single(ref);
+                check_width(b.operand, y.operand, ref.line);
+                if (type_of(b.operand) != rd.type)
+                    throw CompileError(ref.line, rd.what + "(" + text(b) + "): " +
+                                                     (rd.what == "scale"
+                                                          ? std::string("a per-channel scale's multipliers and shifts are int32; ")
+                                                          : rd.type == numeric::kFp32
+                                                                ? std::string("a tile context computes in fp32; ")
+                                                                : "a bias before " + y.operand + "'s scale is added to its " +
+                                                                      rd.type + " accumulator values; ") +
+                                                     b.operand + " is " + type_of(b.operand));
+                if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, b); }))
+                    throw CompileError(ref.line, rd.what + "(" + text(b) + ") @ " + to_string(r.place) + " reads " +
+                                                     text(b) + ", which is not provably resident; make it resident first");
+            }
         }
         return has;                                     // a non-scaled result's has none (refused above)
     }

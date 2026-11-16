@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Combiner's per-channel scale** (#427): `scale(qm[j], qs[j]) @ combiner`.
+  - Each column c of the result is requantized with its own multiplier and shift, from two int32
+    vectors: `round(x * qm[c] / 2^qs[c])`, ties to even, saturated.
+  - The vectors are resident and as wide as the result tile, and are read from L3 as an add's
+    vector is. At L-CA each is a counted stage read, which its Release waits for.
+  - Their values come with the inputs. A shift outside 0..62 is refused where it is first used,
+    naming the stage and the value.
+  - Every level computes it.
+  - The trace records it as a new op, `REQUANT_CHANNELS in=qm:..;qs:..` (opset 1.9.0): a 1.8
+    reader refuses it by name, rather than dropping inputs it did not know on `REQUANT`.
+  - `kpu-csp-gen ... --requant m,shift --requant-channels` writes it for a matmul or a linear,
+    under OS, WS and IS.
+  - Tests: on every dataflow and level against a reference computed independently; the
+    refusals; the trace round trip; the refusal of synthesized inputs, through the CLI too.
+
 - **The reuse and bubble report at L-CA** (#425). `kpu-run --bubbles` reports L-CA's run beside
   L-T1's, with the same walk (`csp/bubbles.hpp`).
   - L-CA logs protocol events, not records, so `timing/csp_records.hpp` matches them back to the

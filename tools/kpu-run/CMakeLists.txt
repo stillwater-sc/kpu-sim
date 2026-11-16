@@ -421,6 +421,22 @@ if(KPU_BUILD_TESTS)
     # A fixture, not DEPENDS: `ctest -R kpu_run_csp_linear_requant` alone must still generate it.
     set_tests_properties(csp_gen_linear_requant PROPERTIES FIXTURES_SETUP linear_requant_csp)
     set_tests_properties(kpu_run_csp_linear_requant PROPERTIES FIXTURES_REQUIRED linear_requant_csp)
+    # A per-channel scale (#427): its multipliers and shifts come with the inputs. Synthesized ones
+    # span int32, so the run is refused where a shift is first used, naming the stage and the value.
+    add_test(NAME csp_gen_linear_requant_channels
+        COMMAND $<TARGET_FILE:csp-gen> --algo linear --size 64 --tile 16 --l3 14 --dtype int8 --requant 3,9
+                --requant-channels --place combiner -o ${CMAKE_CURRENT_BINARY_DIR}/linear_requant_channels.csp)
+    add_test(NAME kpu_run_csp_requant_channels_needs_inputs
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/linear_requant_channels.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1_combiner.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=scale.qm.0,0.,.qs.0,0..:.requantize:.the.shift.-?[0-9]+.is.outside.0..62
+            -DMUST_NOT_MATCH=OK:.every.level
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    set_tests_properties(csp_gen_linear_requant_channels PROPERTIES FIXTURES_SETUP linear_requant_channels_csp)
+    set_tests_properties(kpu_run_csp_requant_channels_needs_inputs PROPERTIES FIXTURES_REQUIRED linear_requant_channels_csp)
     add_test(NAME kpu_run_csp_lu_skips_lca
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
@@ -771,6 +787,7 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1 kpu_run_csp_retain kpu_run_csp_inherit
         kpu_run_csp_sweep kpu_run_csp_sweep_refuses_one_run_records kpu_run_csp_sweep_bubbles_needs_lt1
         csp_gen_linear_requant kpu_run_csp_linear_requant kpu_run_csp_bubbles_lca
+        csp_gen_linear_requant_channels kpu_run_csp_requant_channels_needs_inputs
         kpu_run_l0_refuses_sweep
         PROPERTIES LABELS "program;driver;csp")
 

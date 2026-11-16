@@ -109,7 +109,8 @@ public:
                 case TileOpKind::BiasAdd:
                 case TileOpKind::Activation:
                 case TileOpKind::BlockConvert:
-                case TileOpKind::Requant:        ++sum.epilogues; break;
+                case TileOpKind::Requant:
+                case TileOpKind::RequantChannels: ++sum.epilogues; break;
                 case TileOpKind::AccInit:        ++sum.acc_inits; break;
                 case TileOpKind::L3Load:
                 case TileOpKind::L3Store:

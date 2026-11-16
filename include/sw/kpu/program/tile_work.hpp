@@ -81,7 +81,8 @@ inline TileWork tile_work_of(const TileProgram& p, const TileOp& op, double elem
         case TileOpKind::BiasAdd:                       // elementwise: one op per element
         case TileOpKind::Activation:
         case TileOpKind::BlockConvert:
-        case TileOpKind::Requant: {
+        case TileOpKind::Requant:
+        case TileOpKind::RequantChannels: {
             tile_extent(p, op.outputs[0], r, c);
             w.macs = double(r) * c;
             w.is_compute = true;

@@ -97,7 +97,7 @@ inline Version format_version()  { return {1, 4, 0}; }   // container structure:
                                                          // OPERAND type= (an operand's number
                                                          // system, numeric.hpp; #394); 1.4.0
                                                          // OPERAND acc= (its accumulator's; #427)
-inline Version opset_version()   { return {1, 8, 0}; }   // the TileOpKind surface this build
+inline Version opset_version()   { return {1, 9, 0}; }   // the TileOpKind surface this build
                                                          // implements: 1.1.0 adds BIAS_ADD and
                                                          // ACTIVATION (act=); 1.2.0 adds the L3
                                                          // transactions (L3_*, l3= slot= bank=);
@@ -111,7 +111,9 @@ inline Version opset_version()   { return {1, 8, 0}; }   // the TileOpKind surfa
                                                          // 1.8.0 BIAS_ADD and ACTIVATION on a
                                                          // requantized operand: a bias in its
                                                          // accumulator type, relu on its own
-                                                         // (no new field; #427)
+                                                         // (no new field; #427); 1.9.0
+                                                         // REQUANT_CHANNELS (in= the m and s
+                                                         // vectors: a per-channel scale; #427)
 
 // The op set a FILE needs, written on its OPSET line: what is in it, not who wrote it -- the
 // rule min_consumer_for() states. A matmul or LU program uses only 1.0.0 ops, so its bytes do
@@ -123,6 +125,7 @@ inline Version opset_version()   { return {1, 8, 0}; }   // the TileOpKind surfa
 // older reader would drop silently. Keep it that way, or make MIN_CONSUMER see the op set.
 inline Version opset_for(const TileProgram& prog) {
     Version v{1, 0, 0};
+    for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::RequantChannels) return Version{1, 9, 0};
     // 1.8.0 adds no field: a 1.7.0 reader parses the ops, and its kernels refuse them on integer
     // operands (fp32 only) rather than compute them wrongly, so MIN_CONSUMER need not move.
     for (const TileOp& op : prog.ops())
@@ -628,7 +631,8 @@ inline TileOpKind parse_kind(const std::string& s) {
                          TileOpKind::L3Store, TileOpKind::L3Move, TileOpKind::L3Writeback,
                          TileOpKind::L3Release, TileOpKind::L3Inherit, TileOpKind::L3Retain,
                          TileOpKind::L2Stage, TileOpKind::L2Release, TileOpKind::AccInit,
-                         TileOpKind::MatMulMerge, TileOpKind::BlockConvert, TileOpKind::Requant})
+                         TileOpKind::MatMulMerge, TileOpKind::BlockConvert, TileOpKind::Requant,
+                         TileOpKind::RequantChannels})
         if (s == to_string(k)) return k;
     throw FormatError(FormatError::Cause::UnknownOp,
                       "l0: unknown op '" + s + "': this build implements opset tile " +
@@ -886,6 +890,10 @@ inline TileProgram read_l0(std::istream& is, LoadInfo* info = nullptr) {
                     throw FormatError(FormatError::Cause::MalformedRecord,
                                       "l0: OP REQUANT: out= names the one tile it requantizes");
             }
+            if (op.kind == TileOpKind::RequantChannels && (op.outputs.size() != 1 || op.inputs.size() != 2))
+                throw FormatError(FormatError::Cause::MalformedRecord,
+                                  "l0: OP REQUANT_CHANNELS: in= names the multipliers' and the shifts' vector tiles, "
+                                  "out= the one tile it requantizes");
             if (op.kind == TileOpKind::BlockConvert) {
                 // Required: a conversion is its format, on one tile, written out=.
                 op.format = detail::require(f, "format", "OP");
