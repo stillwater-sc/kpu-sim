@@ -108,7 +108,9 @@ struct TileIDHash {
 // from L3) down the rows; the rest are elementwise activations.
 // ============================================================================
 struct VectorStage {
-    enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8, Scale };
+    // AddInit: an L2 accumulator's init on its first merge (#427), a tile or a broadcast row, read from
+    // L3 as an Add's vector is.
+    enum class Op : uint8_t { Add, Relu, Gelu, Silu, Atan, MxInt8, MxFp8, Scale, AddInit };
     Op op = Op::Relu;
     TileID arg{};
     // Add: its read of `arg`, numbered in the order the executor scheduled the reads of `arg`.

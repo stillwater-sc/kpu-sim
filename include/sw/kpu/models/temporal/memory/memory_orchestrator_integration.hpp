@@ -23,7 +23,7 @@ namespace sw::kpu {
 class KPU_API StorageSchedulerBlockMoverAdapter {
 private:
     StorageScheduler* orchestrator;
-    size_t adapter_id;
+    [[maybe_unused]] size_t adapter_id;        // set, not yet read (clang -Wunused-private-field)
 
 public:
     explicit StorageSchedulerBlockMoverAdapter(StorageScheduler* orchestrator, size_t adapter_id);
@@ -54,7 +54,7 @@ public:
 class KPU_API StorageSchedulerStreamerAdapter {
 private:
     StorageScheduler* orchestrator;
-    size_t adapter_id;
+    [[maybe_unused]] size_t adapter_id;        // set, not yet read (clang -Wunused-private-field)
 
 public:
     explicit StorageSchedulerStreamerAdapter(StorageScheduler* orchestrator, size_t adapter_id);
@@ -105,7 +105,7 @@ private:
     StorageScheduler* orchestrator;
     std::vector<StorageSchedulerBlockMoverAdapter> block_adapters;
     std::vector<StorageSchedulerStreamerAdapter> stream_adapters;
-    size_t orchestrator_id;
+    [[maybe_unused]] size_t orchestrator_id;   // set, not yet read (clang -Wunused-private-field)
 
 public:
     explicit EDDOMatrixOrchestrator(StorageScheduler* orchestrator, size_t orchestrator_id);

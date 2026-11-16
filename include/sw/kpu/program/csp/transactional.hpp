@@ -369,6 +369,9 @@ public:
                     if (!chains_[oc->second].closed) close_chain(oc->second);
                     ready = std::max(ready, chains_[oc->second].out1);
                 }
+                // Its stages' vectors are in L3 (#446's review): applied before the L2 credit, so a
+                // credit that an init's Load already outlasts is not counted as an L2 stall.
+                ready = std::max(ready, stage_inputs(a));
                 if (a.merge == Merge::Overwrite) {              // the partial's slot: after its credit
                     const Cycle credit = get_l2(*a.l2);
                     if (credit > ready) {
@@ -412,9 +415,12 @@ public:
                 const bool in_place = it != residency_.end() && it->second.slot;
                 if (in_place) {
                     ready = std::max(ready, it->second.readers);   // WAR: earlier reads of the slot
+                    // ...and its stages' reads of it: an add's bias, a scale's vectors, an init (#446's review)
+                    if (auto sr = stage_reads_.find(k); sr != stage_reads_.end()) ready = std::max(ready, sr->second);
                 } else {
                     ready = std::max({ready, take_slot(a), get(released_, k)});   // opens a residency
                 }
+                ready = std::max(ready, stage_inputs(a));       // its bm.egress stages' vectors (#446's review)
                 const Cycle f = run(Proc::Bm, ready, transfer(Proc::Bm, bytes), a);
                 if (a.l2) partial_read_[k] = f;             // an L2 partial, read out of its slot
                 Residency& r = residency_[k];
@@ -493,7 +499,7 @@ public:
         // A context's stages read their operand from L3 when the move that carries them runs.
         for (const Stage& stg : a.context) {
             std::vector<const TileCoord*> reads;                 // an add's vector; a per-channel scale's two
-            if (stg.op == VeOp::Add) reads.push_back(&stg.arg);
+            if (stg.op == VeOp::Add || stg.op == VeOp::Init) reads.push_back(&stg.arg);
             if (stg.op == VeOp::Scale && stg.channels) reads = {&stg.arg, &stg.arg2};
             for (const TileCoord* t : reads) {
                 const std::string b = t->to_string();
@@ -639,6 +645,20 @@ private:
 
     // A Drain leg on the drain path: a free drain lane, in order among drains only. Recorded as
     // the streamer's, on lane n + i (after its n feed lanes).
+    // When the vectors an action's stages read are in L3: an add's bias, a per-channel scale's two, an
+    // L2 accumulator's init. A stage reads them as its move runs, so the move cannot start before.
+    Cycle stage_inputs(const Action& a) const {
+        Cycle t = 0;
+        for (const Stage& stg : a.context) {
+            std::vector<const TileCoord*> reads;
+            if (stg.op == VeOp::Add || stg.op == VeOp::Init) reads.push_back(&stg.arg);
+            if (stg.op == VeOp::Scale && stg.channels) reads = {&stg.arg, &stg.arg2};
+            for (const TileCoord* c : reads)
+                if (auto it = residency_.find(c->to_string()); it != residency_.end()) t = std::max(t, it->second.current);
+        }
+        return t;
+    }
+
     Cycle run_drain(Cycle ready, Cycle duration, const Action& a) {
         const auto i = static_cast<std::size_t>(std::min_element(drain_free_.begin(), drain_free_.end()) - drain_free_.begin());
         const Cycle start = std::max({ready, drain_free_[i], drain_last_start_});

@@ -512,7 +512,8 @@ TEST_CASE("the identity covers the placement too",
     const auto pinned_a = platform.run(h, ExecutionLevel::Behavioral, initial,
                                        Placement::pinned(assignment, 4));
     std::vector<Dim> other = assignment;
-    other.back() = 3;
+    REQUIRE(!other.empty());
+    if (!other.empty()) other.back() = 3;               // the guard: gcc 15 -Warray-bounds under -Werror
     const auto pinned_b = platform.run(h, ExecutionLevel::Behavioral, initial,
                                        Placement::pinned(other, 4));
 

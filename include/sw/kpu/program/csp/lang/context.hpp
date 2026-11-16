@@ -197,7 +197,7 @@ inline std::optional<std::string> integer_context_refusal(const std::vector<VeOp
         else if (is_block_format(op))
             return std::string(to_string(op)) + ": a block format converts real values, and " + tile + " is " + type +
                    " after its scale";
-        else if (op != VeOp::Add && op != VeOp::Relu)
+        else if (op != VeOp::Add && op != VeOp::Relu && op != VeOp::Init)
             return std::string(to_string(op)) + " on " + tile + "'s " + type + " values: an integer result's "
                    "activation is relu (" + to_string(op) + " needs real values)";
     }

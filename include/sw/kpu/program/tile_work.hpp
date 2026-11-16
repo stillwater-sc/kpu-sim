@@ -82,7 +82,8 @@ inline TileWork tile_work_of(const TileProgram& p, const TileOp& op, double elem
         case TileOpKind::Activation:
         case TileOpKind::BlockConvert:
         case TileOpKind::Requant:
-        case TileOpKind::RequantChannels: {
+        case TileOpKind::RequantChannels:
+        case TileOpKind::MergeInit: {
             tile_extent(p, op.outputs[0], r, c);
             w.macs = double(r) * c;
             w.is_compute = true;
