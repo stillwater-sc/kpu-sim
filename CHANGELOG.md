@@ -28,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The floorplan view, Overview** (#447, moved from branes-ai/embodied-ai-soc-generator#59 by ADR
+  0005): `tools/visualization/floorplan/`.
+  - It draws a `kpu-structure` record from either producer: the die and its blocks, each network
+    as a layer with show/hide and opacity, and presets.
+  - Die size: the area breakdown, and the change from a second record (Compare).
+  - An inspector for the selected block: footprint, area, resources, its routers. Also provenance.
+  - Zoom, pan, fit, and a readout in mm. Light and dark themes.
+  - One self-contained page with no dependencies. `pack.py` embeds a record, converting a
+    floorplan on the way.
+  - Tested by `floorplan_viewer_smoke`, which runs headless browser checks where Playwright is
+    installed.
+
 - **The shared structure record, `kpu-structure` v1** (#392; ADR 0005's first shared format): one
   description of a machine's hardware (blocks, resources, channels, networks and floorplan),
   written by kpu-sim's model or an RTL generator, for every view to lay out what the record

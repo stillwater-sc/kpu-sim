@@ -69,7 +69,11 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(structure_check_t4 PROPERTIES FIXTURES_REQUIRED t4_structure)
         add_test(NAME structure_check_selftest
             COMMAND ${_struct_py} ${_trace}/test_structure_check.py ${CMAKE_SOURCE_DIR}/tests/program/structure)
-        set_tests_properties(structure_record_t4 structure_check_t4 structure_check_selftest
+        # The floorplan view (#447): pack.py over every sample; with Playwright, the page itself.
+        add_test(NAME floorplan_viewer_smoke
+            COMMAND ${_struct_py} ${CMAKE_SOURCE_DIR}/tools/visualization/floorplan/test_viewer.py
+                    ${CMAKE_SOURCE_DIR}/tests/program/structure)
+        set_tests_properties(structure_record_t4 structure_check_t4 structure_check_selftest floorplan_viewer_smoke
             PROPERTIES LABELS "program;records;structure")
     endif()
 
