@@ -473,7 +473,7 @@ void ScheduleGenerator::apply_pipelining(Schedule& schedule) {
 
     // Group commands by pipeline stage
     struct StageGroup {
-        CommandType type;
+        CommandType type{};                 // value-initialized: gcc -Wmaybe-uninitialized under -Werror
         std::vector<size_t> cmd_indices;
     };
 
