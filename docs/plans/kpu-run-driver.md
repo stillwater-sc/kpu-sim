@@ -210,7 +210,14 @@ lists. #286 renders this; it does not come for free with it.
    from the result operand to **every** operand, which is both what a loaded program needs
    and strictly stronger for a derived one.
 5. **Platform + L-T2**: `run_at` delegates to `VirtualPlatform` (#282) and gains the L-T2
-   case (#283). The characterizer becomes a consumer of the same path.
+   case (#283). The characterizer becomes a consumer of the same path. The platform half is
+   done (kpu-run-csp-programs step 4a); L-T2 is #283's.
+6. **A sweep over deployments** — **done** (2026-11-15). `--deploy` repeated runs the same
+   program on each deployment through its own platform. Every level is checked against that
+   deployment's L-B, and L-B against itself across deployments, bit for bit: it is the same
+   computation repeated. Each run carries its provenance (the deployment's label and digest, the
+   run identity), and the sweep ends in one table of makespans per level. What records one run
+   is refused by name rather than written for the first deployment.
 
 Increment 1 is what makes "test the simulation models" true; 2 is what makes it
 *informative*; 3–5 follow the issues they depend on.

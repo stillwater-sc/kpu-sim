@@ -112,6 +112,25 @@ inline bool arg_required(const std::vector<std::string>& a, const std::string& k
     return true;                 // absent: leave `out` at its default
 }
 
+// Every value of an option that may be REPEATED (`--deploy a.json --deploy b.json`), in order,
+// each checked as arg_required checks one. arg_required reads only the first, so a repeated
+// option read through it would silently drop the rest.
+inline bool arg_all(const std::vector<std::string>& a, const std::string& k,
+                    std::vector<std::string>& out, std::string& error) {
+    out.clear();
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i] != k) continue;
+        if (i + 1 >= a.size()) { error = k + ": missing value"; return false; }
+        if (a[i + 1].empty()) { error = k + ": empty value"; return false; }
+        if (a[i + 1][0] == '-') {
+            error = k + ": missing value (next token is '" + a[i + 1] + "')";
+            return false;
+        }
+        out.push_back(a[i + 1]);
+    }
+    return true;
+}
+
 // A CHECKED unsigned parse, because std::stoul is the wrong tool for a CLI: it throws on
 // "abc", it happily accepts "12abc", and it wraps "-1" to ULONG_MAX without complaint --
 // so `--compute-tiles -1` becomes an enormous count rather than an error. An uncaught

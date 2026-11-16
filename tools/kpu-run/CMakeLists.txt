@@ -351,6 +351,38 @@ if(KPU_BUILD_TESTS)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     # `all` runs what can run and says why the rest did not.
+    # A sweep (#285): the same program over two deployments. L-CA runs on S1 and is skipped on T4
+    # (its level-2 placement distributes), each run is named by its deployment's digest, and L-B
+    # agrees bit for bit across them.
+    add_test(NAME kpu_run_csp_sweep
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_t4.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=sweep....2.deployments.*deployment.1.of.2:.*kpu_s1.json.*digest.*run.id.L-CA.prog:.*deploy:.*cycle-accurate.+within.bound.*deployment.2.of.2:.*kpu_t4.json.*L-CA..skipped:.*sweep.*agree.*kpu_s1.json.*skipped.*agree.*kpu_t4.json.*bit.for.bit,.on.every.deployment.*OK:.every.level.that.ran,.on.every.deployment
+            -DMUST_NOT_MATCH=FAILED
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # What records one run is refused in a sweep, by name...
+    add_test(NAME kpu_run_csp_sweep_refuses_one_run_records
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--tflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/sweep.tflow
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--tflow.records.one.run,.and.2.deployments.make.a.sweep
+            -DMUST_NOT_MATCH=values.vs
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # ...and an L0 trace, which runs at L-B on one deployment, refuses a repeated --deploy rather
+    # than reading the first.
+    add_test(NAME kpu_run_l0_refuses_sweep
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.l0$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_t4.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=a.repeated.--deploy.is.a.sweep
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
     add_test(NAME kpu_run_csp_lu_skips_lca
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
@@ -697,6 +729,7 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_refuses_invalid_program kpu_run_l0_refuses_lca
         kpu_run_csp_step_lt1 kpu_run_csp_step_lb kpu_run_csp_step_refuses_lca_only
         kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1 kpu_run_csp_retain kpu_run_csp_inherit
+        kpu_run_csp_sweep kpu_run_csp_sweep_refuses_one_run_records kpu_run_l0_refuses_sweep
         PROPERTIES LABELS "program;driver;csp")
 
     # ---- the machine as a spec (#282 increment 4) ---------------------------------

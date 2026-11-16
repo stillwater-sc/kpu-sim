@@ -31,6 +31,7 @@
 #include <sw/trace/trace_exporter.hpp>
 
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
@@ -55,7 +56,12 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
   --program <file.csp>      execute a CSP PROGRAM (docs/plans/kpu-run-csp-programs.md): the
                             program configures the data path, and every level executes it
   --deploy <file.json>      the machine, as a deployment spec (ADR 0002 §3.5). L-CA builds
-                            its machine from it; without it L-CA is skipped
+                            its machine from it; without it L-CA is skipped. REPEATED, it is a
+                            sweep: the program runs on each deployment, every level is checked
+                            against that deployment's L-B, L-B must agree bit for bit across
+                            them, and each run is reported with its deployment's label and
+                            digest. A sweep takes --level, --window, --inputs, --trace-limit,
+                            --bubbles and --no-compare; what records one run is refused
   --level <name|all>        behavioral | block-sequential | resource-transactional
                             | cycle-accurate | all       (default all)
   --window <W>              L-CA's driver window         (default 256)
@@ -126,6 +132,252 @@ bool ends_with(const std::string& s, const std::string& suffix) {
     return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+// Each level's lines: its makespan, traffic, occupancy and what it does not model.
+void print_levels(const std::vector<CspLevelOutcome>& levels, const std::vector<std::string>& run_ids,
+                  const csp::lang::Program& prog, std::uint32_t window) {
+    for (std::size_t li = 0; li < levels.size(); ++li) {
+        const auto& o = levels[li];
+        std::cout << "  " << std::left << std::setw(24) << to_string(o.level) << std::setw(6) << short_name(o.level);
+        if (o.skipped) {
+            std::cout << "skipped: " << *o.skipped << "\n";
+            continue;
+        }
+        if (!o.has_timing) {
+            std::cout << "timing: not modelled at this level   " << o.actions << " actions, peak L3 " << o.peak_l3
+                      << "\n        run id " << run_ids[li] << "\n";
+            continue;
+        }
+        std::cout << "makespan " << o.makespan << " cycles   " << o.actions << " actions\n";
+        std::cout << "        run id " << run_ids[li] << "\n";
+        std::cout << "        DRAM  " << o.dram_loads << " loads, " << o.dram_stores << " stores, " << o.dram_bytes
+                  << " bytes      cf busy " << o.cf_busy << "\n";
+        if (o.level == ExecutionLevel::BlockSequential) {
+            std::cout << "        L3    peak " << o.peak_l3 << " of " << prog.l3 << " (in time), credit stalls "
+                      << o.credit_stalls << ", slot-bound " << o.slot_bound << " (" << o.slot_wait_cycles
+                      << " cycles)\n";
+            // L2 staging's credits (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 4).
+            if (prog.l2 > 0)
+                std::cout << "        L2    peak " << o.peak_l2 << " of " << prog.l2 << " staged (in time), "
+                          << o.l2_slots.size() << " stagings, slot-bound " << o.l2_bound << " (" << o.l2_wait_cycles
+                          << " cycles)\n";
+            std::cout << "        busy ";
+            for (const auto& [p, b] : o.busy)
+                std::cout << " " << p << " " << b << "/" << (o.lanes.count(p) ? o.lanes.at(p) : 0);
+            std::cout << "   (lane-cycles/lanes)   UNCALIBRATED\n";
+            // The fabric pipeline (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2).
+            if (o.pe_rows) {
+                std::cout << "        fabric " << o.pe_rows << "x" << o.pe_cols << " PEs, output-stationary: "
+                          << o.chains.size() << " chains as systolic streams, results waited " << o.link_delay_cycles
+                          << " cycles for a top link";
+            } else {
+                std::cout << "        fabric not declared (fabric.pe_rows/pe_cols): every call is one leg";
+            }
+            for (const auto& [why, n] : o.one_leg) std::cout << "; one leg: " << n << " (" << why << ")";
+            std::cout << "\n";
+            for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
+            continue;
+        }
+        std::cout << "        vector  combiner " << o.ve.combiner_busy << "/" << o.ve.combiner_bound << "  bm " << o.ve.bm_busy << "/"
+                  << o.ve.bm_bound << "  fabric " << o.ve.fabric << "   (busy/bound)   window " << window << "\n";
+        for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
+    }
+}
+
+// Every level that ran, against L-B's values, printed; true when all are within bound.
+bool print_value_check(const std::vector<CspLevelOutcome>& levels, const TileProgram& oracle) {
+    // Every operand, tile by tile, within the proximity bound of L-B's: the levels refine the
+    // behavioral model, and a data path may round differently (§3.8).
+    const TileProgram* authority = &oracle;
+    // How each operand is compared: in its own number system (tile_check), integers exactly.
+    std::string bounds;
+    for (const auto& name : authority->operand_order()) {
+        const TensorOperand& t = authority->operand(name);
+        const std::string b = t.fp32() ? "fp32 within 1e-6 + 1e-4|o|" : t.type + " exact";
+        if (bounds.find(b) == std::string::npos) bounds += (bounds.empty() ? "" : "; ") + b;
+    }
+    std::cout << "\nvalues vs L-B, the oracle (every operand, per tile, " << bounds << ")\n";
+    bool all_agree = true;
+    for (const auto& o : levels) {
+        if (o.skipped) continue;
+        std::cout << "  " << std::left << std::setw(24) << to_string(o.level);
+        const OperandsCheck c = check_operands(o.values, *authority);
+        all_agree = all_agree && c.pass;
+        if (c.pass) {
+            std::cout << "within bound (" << c.operands.size() << " operands, max abs " << c.max_abs << ")\n";
+            continue;
+        }
+        std::cout << "\n";
+        for (const TileCheck& t : c.operands)
+            if (!t.pass) std::cout << "      " << t.summary() << "\n";
+    }
+    return all_agree;
+}
+
+// The values of two runs, bit for bit: every operand, in the same order, the same shape and type,
+// the same words. L-B is the same computation on every deployment, so here bit equality is the bar.
+bool same_values(const TileProgram& a, const TileProgram& b, std::string& first_difference) {
+    if (a.operand_order() != b.operand_order()) {
+        first_difference = "the operands differ";
+        return false;
+    }
+    for (const auto& name : a.operand_order()) {
+        const TensorOperand& x = a.operand(name);
+        const TensorOperand& y = b.operand(name);
+        if (x.rows != y.rows || x.cols != y.cols || x.type != y.type || x.values.size() != y.values.size() ||
+            (!x.values.empty() &&
+             std::memcmp(x.values.data(), y.values.data(), x.values.size() * sizeof(x.values[0])) != 0)) {
+            first_difference = "operand " + name;
+            return false;
+        }
+    }
+    return true;
+}
+
+// A SWEEP (#285): the same program, on the same inputs, over several deployments. Each deployment
+// runs the requested levels through its own platform, and every level is checked against that
+// deployment's L-B; L-B must then compute the same values on every deployment. Each run is
+// reported with its provenance (the deployment's label and digest, and the run's identity), so two
+// deployments' results cannot be mistaken for each other.
+//
+// Exit: 1 when a level disagrees with L-B, a trace's replay does not reproduce L-B, or L-B differs
+// across deployments (each is a kpu-sim defect); otherwise 2 when a deployment refused the program
+// or no level ran on it; otherwise 0.
+int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, const csp::lang::Program& ast,
+                  const TileProgram& inputs, const std::string& inputs_note,
+                  const std::vector<std::string>& deploy_paths, const std::vector<ExecutionLevel>& levels,
+                  std::uint32_t window, std::uint32_t trace_limit) {
+    // Every deployment is read before anything runs: a file that cannot be read is a usage error,
+    // not a row of the sweep.
+    std::vector<platform::DeploymentSpec> specs;
+    for (const auto& dp : deploy_paths) {
+        try {
+            specs.push_back(platform::read_spec_file(dp));
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-run: " << e.what() << "\n";
+            return 2;
+        }
+        if (specs.back().devices.size() != 1) {
+            std::cerr << "kpu-run: " << dp << ": the deployment has " << specs.back().devices.size()
+                      << " devices; multi-device execution is not implemented\n";
+            return 2;
+        }
+    }
+    const bool compare = !has_flag(a, "--no-compare");
+
+    struct Row {
+        std::string digest;
+        std::optional<std::string> refused;             // why this deployment did not run the program
+        std::vector<CspLevelOutcome> levels;
+        std::vector<std::string> run_ids;
+        std::optional<TileProgram> oracle;               // L-B's values on this deployment
+        bool agree = true;                               // every level within bound of L-B
+        bool replay_ok = true;
+    };
+    std::vector<Row> rows(specs.size());
+
+    std::cout << "program  " << path << "   \"" << ast.name << "\"  csp " << ast.version << ", " << ast.decls.size()
+              << " operands, L3 " << ast.l3 << "   values: " << inputs_note << "\n";
+    std::cout << "sweep    " << specs.size() << " deployments, the same program and inputs on each\n";
+
+    for (std::size_t d = 0; d < specs.size(); ++d) {
+        const platform::DeploymentSpec& spec = specs[d];
+        Row& row = rows[d];
+        row.digest = platform::deployment_digest(spec);
+        std::cout << "\n== deployment " << d + 1 << " of " << specs.size() << ": " << deploy_paths[d] << "\n"
+                  << "device   " << spec.label() << "   digest " << row.digest << "\n";
+        for (std::size_t e = 0; e < d; ++e)
+            if (rows[e].digest == row.digest)
+                std::cout << "         the same deployment as " << e + 1 << " (" << deploy_paths[e] << ")\n";
+        try {
+            platform::VirtualPlatform vp(spec);
+            const csp::lang::Target target = csp::lang::target_from(spec.device(0));
+            const csp::lang::Validation v = csp::lang::validate(ast, &target);
+            const platform::CspProgramHandle h = vp.load_csp(ast, inputs, true);
+            const driver::CspReference ref = vp.csp_reference(h, trace_limit, nullptr);
+            std::cout << "         validated: peak L3 " << v.peak_l3 << (ast.l2 > 0 ? ", peak L2 " + std::to_string(v.peak_l2) : "")
+                      << "\noracle   L-B, " << ref.actions << " actions; "
+                      << (ref.trace ? "L0 trace of " + std::to_string(ref.trace->ops().size()) + " ops, replayed bit-exact"
+                                    : ref.note)
+                      << "\n\n";
+            row.oracle = ref.values;
+            row.replay_ok = ref.replay_mismatch.empty();
+            for (ExecutionLevel l : levels) {
+                auto r = vp.run_csp(h, l, window);
+                row.run_ids.push_back(r.outcome.skipped ? std::string() : r.identity.str());
+                row.levels.push_back(std::move(r.outcome));
+            }
+        } catch (const std::exception& e) {
+            row.refused = e.what();
+            std::cout << "refused  " << e.what() << "\n";
+            continue;
+        }
+        print_levels(row.levels, row.run_ids, ast, window);
+        if (!row.replay_ok) std::cout << "\n  FAILED: the trace does not reproduce L-B on this deployment\n";
+        if (has_flag(a, "--bubbles"))
+            for (const auto& o : row.levels)
+                if (o.level == ExecutionLevel::BlockSequential && !o.skipped)
+                    std::cout << "\n" << sw::kpu::program::csp::bubble_report(o.records, o.makespan, o.busy, o.lanes).text();
+        if (compare && row.oracle) row.agree = print_value_check(row.levels, *row.oracle);
+    }
+
+    // The sweep: one line per deployment, every level's makespan, and its verdict.
+    std::cout << "\nsweep    " << path << "\n  " << std::left << std::setw(4) << "#" << std::setw(18) << "digest";
+    for (ExecutionLevel l : levels) std::cout << std::setw(12) << short_name(l);
+    std::cout << "values\n";
+    bool failed = false, refused = false;
+    const TileProgram* first = nullptr;
+    std::size_t first_at = 0;
+    std::vector<std::string> across;                 // deployments whose L-B differs from the first's
+    for (std::size_t d = 0; d < rows.size(); ++d) {
+        const Row& row = rows[d];
+        std::cout << "  " << std::left << std::setw(4) << d + 1 << std::setw(18) << row.digest;
+        if (row.refused) {
+            refused = true;
+            std::cout << "refused: " << *row.refused << "\n";
+            continue;
+        }
+        bool ran = false;
+        for (const auto& o : row.levels) {
+            const std::string cell = o.skipped ? "skipped" : o.has_timing ? std::to_string(o.makespan) : "untimed";
+            ran = ran || !o.skipped;
+            std::cout << std::setw(12) << cell;
+        }
+        if (!ran) refused = true;
+        failed = failed || !row.agree || !row.replay_ok;
+        std::cout << (!row.replay_ok ? "FAILED (replay)" : !compare ? "not compared" : row.agree ? "agree" : "FAILED")
+                  << "   " << deploy_paths[d] << "\n";
+        if (!row.oracle || !compare) continue;
+        std::string diff;
+        if (!first) {
+            first = &*row.oracle;
+            first_at = d;
+        } else if (!same_values(*first, *row.oracle, diff)) {
+            across.push_back(std::to_string(d + 1) + " (" + diff + ")");
+        }
+    }
+    std::cout << "  (makespans in cycles; each row's levels ran on that deployment and are named by its run ids above)\n";
+    if (first) {
+        if (across.empty()) {
+            std::cout << "\nL-B computes the same values, bit for bit, on every deployment that ran it\n";
+        } else {
+            failed = true;
+            std::cout << "\nFAILED: L-B's values differ from deployment " << first_at + 1 << "'s on deployment";
+            for (const auto& x : across) std::cout << " " << x;
+            std::cout << "\n";
+        }
+    }
+    if (failed) {
+        std::cout << "\nFAILED: the sweep does not compute the program's values on every deployment.\n";
+        return 1;
+    }
+    if (refused) {
+        std::cout << "\nrefused: the program did not run on every deployment.\n";
+        return 2;
+    }
+    std::cout << "\nOK: every level that ran, on every deployment, " << (compare ? "computes the program's values.\n" : "ran (values not compared).\n");
+    return 0;
+}
+
 int run_csp_program(const std::vector<std::string>& a, const std::string& path) {
     // What a CSP program run accepts. Everything else is the L0 path's (or the generator's:
     // --algo and friends are kpu-csp-gen's), and is refused by name rather than ignored.
@@ -146,7 +398,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         }
     std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path, trace_path, kernel_path, dflow_path,
         dflow_values, tile_cmds_path;
-    if (!arg_required(a, "--deploy", deploy_path, err) || !arg_required(a, "--inputs", inputs_path, err) ||
+    std::vector<std::string> deploy_paths;
+    if (!arg_all(a, "--deploy", deploy_paths, err) || !arg_required(a, "--inputs", inputs_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err) ||
         !arg_required(a, "--timeline", timeline_path, err) || !arg_required(a, "--emit-l0", trace_path, err) ||
         !arg_required(a, "--emit-l0-kernel", kernel_path, err) || !arg_required(a, "--dflow", dflow_path, err) ||
@@ -173,6 +426,19 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     if (window == 0) {
         std::cerr << "kpu-run: --window must be positive\n";
         return 2;
+    }
+    // A SWEEP: the same program over several deployments (--deploy repeated, #285). Each run is
+    // reported with its deployment's provenance; what records ONE run is refused by name.
+    const bool sweep = deploy_paths.size() > 1;
+    if (deploy_paths.size() == 1) deploy_path = deploy_paths.front();
+    if (sweep) {
+        for (const char* k : {"--tflow", "--dflow", "--dflow-values", "--timeline", "--tile-commands", "--emit-l0",
+                              "--emit-l0-kernel", "--emit-l0-result", "--step"})
+            if (arg_present(a, k)) {
+                std::cerr << "kpu-run: " << k << " records one run, and " << deploy_paths.size()
+                          << " deployments make a sweep: run it with one --deploy\n";
+                return 2;
+            }
     }
 
     std::ifstream in(path, std::ios::binary);
@@ -218,7 +484,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             std::cerr << "kpu-run: unknown --level '" << level_arg << "'\n";
             return 2;
         }
-        if (const auto why = csp_level_supported(*parsed, *ast, device)) {
+        // In a sweep each deployment says whether it can run the level (its run reports why not).
+        if (const auto why = sweep ? std::nullopt : csp_level_supported(*parsed, *ast, device)) {
             std::cerr << "kpu-run: " << to_string(*parsed) << ": " << *why << "\n";
             return 2;
         }
@@ -267,6 +534,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::cerr << "kpu-run: " << e.what() << "\n";
         return 2;
     }
+
+    if (sweep) return run_csp_sweep(a, path, *ast, inputs, inputs_note, deploy_paths, levels, window, trace_limit);
 
     // THROUGH THE PLATFORM, the one execution path (kpu-run-csp-programs step 4a). Without
     // --deploy the platform holds the default device, and L-CA -- which builds its machine from
@@ -398,52 +667,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     std::cout << "device   " << (deployment ? deployment->label() + "   digest " + platform::deployment_digest(*deployment)
                                             : std::string("none (no --deploy): the default device")) << "\n\n";
 
-    for (std::size_t li = 0; li < res.levels.size(); ++li) {
-        const auto& o = res.levels[li];
-        std::cout << "  " << std::left << std::setw(24) << to_string(o.level) << std::setw(6) << short_name(o.level);
-        if (o.skipped) {
-            std::cout << "skipped: " << *o.skipped << "\n";
-            continue;
-        }
-        if (!o.has_timing) {
-            std::cout << "timing: not modelled at this level   " << o.actions << " actions, peak L3 " << o.peak_l3
-                      << "\n        run id " << run_ids[li] << "\n";
-            continue;
-        }
-        std::cout << "makespan " << o.makespan << " cycles   " << o.actions << " actions\n";
-        std::cout << "        run id " << run_ids[li] << "\n";
-        std::cout << "        DRAM  " << o.dram_loads << " loads, " << o.dram_stores << " stores, " << o.dram_bytes
-                  << " bytes      cf busy " << o.cf_busy << "\n";
-        if (o.level == ExecutionLevel::BlockSequential) {
-            std::cout << "        L3    peak " << o.peak_l3 << " of " << ast->l3 << " (in time), credit stalls "
-                      << o.credit_stalls << ", slot-bound " << o.slot_bound << " (" << o.slot_wait_cycles
-                      << " cycles)\n";
-            // L2 staging's credits (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 4).
-            if (ast->l2 > 0)
-                std::cout << "        L2    peak " << o.peak_l2 << " of " << ast->l2 << " staged (in time), "
-                          << o.l2_slots.size() << " stagings, slot-bound " << o.l2_bound << " (" << o.l2_wait_cycles
-                          << " cycles)\n";
-            std::cout << "        busy ";
-            for (const auto& [p, b] : o.busy)
-                std::cout << " " << p << " " << b << "/" << (o.lanes.count(p) ? o.lanes.at(p) : 0);
-            std::cout << "   (lane-cycles/lanes)   UNCALIBRATED\n";
-            // The fabric pipeline (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2).
-            if (o.pe_rows) {
-                std::cout << "        fabric " << o.pe_rows << "x" << o.pe_cols << " PEs, output-stationary: "
-                          << o.chains.size() << " chains as systolic streams, results waited " << o.link_delay_cycles
-                          << " cycles for a top link";
-            } else {
-                std::cout << "        fabric not declared (fabric.pe_rows/pe_cols): every call is one leg";
-            }
-            for (const auto& [why, n] : o.one_leg) std::cout << "; one leg: " << n << " (" << why << ")";
-            std::cout << "\n";
-            for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
-            continue;
-        }
-        std::cout << "        vector  combiner " << o.ve.combiner_busy << "/" << o.ve.combiner_bound << "  bm " << o.ve.bm_busy << "/"
-                  << o.ve.bm_bound << "  fabric " << o.ve.fabric << "   (busy/bound)   window " << window << "\n";
-        for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
-    }
+    print_levels(res.levels, run_ids, *ast, window);
 
     // --tflow: the tile-flow record (version 6) of the program's L-T1 run (step 4b; its residencies
     // carry their L3 address since l3-placement-at-lb step 5b, and its staged L2 copies and fabric
@@ -550,31 +774,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         return 1;
     }
     if (has_flag(a, "--no-compare")) return 0;
-    // Every operand, tile by tile, within the proximity bound of L-B's: the levels refine the
-    // behavioral model, and a data path may round differently (§3.8).
-    const TileProgram* authority = &*res.reference;
-    // How each operand is compared: in its own number system (tile_check), integers exactly.
-    std::string bounds;
-    for (const auto& name : authority->operand_order()) {
-        const TensorOperand& t = authority->operand(name);
-        const std::string b = t.fp32() ? "fp32 within 1e-6 + 1e-4|o|" : t.type + " exact";
-        if (bounds.find(b) == std::string::npos) bounds += (bounds.empty() ? "" : "; ") + b;
-    }
-    std::cout << "\nvalues vs L-B, the oracle (every operand, per tile, " << bounds << ")\n";
-    bool all_agree = true;
-    for (const auto& o : res.levels) {
-        if (o.skipped) continue;
-        std::cout << "  " << std::left << std::setw(24) << to_string(o.level);
-        const OperandsCheck c = check_operands(o.values, *authority);
-        all_agree = all_agree && c.pass;
-        if (c.pass) {
-            std::cout << "within bound (" << c.operands.size() << " operands, max abs " << c.max_abs << ")\n";
-            continue;
-        }
-        std::cout << "\n";
-        for (const TileCheck& t : c.operands)
-            if (!t.pass) std::cout << "      " << t.summary() << "\n";
-    }
+    const bool all_agree = print_value_check(res.levels, *res.reference);
     if (!all_agree) {
         std::cout << "\nFAILED: the levels do not compute the program's values.\n";
         return 1;
@@ -586,7 +786,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         std::ofstream out(emit_path, std::ios::binary);
         serialize::WriteOptions opt;
         opt.include_values = true;
-        TileProgram result = *authority;
+        TileProgram result = *res.reference;
         if (!(out << serialize::to_string(result, opt))) {
             std::cerr << "kpu-run: cannot write '" << emit_path << "'\n";
             return 2;
@@ -690,6 +890,13 @@ int run_l0_program(const std::vector<std::string>& a, const std::string& program
         !arg_required(a, "--deploy", deploy_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_result_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    // A repeated --deploy is a sweep, which runs a CSP program: an L0 trace runs at L-B only, where
+    // every deployment computes the same values. Refused rather than reading the first.
+    if (std::count(a.begin(), a.end(), std::string("--deploy")) > 1) {
+        std::cerr << "kpu-run: a repeated --deploy is a sweep, which runs a CSP program (file.csp); an L0 "
+                     "trace runs at L-B on one deployment\n";
         return 2;
     }
     const bool do_step = has_flag(a, "--step");
