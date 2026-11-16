@@ -244,3 +244,43 @@ TEST_CASE("Bubbles: L-CA's run, read from its protocol events, is the program's 
     const auto plain = driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, ast, &d, driver::csp_inputs(ast));
     CHECK(plain.records.empty());
 }
+
+TEST_CASE("Bubbles: an L-CA credit stall belongs to the action that was pending", "[program][csp][bubbles][lca]") {
+    // #443's review: stalls were kept by process and tile and read from each action's handover, so
+    // a later Move on the tile took an earlier Move's credit stalls as its own L2 wait (and ready).
+    using sw::kpu::timing::CspDriver;
+    using sw::kpu::timing::EventType;
+    using K = Action::Kind;
+    const TileCoord t{"A", 0, 0};
+    std::vector<CspDriver::Result::Handover> hand = {{0, K::Load, t, 0}, {1, K::Move, t, 0}, {2, K::Load, t, 0},
+                                                     {3, K::Move, t, 0}};
+    std::vector<CspDriver::ProtocolEvent> ev;
+    auto add = [&](std::uint64_t c, EventType ty, const std::string& comp, std::uint32_t id) {
+        CspDriver::ProtocolEvent e;
+        e.cycle = c;
+        e.type = ty;
+        e.component = comp;
+        e.component_id = id;
+        e.tile = t;
+        ev.push_back(e);
+    };
+    add(0, EventType::DMA_LOAD_START, "DMA0", 0);
+    add(5, EventType::DMA_LOAD_COMPLETE, "DMA0", 0);
+    for (std::uint64_t c = 10; c < 20; ++c) add(c, EventType::BM_STALL_CREDIT, "BM", 100);   // the first Move's
+    add(20, EventType::BM_MOVE_START, "BM", 100);
+    add(30, EventType::BM_MOVE_COMPLETE, "BM", 100);
+    add(50, EventType::DMA_LOAD_START, "DMA0", 0);
+    add(99, EventType::DMA_LOAD_COMPLETE, "DMA0", 0);
+    add(100, EventType::BM_MOVE_START, "BM", 100);
+    add(110, EventType::BM_MOVE_COMPLETE, "BM", 100);
+    const auto out = sw::kpu::timing::csp_records(hand, ev, 1, 1, 1);
+    CHECK(out.unmatched == 0);
+    REQUIRE(out.records.size() == 4);
+    const auto& first = out.records[1];
+    const auto& second = out.records[3];
+    CHECK(first.l2_wait == 10);                       // it waited 10..19 for its L2 slot
+    CHECK(first.ready == 20);
+    CHECK(second.l2_wait == 0);                       // the earlier stalls are not its own
+    CHECK(second.ready == 100);                       // its Load finished at 99: ready on the next tick
+    CHECK(second.lane == 0);                          // BlockMovers numbered from 0
+}

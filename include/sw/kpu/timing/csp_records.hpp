@@ -222,7 +222,14 @@ inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& ha
     std::stable_sort(order.begin(), order.end(),
                      [&](std::size_t x, std::size_t y) { return legs[x].rec.action < legs[y].rec.action; });
     std::map<std::string, std::map<Action::Kind, std::uint64_t>> last_finish;   // tile -> kind -> finish
+    // A stall belongs to the action its process had pending on the tile when it stalled: a process
+    // takes one tile's actions in program order, so the stalls after the previous leg on that
+    // process and tile started are this leg's, and no later one reuses them.
+    std::map<std::string, std::uint64_t> pending_since;                         // process/tile -> cycle
     std::vector<std::uint64_t> feeds_since_call;                                // since the last call
+    std::map<std::size_t, std::uint64_t> eject_finish;                          // a Store's ejection, by action
+    for (const Leg& l : legs)
+        if (l.rec.kind == Action::Kind::Store && l.leg == 0) eject_finish[l.rec.action] = l.rec.finish;
     for (std::size_t i : order) {
         Leg& l = legs[i];
         Rec& r = l.rec;
@@ -251,12 +258,14 @@ inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& ha
                 default: break;
             }
             if (r.kind == Action::Kind::Store && l.leg == 1)    // the DMA leg: after its ejection
-                for (std::size_t j = 0; j < legs.size(); ++j)
-                    if (legs[j].rec.action == r.action && legs[j].leg == 0) in = legs[j].rec.finish;
+                if (auto ej = eject_finish.find(r.action); ej != eject_finish.end()) in = ej->second;
             std::optional<std::uint64_t> last_credit, first_credit;
-            if (auto st = stalls.find(pkey(r.proc, r.tile)); st != stalls.end())
+            const std::string pk = pkey(r.proc, r.tile);
+            const std::uint64_t from = std::max<std::uint64_t>(l.at, pending_since.count(pk) ? pending_since[pk] : 0);
+            pending_since[pk] = std::max(from, r.start);                // later legs' stalls start here
+            if (auto st = stalls.find(pk); st != stalls.end())
                 for (const auto& [c, credit] : st->second) {
-                    if (!credit || c < l.at || c >= r.start) continue;
+                    if (!credit || c < from || c >= r.start) continue;
                     last_credit = c;
                     if (!first_credit) first_credit = c;
                 }
