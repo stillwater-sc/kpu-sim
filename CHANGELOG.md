@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kpu-floorplan --structure`** (#392): the model writes the structure record, `kpu-structure`
+  v1, natively (`floorplan_to_structure`). CTest `structure_native_t4` holds it to the converted
+  record, block for block. **`tools/trace/structure_diff.py`** compares two records by id,
+  provenance aside, within a relative tolerance; exit 0, 1 or 2.
+
 - **The shared structure record, `kpu-structure` v1** (#392; ADR 0005's first shared format): one
   description of a machine's hardware (blocks, resources, channels, networks and floorplan),
   written by kpu-sim's model or an RTL generator, for every view to lay out what the record

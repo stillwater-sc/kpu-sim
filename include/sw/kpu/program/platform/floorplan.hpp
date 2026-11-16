@@ -135,6 +135,13 @@ std::vector<DmaPortAttachment> dma_port_attachment(const DeploymentSpec& spec, D
 std::string validate_floorplan(const SocFloorplan& fp, const DeploymentSpec& spec);
 
 std::string floorplan_to_json(const SocFloorplan& fp);
+// The floorplan as a structure record, kpu-structure v1 (docs/plans/shared-structure-record.md,
+// #392): the format every view reads and the RTL generator writes too. Lengths in mm. The blocks
+// flatten into a tree linked by `parent`, under one `die` root; the NoC links become one network,
+// `noc`, routed `ring`; the geometry is flagged estimated, because the pitch is illustrative. It
+// is what tools/trace/structure_from_floorplan.py makes of floorplan_to_json's output, block for
+// block (CTest structure_native_t4); only the provenance differs.
+std::string floorplan_to_structure(const SocFloorplan& fp);
 // Parses and VALIDATES; throws FloorplanError on malformed text or a floorplan that does
 // not match the deployment.
 SocFloorplan floorplan_from_json(const std::string& text, const DeploymentSpec& spec);

@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import structure_check  # noqa: E402
 import structure_from_floorplan  # noqa: E402
+import structure_diff  # noqa: E402
 
 FAILS = 0
 
@@ -124,6 +125,29 @@ def main(samples: str) -> int:
     expect(any(b.get("resource") for b in model["blocks"]), "the model's blocks keep their naming-map resources")
     expect(all(b.get("rtl_path") == b["id"] for b in rtl["blocks"]), "the RTL's blocks keep their instance paths")
     expect(model["floorplan"]["estimated"] is True, "the model's floorplan is flagged an estimate")
+
+    # The comparer: provenance aside, a record is itself; a moved block, a dropped link, a
+    # changed kind or a renamed id is a difference, each named by its path.
+    expect(not structure_diff.compare(model, copy.deepcopy(model)), "diff: a record is the same as itself")
+    other = copy.deepcopy(model)
+    other["provenance"] = {"producer": "someone else", "source": "rtl"}
+    expect(not structure_diff.compare(model, other), "diff: provenance is not compared")
+    other["blocks"] = list(reversed(other["blocks"]))
+    expect(not structure_diff.compare(model, other), "diff: blocks compare by id, not by order")
+
+    def differs(mutate, what):
+        r = copy.deepcopy(model)
+        mutate(r)
+        d = structure_diff.compare(model, r)
+        expect(any(what in x for x in d), f"diff: {what} is reported" + ("" if d else " (no difference found)"))
+    placed = next(i for i, b in enumerate(model["blocks"]) if b.get("parent") and b.get("rect"))
+    bid = model["blocks"][placed]["id"]
+    differs(lambda r: r["blocks"][placed]["rect"].__setitem__(0, r["blocks"][placed]["rect"][0] + 1e-3),
+            f"$.blocks[{bid}].rect[0]")
+    differs(lambda r: r["blocks"][placed].update(kind="l2_bank"), f"$.blocks[{bid}].kind")
+    differs(lambda r: r["blocks"].pop(placed), f"$.blocks[{bid}]: only in the first")
+    lid = model["networks"][0]["links"][0]["id"]
+    differs(lambda r: r["networks"][0]["links"].pop(0), f"$.networks[noc].links[{lid}]: only in the first")
 
     # The exit codes.
     chk = os.path.join(HERE, "structure_check.py")

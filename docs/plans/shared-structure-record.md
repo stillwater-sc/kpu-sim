@@ -20,8 +20,8 @@ It replaces two formats with one:
 - esg's `floorplan.json` v1 (`kpu-gen-floorplan`), in mm, with blocks named by RTL instance path;
 - kpu-sim's `kpu-floorplan` v1 JSON, in µm, with blocks named by the naming map.
 
-Both convert losslessly into it: `tools/trace/structure_from_floorplan.py`. Each producer then
-writes it natively (the follow-ups in §7).
+Both convert losslessly into it: `tools/trace/structure_from_floorplan.py`. kpu-sim writes it
+natively, `kpu-floorplan --structure` (§5.1); the RTL generator is to follow (§7).
 
 ## 2. The document
 
@@ -180,6 +180,26 @@ F1 to F3 run when the record has a floorplan.
     they join;
   - `floorplan.estimated` is true, because the model's pitch is illustrative.
 
+### 5.1 The model writes it natively
+
+`kpu-floorplan --deploy <spec.json> --structure <out.json>` (`floorplan_to_structure`, in
+`src/program/floorplan.cpp`). It is the converted record block for block: CTest
+`structure_native_t4` compares them with `structure_diff.py`, and only the provenance differs.
+The native provenance names the build (`kpu-floorplan kpu-sim 0.8.0`) and keeps the layout
+(`generated:checkerboard`) and the floorplan's digest in `details`.
+
+### 5.2 Comparing two records
+
+`structure_diff.py <a> <b>`: everything but `provenance`, blocks, networks, nodes, links and
+channels matched by id, numbers within a relative tolerance (1e-9 by default). Exit 0 the same, 1
+a difference (each named by its path), 2 unreadable.
+
+A model record and an RTL record of the same configuration do not compare yet: their ids are two
+naming schemes (the naming map's `t4/l3[0]`, and the RTL's instance path
+`soc.checkerboard.tile_0_0`). They meet when the RTL fills each block's `resource` with the naming
+map's name, which §2.3 provides for; the comparison then keys on `resource`. That is part of
+branes-ai/embodied-ai-soc-generator#90 (§7).
+
 ## 6. Samples
 
 `tests/program/structure/`, the checker's and the viewers' fixtures:
@@ -195,9 +215,10 @@ invariant on purpose in a copy to see it reported under its id.
 
 ## 7. What follows
 
-- `kpu-floorplan --structure` writes the record natively. Its JSON stays for one release, then
-  retires.
-- An esg `kpu-sim-sync` issue: kpu-gen writes the record natively (`kpu-gen floorplan`, and its
-  block-diagram generator, esg#29), and its CI pins this checker.
+- ~~`kpu-floorplan --structure` writes the record natively~~ (§5.1). Its `--json` stays for one
+  release, then retires.
+- branes-ai/embodied-ai-soc-generator#90 (`kpu-sim-sync`): kpu-gen writes the record natively (`kpu-gen floorplan`, and its
+  block-diagram generator, esg#29), fills `resource` with the naming map's names so a model
+  record and an RTL record compare (§5.2), and its CI pins this checker.
 - `.dflow` v6.x references block ids (the original #392 item "link to .dflow").
 - The views: #447 and #448 read the floorplan, #390 the resources.

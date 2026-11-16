@@ -37,7 +37,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_floorplan_t4
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:floorplan>
-            -DARGS=--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--json$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/t4_floorplan.json$<SEMICOLON>--svg$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/t4_floorplan.svg
+            -DARGS=--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--json$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/t4_floorplan.json$<SEMICOLON>--svg$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/t4_floorplan.svg$<SEMICOLON>--structure$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/t4_native.structure.json
             -DEXPECT_CODE=0
             -DMUST_MATCH=2x2:.2.L3.tiles,.2.compute.tiles,.4.BlockMovers
             -P ${_expect}
@@ -67,10 +67,19 @@ if(KPU_BUILD_TESTS)
         add_test(NAME structure_check_t4
             COMMAND ${_struct_py} ${_trace}/structure_check.py ${CMAKE_CURRENT_BINARY_DIR}/t4.structure.json)
         set_tests_properties(structure_check_t4 PROPERTIES FIXTURES_REQUIRED t4_structure)
+        # kpu-floorplan --structure writes the record natively: it checks clean, and it is the
+        # converted record block for block (structure_diff.py; only the provenance differs).
+        add_test(NAME structure_check_native_t4
+            COMMAND ${_struct_py} ${_trace}/structure_check.py ${CMAKE_CURRENT_BINARY_DIR}/t4_native.structure.json)
+        set_tests_properties(structure_check_native_t4 PROPERTIES FIXTURES_REQUIRED t4_floorplan)
+        add_test(NAME structure_native_t4
+            COMMAND ${_struct_py} ${_trace}/structure_diff.py ${CMAKE_CURRENT_BINARY_DIR}/t4_native.structure.json
+                    ${CMAKE_CURRENT_BINARY_DIR}/t4.structure.json)
+        set_tests_properties(structure_native_t4 PROPERTIES FIXTURES_REQUIRED "t4_floorplan;t4_structure")
         add_test(NAME structure_check_selftest
             COMMAND ${_struct_py} ${_trace}/test_structure_check.py ${CMAKE_SOURCE_DIR}/tests/program/structure)
-        set_tests_properties(structure_record_t4 structure_check_t4 structure_check_selftest
-            PROPERTIES LABELS "program;records;structure")
+        set_tests_properties(structure_record_t4 structure_check_t4 structure_check_native_t4 structure_native_t4
+            structure_check_selftest PROPERTIES LABELS "program;records;structure")
     endif()
 
     # The T16: the smallest board whose torus has four-hub rings in both dimensions.

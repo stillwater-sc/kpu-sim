@@ -9,10 +9,12 @@
 #include <sw/kpu/program/platform/floorplan.hpp>
 
 #include <sw/kpu/program/platform/digest.hpp>
+#include <sw/kpu/version.hpp>
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <map>
@@ -632,6 +634,96 @@ std::string floorplan_to_json(const SocFloorplan& fp) {
     }
     root["noc"] = noc;
     return root.dump(1) + "\n";
+}
+
+std::string floorplan_to_structure(const SocFloorplan& fp) {
+    constexpr double mm = 1e-3;                               // um -> mm
+    const auto rect_mm = [&](const Rect& r) {
+        return std::array<double, 4>{r.x_um * mm, r.y_um * mm, r.w_um * mm, r.h_um * mm};
+    };
+    const auto rect_out = [](const std::array<double, 4>& r) { return json::array({r[0], r[1], r[2], r[3]}); };
+
+    json blocks = json::array();
+    std::map<std::string, std::pair<std::string, std::array<double, 4>>> placed;   // id -> kind, rect
+    const auto die = rect_mm(fp.die);
+    const std::string root = fp.device + "/die";
+    blocks.push_back(json{{"id", root}, {"kind", "die"}, {"rect", rect_out(die)}, {"area", die[2] * die[3]}});
+    std::function<void(const FloorplanBlock&, const std::string&)> walk =
+        [&](const FloorplanBlock& b, const std::string& parent) {
+            const std::string kind = to_string(b.kind);
+            json o = json::object();
+            o["id"] = b.name;
+            o["kind"] = kind;
+            o["parent"] = parent;
+            if (!b.label.empty()) o["label"] = b.label;
+            if (b.resource) o["resource"] = format(*b.resource);
+            if (!b.clock_domain.empty()) o["clock_domain"] = b.clock_domain;
+            const auto r = rect_mm(b.rect);
+            o["rect"] = rect_out(r);
+            o["area"] = r[2] * r[3];
+            static const std::map<std::string, std::string> role = {
+                {"block_mover", "block_mover"}, {"dma_engine", "dma"}, {"compute_tile", "fabric"}};
+            static const std::map<std::string, std::string> layer = {
+                {"l3_tile", "l3"}, {"l3_bank", "l3"}, {"l2_bank", "l2"}, {"l1_vector", "l1"}, {"compute_tile", "fabric"}};
+            if (auto it = role.find(kind); it != role.end()) o["role"] = it->second;
+            if (auto it = layer.find(kind); it != layer.end()) o["layer"] = it->second;
+            placed[b.name] = {kind, r};
+            blocks.push_back(o);
+            for (const FloorplanBlock& c : b.children) walk(c, b.name);
+        };
+    for (const FloorplanBlock& b : fp.blocks) walk(b, root);
+
+    // The NoC: one network, its nodes the blocks its links join, in first-mention order.
+    json nodes = json::array(), links = json::array();
+    std::set<std::string> seen;
+    for (std::size_t i = 0; i < fp.noc.size(); ++i) {
+        const NocLink& l = fp.noc[i];
+        for (const std::string& end : {l.a, l.b}) {
+            if (!seen.insert(end).second) continue;
+            const auto it = placed.find(end);
+            const std::string k = it == placed.end() ? "" : it->second.first;
+            json n = json{{"id", end}, {"kind", k == "noc_router" ? "router" : k == "noc_port" ? "port" : "attach"}, {"block", end}};
+            if (it != placed.end()) {
+                const auto& r = it->second.second;
+                n["at"] = json::array({r[0] + r[2] / 2, r[1] + r[3] / 2});
+            }
+            nodes.push_back(n);
+        }
+        json link = json{{"id", std::string(to_string(l.kind)) + "_" + std::to_string(i)}, {"from", l.a}, {"to", l.b}};
+        if (!l.route_um.empty()) {
+            json pts = json::array();
+            double length = 0;
+            for (std::size_t p = 0; p < l.route_um.size(); ++p) {
+                const double x = l.route_um[p].first * mm, y = l.route_um[p].second * mm;
+                pts.push_back(json::array({x, y}));
+                if (p) length += std::abs(x - pts[p - 1][0].get<double>()) + std::abs(y - pts[p - 1][1].get<double>());
+            }
+            link["points"] = pts;
+            link["length"] = length;
+        }
+        links.push_back(link);
+    }
+    json networks = json::array();
+    if (!links.empty())
+        networks.push_back(json{{"id", "noc"}, {"kind", "noc"}, {"routing", "ring"},
+                                {"description", "the NoC's ring, port and attach links (kpu-floorplan)"},
+                                {"nodes", nodes}, {"links", links}});
+
+    json root_doc = json::object();
+    root_doc["format"] = "kpu-structure";
+    root_doc["version"] = 1;
+    root_doc["provenance"] = json{
+        {"producer", "kpu-floorplan kpu-sim " + std::string(sw::kpu::VERSION_STRING)},
+        {"source", "model"},
+        {"configuration", fp.device},
+        {"details", json{{"layout", fp.source}, {"floorplan_digest", fp.digest()}}}};
+    root_doc["units"] = json{{"length", "mm"}, {"area", "mm2"}};
+    root_doc["blocks"] = blocks;
+    root_doc["networks"] = networks;
+    // The model's pitch is illustrative, not silicon: every rect is an estimate.
+    root_doc["floorplan"] = json{{"die", json{{"width", die[2]}, {"height", die[3]}, {"area", die[2] * die[3]}}},
+                                 {"estimated", true}};
+    return root_doc.dump(1) + "\n";
 }
 
 SocFloorplan floorplan_from_json(const std::string& text, const DeploymentSpec& spec) {
