@@ -178,14 +178,17 @@ reads the program and the deployment, and calls the platform. The platform owns 
   L-B's, because a data path may order a reduction differently.
 - Bit equality is the bar only where the same computation is repeated: the trace's replay, a
   round trip, step against run, and L-B across deployments in a sweep.
-- `kpu-run` exits 1 when a level disagrees. Every file it writes, it writes only after the levels
-  agreed.
+- `kpu-run` exits 1 when a level disagrees. Only the L0 files (`--emit-l0`, `--emit-l0-kernel`,
+  `--emit-l0-result`) wait for the levels to agree. A file that looks like an expected output must
+  never come from a run that disagreed. The records (`--dflow`, `--tflow`, `--timeline`,
+  `--tile-commands`) are written before the comparison, so a run that disagreed can leave them;
+  its exit status says which it was.
 
 ### 3.9 The records and the viewers
 
 | Record | Written by | Read by |
 |---|---|---|
-| `.dflow` v6 (`--dflow`): every action as a CSP state transition, with tile values; with L-T1, its legs and fabric chains | `record/domain_flow_record.hpp`, from L-B's run | `tools/visualization/domainflow/`, `tools/trace/dflow_check.py` (`--result`: the CI gate) |
+| `.dflow` v6 (`--dflow`): every action as a CSP state transition, and every operand's final tile values. `--dflow-values` adds snapshots of the selected tiles after each action, up to a byte cap (`--dflow-values-cap`, finals first). With L-T1, its legs and fabric chains | `record/domain_flow_record.hpp`, from L-B's run | `tools/visualization/domainflow/`, `tools/trace/dflow_check.py` (`--result`: the CI gate) |
 | `.tflow` v6 (`--tflow`): where every tile was and when, one row per L3 slot, staged L2 copies, chains | `record/tile_flow_record.hpp`, from L-T1 | `tools/visualization/tileflow/`, `tools/trace/tflow_check.py` |
 | Timeline (`--timeline`): Chrome-trace intervals, one per leg | `driver/csp_timeline.hpp`, from L-T1 | any Chrome-trace viewer |
 | Bubble report (`--bubbles`): each compute lane's idle time and its cause, the reuse stated, each process's load | `csp/bubbles.hpp`, from L-T1, and from L-CA through `timing/csp_records.hpp` | text |
@@ -196,7 +199,10 @@ reads the program and the deployment, and calls the platform. The platform owns 
 
 `kpu-run --program p.csp --deploy m.json [--level ...]`, in `run_csp_program`:
 1. Parse the program, and read the deployment or deployments. A repeated `--deploy` is a sweep
-   (`run_csp_sweep`): the steps below run once per deployment.
+   (`run_csp_sweep`): steps 2 to 7 and 9 run once per deployment, with `--bubbles` printed for
+   each. A sweep refuses, by name, the options that record one run: `--dflow`, `--tflow`,
+   `--timeline`, `--tile-commands`, `--step` and the `--emit-l0` files. Run each deployment
+   alone for those.
 2. Choose the levels: `all`, or one named. A named level that cannot run this program on this
    machine is refused with its reason (`csp_level_supported`).
 3. Prepare the inputs: synthesized, or `--inputs file.l0`.
