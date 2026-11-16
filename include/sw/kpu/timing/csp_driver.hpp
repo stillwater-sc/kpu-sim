@@ -578,9 +578,15 @@ private:
                 // may not have them yet (Loads are handed over in order, as their credits allow).
                 auto n = loads_pulled_.find(v.arg);
                 v.arg_loads = n == loads_pulled_.end() ? 0 : n->second;
+                // Before a requantized result's scale: its accumulator values (the validator
+                // orders a bias before the scale).
+                v.word_type = inputs_.operand(tile.operand).acc_type();
                 break;
             }
-            case program::csp::VeOp::Relu: v.op = VectorStage::Op::Relu; break;
+            case program::csp::VeOp::Relu:
+                v.op = VectorStage::Op::Relu;
+                v.word_type = inputs_.operand(tile.operand).type;   // after the scale: the tensor's own
+                break;
             case program::csp::VeOp::Gelu: v.op = VectorStage::Op::Gelu; break;
             case program::csp::VeOp::Silu: v.op = VectorStage::Op::Silu; break;
             case program::csp::VeOp::Atan: v.op = VectorStage::Op::Atan; break;

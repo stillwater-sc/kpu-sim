@@ -490,7 +490,8 @@ private:
     static bool has_scale(const std::vector<csp::Stage>& v) {
         return std::any_of(v.begin(), v.end(), [](const csp::Stage& s) { return s.op == VeOp::Scale; });
     }
-    // A requantized result's context is exactly its scale, on the Combiner; any other tile's has no scale.
+    // A requantized result's context: its scale on the Combiner, with a bias before it in the
+    // accumulator's type and relu after it (integer_context_refusal); any other tile's has no scale.
     void check_scale(const TileCoord& y, const std::vector<csp::Stage>& drain, const std::vector<csp::Stage>& wb,
                      int line, const std::string& what, bool required) const {
         const TensorOperand& o = operands_.operand(y.operand);
@@ -500,10 +501,17 @@ private:
                                          y.operand + " declares no acc");
             return;
         }
-        if (drain.size() + wb.size() > 1 || (required && !has_scale(drain)))
-            throw CompileError(line, what + ": " + y.to_string() + " holds " + o.acc + " accumulator values; its "
-                                     "context is scale(m, shift) @ combiner, which makes them " + o.type +
-                                     (drain.size() + wb.size() > 1 ? ", and nothing else" : ""));
+        std::vector<VeOp> ops;
+        for (const auto* v : {&drain, &wb})
+            for (const csp::Stage& st : *v) ops.push_back(st.op);
+        if (const auto why = integer_context_refusal(ops, y.to_string(), o.type, o.acc, required))
+            throw CompileError(line, what + ": " + *why);
+        // A bias is added to the accumulator values, so it is in their type.
+        for (const csp::Stage& st : drain)
+            if (st.op == VeOp::Add && operands_.operand(st.arg.operand).type != o.acc)
+                throw CompileError(line, what + ": add(" + st.arg.to_string() + "): a bias before " + y.operand +
+                                         "'s scale is added to its " + o.acc + " accumulator values; " +
+                                         st.arg.operand + " is " + operands_.operand(st.arg.operand).type);
     }
 
     // ---- statements ----

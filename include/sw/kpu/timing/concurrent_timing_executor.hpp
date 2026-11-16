@@ -1486,7 +1486,8 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
                 if (b == l3_payloads_.end())
                     throw std::runtime_error("Tile context: add(" + st.arg.to_string() + ") on " + id.to_string() +
                                              ": the vector is not in L3");
-                program::bias_tile(y.values, y.cols, b->second.payload.values);
+                program::bias_tile(y.values, y.cols, b->second.payload.values,
+                                   st.word_type.empty() ? program::numeric::kFp32 : st.word_type);
             } else if (st.op == VectorStage::Op::Scale) {
                 program::requant_tile(st.from_type, st.to_type, y.values, st.scale_m, st.scale_shift);
             } else if (st.op == VectorStage::Op::MxInt8 || st.op == VectorStage::Op::MxFp8) {
@@ -1497,7 +1498,7 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
                               : st.op == VectorStage::Op::Silu ? program::ActivationFn::Silu
                               : st.op == VectorStage::Op::Atan ? program::ActivationFn::Atan
                                                                 : program::ActivationFn::Relu;
-                program::activate_tile(y.values, fn);
+                program::activate_tile(y.values, fn, st.word_type.empty() ? program::numeric::kFp32 : st.word_type);
             }
         }
         write_payload(level, id, std::move(y), slot);

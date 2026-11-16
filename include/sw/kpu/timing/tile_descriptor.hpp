@@ -122,6 +122,9 @@ struct VectorStage {
     int64_t scale_m = 1;
     int scale_shift = 0;
     std::string from_type, to_type;
+    // Add and the activations: the type of the words they compute on (empty: fp32). A
+    // requantized result's bias is in its accumulator type, its relu in its own (#427).
+    std::string word_type;
 };
 
 // ============================================================================

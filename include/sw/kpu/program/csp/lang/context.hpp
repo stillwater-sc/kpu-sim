@@ -166,4 +166,32 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
     return out;
 }
 
+// What a requantized result's context may hold (#427). The result's accumulator values (`acc`,
+// int32) become its type's (int8) at the scale, so each stage computes in the type the values
+// have where it runs, in the Combiner's order:
+//   - an add before the scale: a bias, in the accumulator's type, adding as the MAC does;
+//   - the scale, on the Combiner;
+//   - relu after the scale, on the integer result.
+// gelu, silu and atan need real values, and a block format converts real values: both are
+// refused. The order itself is resolve_result_context's. Returns why the context is refused, or
+// nullopt. `required`: the context is a path into storage, which must carry the scale.
+inline std::optional<std::string> integer_context_refusal(const std::vector<VeOp>& ops, const std::string& tile,
+                                                          const std::string& type, const std::string& acc,
+                                                          bool required) {
+    bool scale = false;
+    for (VeOp op : ops) {
+        if (op == VeOp::Scale) scale = true;
+        else if (is_block_format(op))
+            return std::string(to_string(op)) + ": a block format converts real values, and " + tile + " is " + type +
+                   " after its scale";
+        else if (op != VeOp::Add && op != VeOp::Relu)
+            return std::string(to_string(op)) + " on " + tile + "'s " + type + " values: an integer result's "
+                   "activation is relu (" + to_string(op) + " needs real values)";
+    }
+    if (required && !scale)
+        return tile + " holds " + acc + " accumulator values; its context needs scale(m, shift) @ combiner, which "
+               "makes them " + type;
+    return std::nullopt;
+}
+
 }  // namespace sw::kpu::program::csp::lang

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Combiner's integer epilogue** (#427): a requantized result's context takes a bias before
+  its scale and relu after it, in the Combiner's order.
+  - The bias is a vector in the accumulator's type (`vector b[..] int32`). It is added to the
+    int32 accumulator values as the MAC adds, so the sum wraps as a 32-bit register's does.
+  - relu runs on the int8 result. gelu, silu, atan and the block formats need real values, and
+    are refused on an integer result.
+  - Every level computes it: L-B, the trace's replay, L-T1 and L-CA. `bias_tile` and
+    `activate_tile` take the words' type, and L-CA's `VectorStage::word_type` carries it.
+  - The trace records the bias and relu as `BIAS_ADD` and `ACTIVATION` on the requantized
+    operand, at opset 1.8.0. 1.8.0 adds no field: a 1.7 reader's kernels refuse these ops on
+    integers rather than compute them wrongly.
+  - `kpu-csp-gen --algo linear --dtype int8 --requant m,shift --place combiner` writes
+    `add(b[j]), scale(m, shift), relu`, all @ combiner, under OS, WS and IS.
+  - Tests:
+    - `test_csp_requant`: the integer matrix (bias x scale x relu) on every dataflow and level,
+      against a reference computed independently;
+    - `test_csp_block_format`: the fp32 matrix (bias x relu x mxint8), bit for bit, on every
+      dataflow and level;
+    - the `kpu_run_csp_linear_requant` CLI test, from `kpu_s1_combiner.json`.
+
 - **`kpu-run`: a sweep over deployments** (#285). `--deploy` repeated runs the same program, on
   the same inputs, on each deployment. Each deployment's levels are checked against its own L-B,
   and L-B must compute the same values, bit for bit, on every deployment. Each run is reported
@@ -36,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   architecture's, and the RTL implements them.
 
 ### Fixed
+
+- **A deployment file can declare the Combiner a requantized or block-format program needs.** A
+  vector unit's `ops` accepted add, relu, gelu, silu and atan only, so `scale`, `mxint8` and
+  `mxfp8` were refused, and `kpu-run` could not run such a program from a file. Only in-memory
+  specs could, which is all the tests used. `platform::kVectorOps` is the language's list now,
+  and `test_deployment_spec` checks it against `parse_veop`.
 
 - **A BlockMover's or streamer's completion records when it completed.** A completion delivered
   after its scheduled end (an ejection a full NoC hub held back) spanned its schedule, not its

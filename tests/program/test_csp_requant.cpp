@@ -162,9 +162,29 @@ TEST_CASE("Requant: what the language refuses, in the walker and the validator",
     // Accepted: the scale on the store.
     BOTH_ACCEPT(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner;\n" + end);
     // No scale: the accumulator's values would reach memory as int8 words.
-    BOTH_REFUSE(head + q + fab + "  store C[0, 0];\n" + end, "holds int32 accumulator values; its context is scale(m, shift) @ combiner");
-    // Anything beside it.
-    BOTH_REFUSE(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner, relu @ combiner;\n" + end, "and nothing else");
+    BOTH_REFUSE(head + q + fab + "  store C[0, 0];\n" + end, "holds int32 accumulator values; its context needs scale(m, shift) @ combiner");
+    // Beside it (#427's integer epilogue): a bias in the accumulator's type before it, relu after it.
+    const std::string vec = "  vector b[16] int32 tile 16 in;\n  vector b8[16] int8 tile 16 in;\n";
+    const std::string fab_b = "  resident A[0, 0], B[0, 0], b[0], b8[0];\n"
+                              "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n";
+    const std::string end_b = "  release A[0, 0], B[0, 0], b[0], b8[0];\n}\n";
+    BOTH_ACCEPT(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner, relu @ combiner;\n" + end);
+    BOTH_ACCEPT(head + vec + q + fab_b + "  store C[0, 0] via add(b[0]) @ combiner, scale(1, 4) @ combiner;\n" + end_b);
+    BOTH_ACCEPT(head + vec + q + fab_b +
+                "  store C[0, 0] via add(b[0]) @ fabric, scale(1, 4) @ combiner, relu @ bm.egress;\n" + end_b);
+    // The bias is in the accumulator's type, and before the scale.
+    BOTH_REFUSE(head + vec + q + fab_b + "  store C[0, 0] via add(b8[0]) @ combiner, scale(1, 4) @ combiner;\n" + end_b,
+                "is added to its int32 accumulator values; b8 is int8");
+    BOTH_REFUSE(head + vec + q + fab_b + "  store C[0, 0] via scale(1, 4) @ combiner, add(b[0]) @ combiner;\n" + end_b,
+                "add follows scale");
+    // An integer result's activation is relu; a block format converts real values.
+    BOTH_REFUSE(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner, gelu @ combiner;\n" + end,
+                "an integer result's activation is relu");
+    BOTH_REFUSE(head + q + fab + "  store C[0, 0] via scale(1, 4) @ combiner, mxint8 @ combiner;\n" + end,
+                "a block format converts real values");
+    // Still needed on every path into storage, with a bias or relu beside it.
+    BOTH_REFUSE(head + vec + q + fab_b + "  store C[0, 0] via add(b[0]) @ combiner;\n" + end_b,
+                "its context needs scale(m, shift) @ combiner");
     // Off the Combiner, out of order, or twice.
     BOTH_REFUSE(head + q + fab + "  store C[0, 0] via scale(1, 4) @ bm.egress;\n" + end, "scale @ bm.egress: the requantization runs on the Combiner");
     // A scale on a tensor with no accumulator declared.
@@ -272,7 +292,7 @@ TEST_CASE("Requant: the trace records OPERAND acc= and REQUANT, and reads them b
     serialize::write_l0(os, *ref.trace, with_values);
     CHECK_THAT(os.str(), ContainsSubstring("KPUL0 1.4.0"));
     CHECK_THAT(os.str(), ContainsSubstring("MIN_CONSUMER 1.4.0"));
-    CHECK_THAT(os.str(), ContainsSubstring("OPSET tile 1.7.0"));
+    CHECK_THAT(os.str(), ContainsSubstring("OPSET tile 1.7.0"));   // REQUANT alone: 1.8.0 is a bias's or relu's
     CHECK_THAT(os.str(), ContainsSubstring("type=int8 acc=int32"));
     CHECK_THAT(os.str(), ContainsSubstring("kind=REQUANT out=C:0,0 m=3 shift=9"));
     std::istringstream is(os.str());
@@ -320,4 +340,154 @@ TEST_CASE("Requant: the trace-form L-CA driver runs it, and checks the inputs' a
     bad.replace(bad.find(" m=3 "), 5, " m=3.5 ");
     std::istringstream is(bad);
     CHECK_THROWS_WITH(serialize::read_l0(is), ContainsSubstring("m= and shift= are integers"));
+}
+
+namespace {
+
+// A requantized linear (#427): act(scale(A . B + b)), every stage @ combiner, b in int32. Without
+// the bias or the relu, by removing it from the context the generator writes.
+std::string linear_q(const std::string& dataflow, bool bias, bool relu) {
+    gen::Options o;
+    o.algo = "linear";
+    o.size = 64;
+    o.tile = 16;
+    o.l3 = 12;
+    o.dtype = "int8";
+    o.dataflow = dataflow;
+    o.place = "combiner";
+    o.requant = true;
+    o.requant_m = kM;
+    o.requant_shift = kShift;
+    std::string src = gen::generate(o);
+    auto drop = [&](const std::string& what) {
+        for (std::size_t at; (at = src.find(what)) != std::string::npos;) src.erase(at, what.size());
+    };
+    if (!bias) drop("add(b[j]) @ combiner, ");
+    if (!relu) drop(", relu @ combiner");
+    return src;
+}
+
+platform::DeviceSpecification s1_with_full_combiner() {
+    auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    d.combiner = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0,
+                                                                  {"add", "relu", "scale", "mxint8", "mxfp8"}};
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("Requant: a bias before the scale and relu after it, on every dataflow and level",
+          "[program][csp][run][requant]") {
+    // The fused-operation matrix of an integer result (#427): bias x scale x relu, under OS, WS
+    // and IS. The reference is computed here: the int32 matmul, plus b[c] as an int32 register
+    // adds it (wrapping), requantized, then max(0, q).
+    const auto d = s1_with_full_combiner();
+    CHECK_THAT(linear_q("ws", true, true),
+               ContainsSubstring("via add(b[j]) @ combiner, scale(3, 9) @ combiner, relu @ combiner;"));
+    CHECK_THAT(linear_q("os", true, true), ContainsSubstring("vector b[64] int32 tile 16 in;"));
+    for (const char* df : {"os", "ws", "is"}) {
+        const lang::Program full = lang::parse(linear_q(df, true, true));
+        const TileProgram in = driver::csp_inputs(full);           // A, B (int8) and b (int32)
+        // The int32 matmul on the same A and B.
+        const lang::Program plain_ast = lang::parse(matmul(df, false));
+        TileProgram plain_in = driver::csp_inputs(plain_ast);
+        for (const char* n : {"A", "B"}) plain_in.operand(n).values = in.operand(n).values;
+        const auto plain = driver::csp_reference(plain_ast, plain_in, 1'000'000);
+        REQUIRE(plain.values);
+        const TensorOperand& c32 = plain.values->operand("C");
+        const TensorOperand& b = in.operand("b");
+        bool biased = false, negative = false;
+        for (const bool bias : {false, true})
+            for (const bool relu : {false, true}) {
+                CAPTURE(df, bias, relu);
+                const std::string src = linear_q(df, bias, relu);
+                const lang::Program ast = lang::parse(src);
+                TileProgram run_in = driver::csp_inputs(ast);
+                for (const char* n : {"A", "B", "b"}) run_in.operand(n).values = in.operand(n).values;
+                driver::CspRunRequest req{ast, &d, run_in,
+                                          {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential,
+                                           ExecutionLevel::CycleAccurate}};
+                const auto r = driver::run_csp(req);
+                REQUIRE(r.reference);
+                CHECK(r.reference_note.empty());           // the trace replays L-B bit for bit
+                std::vector<long long> want;
+                for (Dim rr = 0; rr < c32.rows; ++rr)
+                    for (Dim cc = 0; cc < c32.cols; ++cc) {
+                        long long x = static_cast<long long>(c32.value(rr, cc));
+                        if (bias) {
+                            const long long bc = static_cast<long long>(b.value(cc, 0));
+                            biased = biased || bc != 0;
+                            // An int32 register: the sum wraps modulo 2^32.
+                            x = static_cast<long long>(static_cast<std::int32_t>(
+                                static_cast<std::uint32_t>(static_cast<std::int64_t>(x + bc))));
+                        }
+                        long long q = expected(x, kM, kShift);
+                        negative = negative || q < 0;
+                        if (relu) q = std::max(q, 0LL);
+                        want.push_back(q);
+                    }
+                for (const auto& o : r.levels) {
+                    CAPTURE(to_string(o.level));
+                    INFO(o.skipped.value_or(""));
+                    REQUIRE_FALSE(o.skipped);
+                    const TensorOperand& got = o.values.operand("C");
+                    REQUIRE(got.type == "int8");
+                    std::size_t n = 0, bad = 0;
+                    for (Dim rr = 0; rr < got.rows; ++rr)
+                        for (Dim cc = 0; cc < got.cols; ++cc)
+                            if (static_cast<long long>(got.value(rr, cc)) != want[n++]) ++bad;
+                    CHECK(bad == 0);
+                }
+            }
+        CHECK(biased);                                    // the data reaches the bias...
+        CHECK(negative);                                  // ...and the relu
+    }
+}
+
+TEST_CASE("Requant: a trace with a bias or relu beside REQUANT is opset 1.8, and replays",
+          "[program][csp][requant]") {
+    for (const bool bias : {false, true}) {
+        CAPTURE(bias);
+        const lang::Program ast = lang::parse(linear_q("os", bias, !bias));
+        const auto ref = driver::csp_reference(ast, driver::csp_inputs(ast), 1'000'000);
+        REQUIRE(ref.trace);
+        std::ostringstream os;
+        serialize::WriteOptions with_values;
+        with_values.include_values = true;
+        serialize::write_l0(os, *ref.trace, with_values);
+        CHECK_THAT(os.str(), ContainsSubstring("OPSET tile 1.8.0"));
+        CHECK_THAT(os.str(), ContainsSubstring(bias ? "kind=BIAS_ADD" : "kind=ACTIVATION"));
+        std::istringstream is(os.str());
+        TileProgram back = serialize::read_l0(is);
+        (void)TileProgramReference().run(back);
+        const auto& a = back.operand("C").values;
+        const auto& w = ref.values->operand("C").values;
+        CHECK((a.size() == w.size() && std::memcmp(a.data(), w.data(), a.size() * sizeof(float)) == 0));
+    }
+    // A plain requantized matmul's trace stays 1.7.0: the file says what is in it.
+    const lang::Program plain = lang::parse(matmul("os", true));
+    const auto ref = driver::csp_reference(plain, driver::csp_inputs(plain), 1'000'000);
+    REQUIRE(ref.trace);
+    CHECK(serialize::opset_for(*ref.trace).str() == "1.7.0");
+}
+
+TEST_CASE("Requant: the generator writes a requantized linear on the Combiner only", "[program][csp][gen][requant]") {
+    gen::Options o;
+    o.algo = "linear";
+    o.size = 64;
+    o.tile = 16;
+    o.l3 = 12;
+    o.dtype = "int8";
+    o.requant = true;
+    o.place = "fabric";
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("runs on the Combiner, where its scale does"));
+    o.place = "combiner";
+    o.act = ActivationFn::Gelu;
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("an integer result's activation is relu"));
+    o.act = ActivationFn::Relu;
+    o.format = "mxint8";
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("a block format converts real values"));
+    o.format = "none";
+    o.requant = false;
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("dtype is matmul's (and a requantized linear's)"));
 }

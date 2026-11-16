@@ -109,11 +109,22 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
   tensor's integer type, as `round(x * m / 2^shift)`: ties to even, saturated
   (`numeric::requantize`). The result tensor declares both: `tensor C[..] int8 tile .. out acc
   int32`. Its gemm accumulates in int32, and the scale is on every path into memory: a
-  fabric accumulator's store, or an L2 accumulator's final merge. It is the context's only
-  stage, so no int8 bias or activation yet, and it runs on the Combiner, after a bias and before
-  an activation or format (the Combiner's order). The trace records `REQUANT` (opset 1.7), and an
-  operand's `acc=` (container 1.4). `kpu-csp-gen --algo matmul --dtype int8 --requant m,shift`
-  writes it under OS, WS and IS.
+  fabric accumulator's store, or an L2 accumulator's final merge. It runs on the Combiner, in
+  the Combiner's order. The trace records `REQUANT` (opset 1.7), and an operand's `acc=`
+  (container 1.4). `kpu-csp-gen --algo matmul --dtype int8 --requant m,shift` writes it under
+  OS, WS and IS.
+  - **Beside it, the integer epilogue.** Each stage computes in the type the values have where it
+    runs:
+    - a **bias** before the scale, in the accumulator's type: `vector b[..] int32`. It adds as
+      the MAC does, so the sum wraps as a 32-bit register's does;
+    - the **scale**;
+    - **relu** after the scale, on the int8 result.
+
+    gelu, silu and atan need real values, and a block format converts real values: both are
+    refused on an integer result. The trace records the bias and the relu as `BIAS_ADD` and
+    `ACTIVATION` on the requantized operand (opset 1.8: no new field; a 1.7 reader's kernels
+    refuse them on integers). `kpu-csp-gen --algo linear --dtype int8 --requant m,shift --place
+    combiner` writes `add(b[j]), scale(m, shift), relu`, all @ combiner, under OS, WS and IS.
   - **The rounding mode is part of the architecture: ties to even, saturated.** It matches the
     block formats' rounding and is unbiased. kpu-sim fixes it, and the RTL implements it
     (esg#68 asks for "a scale and shift ... with rounding and saturation" and leaves the mode
@@ -121,7 +132,7 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
   - **A per-channel scale** (a vector of multipliers) is not built yet.
 
 Not built yet:
-- an integer bias or activation beside the scale, and a per-channel scale;
+- a per-channel scale;
 - an init (`acc ... in l2 init ...`);
 - a weight-stationary timing of the array. L-T1 and L-CA time each merge's gemm as a
   one-call output-stationary chain.

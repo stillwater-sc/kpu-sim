@@ -13,6 +13,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <sw/kpu/program/csp/csp_program.hpp>
 #include <sw/kpu/program/driver/execution_level.hpp>
 #include <sw/kpu/program/driver/program_spec.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
@@ -536,4 +537,29 @@ TEST_CASE("dma.window is declared, round-trips, and needs a DRAM to window",
 
     CHECK(declared(t4.device(0), SpecField::DmaWindow));
     CHECK(declared_value(t4.device(0), SpecField::DmaWindow) == "32");
+}
+
+TEST_CASE("a vector unit may list every operation the CSP language has", "[program][platform][combiner]") {
+    // The list was add, relu, gelu, silu and atan, so no deployment FILE could declare a Combiner
+    // that runs the requantization's scale or a block format (#427): only in-memory specs could.
+    // kVectorOps is checked against the language's names here, both ways.
+    using sw::kpu::program::csp::VeOp;
+    std::vector<std::string> language;
+    for (VeOp v : {VeOp::Add, VeOp::Relu, VeOp::Gelu, VeOp::Silu, VeOp::Atan, VeOp::MxInt8, VeOp::MxFp8, VeOp::Scale})
+        language.emplace_back(sw::kpu::program::csp::to_string(v));
+    CHECK(kVectorOps.size() == language.size());
+    for (const std::string& op : kVectorOps) {
+        VeOp v;
+        CHECK(sw::kpu::program::csp::parse_veop(op, v));
+    }
+    DeploymentSpec spec;
+    spec.device(0).combiner = DeviceSpecification::Movers::VectorUnit{16, 1.0, language};
+    CHECK(spec.validate().empty());
+    // And through a file's bytes: the JSON reader validates the same list.
+    const DeploymentSpec back = from_json(to_json(spec));
+    REQUIRE(back.device(0).combiner.has_value());
+    CHECK(back.device(0).combiner->ops == language);
+    spec.device(0).combiner->ops.push_back("tanh");
+    CHECK_THAT(spec.validate(), Catch::Matchers::ContainsSubstring("'tanh' is not a vector operation (add, relu, gelu, "
+                                                                   "silu, atan, mxint8, mxfp8, scale)"));
 }

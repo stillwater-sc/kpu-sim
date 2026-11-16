@@ -393,6 +393,23 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=a.repeated.--deploy.is.a.sweep
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
+    # The Combiner's integer epilogue (#427), from a deployment file: a requantized linear, add(b[j]),
+    # scale and relu on the Combiner, b in int32, at every level, under weight-stationary.
+    add_test(NAME csp_gen_linear_requant
+        COMMAND $<TARGET_FILE:csp-gen> --algo linear --size 64 --tile 16 --l3 12 --dtype int8 --requant 3,9
+                --place combiner --dataflow ws -o ${CMAKE_CURRENT_BINARY_DIR}/linear_requant.csp)
+    add_test(NAME kpu_run_csp_linear_requant
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/linear_requant.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1_combiner.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=L0.trace.*replayed.bit-exact.*int8.exact.*cycle-accurate.+within.bound.*OK:.every.level
+            -DMUST_NOT_MATCH=FAILED
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # A fixture, not DEPENDS: `ctest -R kpu_run_csp_linear_requant` alone must still generate it.
+    set_tests_properties(csp_gen_linear_requant PROPERTIES FIXTURES_SETUP linear_requant_csp)
+    set_tests_properties(kpu_run_csp_linear_requant PROPERTIES FIXTURES_REQUIRED linear_requant_csp)
     add_test(NAME kpu_run_csp_lu_skips_lca
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
@@ -742,6 +759,7 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_step_lt1 kpu_run_csp_step_lb kpu_run_csp_step_lca
         kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1 kpu_run_csp_retain kpu_run_csp_inherit
         kpu_run_csp_sweep kpu_run_csp_sweep_refuses_one_run_records kpu_run_csp_sweep_bubbles_needs_lt1
+        csp_gen_linear_requant kpu_run_csp_linear_requant
         kpu_run_l0_refuses_sweep
         PROPERTIES LABELS "program;driver;csp")
 

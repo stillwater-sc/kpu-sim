@@ -97,7 +97,7 @@ inline Version format_version()  { return {1, 4, 0}; }   // container structure:
                                                          // OPERAND type= (an operand's number
                                                          // system, numeric.hpp; #394); 1.4.0
                                                          // OPERAND acc= (its accumulator's; #427)
-inline Version opset_version()   { return {1, 7, 0}; }   // the TileOpKind surface this build
+inline Version opset_version()   { return {1, 8, 0}; }   // the TileOpKind surface this build
                                                          // implements: 1.1.0 adds BIAS_ADD and
                                                          // ACTIVATION (act=); 1.2.0 adds the L3
                                                          // transactions (L3_*, l3= slot= bank=);
@@ -107,7 +107,11 @@ inline Version opset_version()   { return {1, 7, 0}; }   // the TileOpKind surfa
                                                          // (the Combiner's merge of a partial,
                                                          // merge= l2= slot=; #429); 1.6.0
                                                          // BLOCK_CONVERT (format=; #427);
-                                                         // 1.7.0 REQUANT (m= shift=; #427)
+                                                         // 1.7.0 REQUANT (m= shift=; #427);
+                                                         // 1.8.0 BIAS_ADD and ACTIVATION on a
+                                                         // requantized operand: a bias in its
+                                                         // accumulator type, relu on its own
+                                                         // (no new field; #427)
 
 // The op set a FILE needs, written on its OPSET line: what is in it, not who wrote it -- the
 // rule min_consumer_for() states. A matmul or LU program uses only 1.0.0 ops, so its bytes do
@@ -119,6 +123,13 @@ inline Version opset_version()   { return {1, 7, 0}; }   // the TileOpKind surfa
 // older reader would drop silently. Keep it that way, or make MIN_CONSUMER see the op set.
 inline Version opset_for(const TileProgram& prog) {
     Version v{1, 0, 0};
+    // 1.8.0 adds no field: a 1.7.0 reader parses the ops, and its kernels refuse them on integer
+    // operands (fp32 only) rather than compute them wrongly, so MIN_CONSUMER need not move.
+    for (const TileOp& op : prog.ops())
+        if ((op.kind == TileOpKind::BiasAdd || op.kind == TileOpKind::Activation) && !op.outputs.empty() &&
+            prog.has_operand(op.outputs.front().operand) &&
+            prog.operand(op.outputs.front().operand).acc_type() != prog.operand(op.outputs.front().operand).type)
+            return Version{1, 8, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::Requant) return Version{1, 7, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::BlockConvert) return Version{1, 6, 0};
     for (const TileOp& op : prog.ops()) if (op.kind == TileOpKind::MatMulMerge) return Version{1, 5, 0};

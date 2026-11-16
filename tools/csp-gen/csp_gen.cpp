@@ -51,8 +51,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 fabric before its first call: bias C = A.B + D, bias-row
                                 C = A.B + b (b broadcast down the rows), accumulate C += A.B
                                 (default none: from zero)
-  --dtype <fp32|int8>           matmul: A's and B's number system; C (and D or b) is in its
-                                registered accumulator's: int8 -> int32 (default fp32)
+  --dtype <fp32|int8>           matmul (and a requantized linear): A's and B's number system;
+                                C (and D or b) is in its registered accumulator's: int8 -> int32
+                                (default fp32)
   --dataflow <os|ws|is>         matmul, linear: the stationary operand (default os). os holds C in
                                 the fabric; ws holds B's tile, staged in L2 across the i loop;
                                 is holds A's, across the j loop. ws and is keep C's partials
@@ -63,9 +64,11 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
   --place <fabric|combiner|bm.egress|unfused>
                                 linear: where the epilogue runs      (default fabric)
-  --requant <m,shift>           matmul with an integer --dtype: requantize the result into the
-                                dtype on the Combiner, round(x * m / 2^shift), ties to even,
-                                saturated; C is declared `<dtype> ... out acc <accumulator>`
+  --requant <m,shift>           matmul or linear with an integer --dtype: requantize the result
+                                into the dtype on the Combiner, round(x * m / 2^shift), ties to
+                                even, saturated; C is declared `<dtype> ... out acc <accumulator>`.
+                                A linear's epilogue is then add(b[j]), scale, relu, all @ combiner
+                                (--place combiner): b is in the accumulator's type
   --format <none|mxint8|mxfp8>  linear: convert the result into an OCP Microscaling block format,
                                 after the activation, at --place (combiner | bm.egress)
                                 (default none)
@@ -139,11 +142,11 @@ int main(int argc, char** argv) {
         o.init = a["--init"];
     }
     if (a.count("--dtype")) {
-        if (o.algo != "matmul") return usage("--dtype is matmul's; --algo is '" + o.algo + "'");
+        if (o.algo != "matmul" && o.algo != "linear") return usage("--dtype is matmul's and linear's; --algo is '" + o.algo + "'");
         o.dtype = a["--dtype"];
     }
     if (a.count("--requant")) {
-        if (o.algo != "matmul") return usage("--requant is matmul's; --algo is '" + o.algo + "'");
+        if (o.algo != "matmul" && o.algo != "linear") return usage("--requant is matmul's and linear's; --algo is '" + o.algo + "'");
         const std::string& v = a["--requant"];
         const auto comma = v.find(',');
         try {
