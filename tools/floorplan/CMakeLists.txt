@@ -52,6 +52,31 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_floorplan_t4_import PROPERTIES DEPENDS kpu_floorplan_t4)
 
+    # The shared structure record (#392; docs/plans/shared-structure-record.md): the model's T4
+    # floorplan converted and checked; the checker's self-test, over the samples from both
+    # producers (the model's, and the RTL generator's converted from its floorplan.json v1).
+    find_program(_struct_py NAMES python3 python)
+    if(_struct_py)
+        set(_trace ${CMAKE_SOURCE_DIR}/tools/trace)
+        # Fixtures, not DEPENDS: `ctest -R structure_check_t4` alone still writes what it reads.
+        set_tests_properties(kpu_floorplan_t4 PROPERTIES FIXTURES_SETUP t4_floorplan)
+        add_test(NAME structure_record_t4
+            COMMAND ${_struct_py} ${_trace}/structure_from_floorplan.py ${CMAKE_CURRENT_BINARY_DIR}/t4_floorplan.json
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/t4.structure.json)
+        set_tests_properties(structure_record_t4 PROPERTIES FIXTURES_REQUIRED t4_floorplan FIXTURES_SETUP t4_structure)
+        add_test(NAME structure_check_t4
+            COMMAND ${_struct_py} ${_trace}/structure_check.py ${CMAKE_CURRENT_BINARY_DIR}/t4.structure.json)
+        set_tests_properties(structure_check_t4 PROPERTIES FIXTURES_REQUIRED t4_structure)
+        add_test(NAME structure_check_selftest
+            COMMAND ${_struct_py} ${_trace}/test_structure_check.py ${CMAKE_SOURCE_DIR}/tests/program/structure)
+        # The floorplan view (#447): pack.py over every sample; with Playwright, the page itself.
+        add_test(NAME floorplan_viewer_smoke
+            COMMAND ${_struct_py} ${CMAKE_SOURCE_DIR}/tools/visualization/floorplan/test_viewer.py
+                    ${CMAKE_SOURCE_DIR}/tests/program/structure)
+        set_tests_properties(structure_record_t4 structure_check_t4 structure_check_selftest floorplan_viewer_smoke
+            PROPERTIES LABELS "program;records;structure")
+    endif()
+
     # The T16: the smallest board whose torus has four-hub rings in both dimensions.
     add_test(NAME kpu_floorplan_t16
         COMMAND ${CMAKE_COMMAND}

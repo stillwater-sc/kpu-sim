@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **ADR 0005: viewers and debug tools live in the architecture simulator.** esg (the RTL
+  generator) produces records of the implementation in kpu-sim's formats; kpu-sim defines those
+  formats, checks them, and owns the views and the tools that read them.
+  - The assessment and the plan: `docs/plans/viewers-and-debug-in-the-architecture-simulator.md`.
+  - esg's viewer issues were moved here: esg#59 to #447 (Overview), esg#61 to #448
+    (Investigate), esg#60 to #449 (publishing).
+  - The structure record (#392) becomes the one floorplan format too, and comes first.
+
 - **`docs/02-simulation/simulator-architecture.md`: how a program runs.**
   - The pipeline from a `.csp` program to the records the viewers read, as a diagram.
   - Each stage with its code path: writing, parsing and validating, the platform and the
@@ -38,6 +46,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests: WS and IS x bias and bias-row x fp32 and int8, at L-B, L-T1 and L-CA, against a
     reference computed independently. Also MERGE_INIT in the trace and its round trip, and the
     refusals.
+
+- **The floorplan view, Overview** (#447, moved from branes-ai/embodied-ai-soc-generator#59 by ADR
+  0005): `tools/visualization/floorplan/`.
+  - It draws a `kpu-structure` record from either producer: the die and its blocks, each network
+    as a layer with show/hide and opacity, and presets.
+  - Die size: the area breakdown, and the change from a second record (Compare).
+  - An inspector for the selected block: footprint, area, resources, its routers. Also provenance.
+  - Zoom, pan, fit, and a readout in mm. Light and dark themes.
+  - One self-contained page with no dependencies. `pack.py` embeds a record, converting a
+    floorplan on the way.
+  - Tested by `floorplan_viewer_smoke`, which runs headless browser checks where Playwright is
+    installed.
+
+- **The shared structure record, `kpu-structure` v1** (#392; ADR 0005's first shared format): one
+  description of a machine's hardware (blocks, resources, channels, networks and floorplan),
+  written by kpu-sim's model or an RTL generator, for every view to lay out what the record
+  declares.
+  - The spec: `docs/plans/shared-structure-record.md`. Blocks are a flat tree with stable ids.
+    The block vocabulary is the KPU model's, mapped from both existing formats. Networks carry
+    their routing rule, so a view derives a route instead of hard-coding one. An optional
+    floorplan in mm carries `estimated` when it is not silicon.
+  - `tools/trace/structure.schema.json` (the shape), and `tools/trace/structure_check.py`, which
+    checks the semantics: S1 to S5 (format, ids, tree, references, resources), and F1 to F3 when
+    there is a floorplan (inside, area, networks). Exit 0, 1 or 2, like the other checkers.
+  - `tools/trace/structure_from_floorplan.py` converts both existing floorplans: esg's
+    `floorplan.json` v1, and `kpu-floorplan`'s JSON.
+  - Samples in `tests/program/structure/`: the model's T4, and the RTL generator's
+    `kpu_2x2_systolic` and `kpu_edge_hetero`.
+  - CTest: the T4 regenerated from `kpu-floorplan` and checked, and the checker's self-test, which
+    breaks each invariant on purpose.
 
 - **The Combiner's per-channel scale** (#427): `scale(qm[j], qs[j]) @ combiner`.
   - Each column c of the result is requantized with its own multiplier and shift, from two int32

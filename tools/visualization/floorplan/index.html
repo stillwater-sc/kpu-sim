@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPU Floorplan Viewer</title>
+<!--
+  tools/visualization/floorplan/index.html -- the floorplan view, Overview (#447, moved from
+  branes-ai/embodied-ai-soc-generator#59; ADR 0005).
+
+  Reads a structure record, kpu-structure v1 (docs/plans/shared-structure-record.md), from either
+  producer: the model's (kpu-floorplan, converted) or the RTL generator's (kpu-gen floorplan,
+  converted). Plain HTML, no build step, no server, no dependencies: open this file and choose a
+  record, or drop one on the page. pack.py embeds a record into a copy of this file.
+
+  WHAT IT SHOWS
+    - The die and every placed block, in mm, origin at the die's lower-left.
+    - The record's networks drawn over the blocks (NoC request and response, the control tree,
+      DRAM to L3), each a layer with show/hide and opacity; they default to 45% so they read as
+      context.
+    - The die's size and its area breakdown, and the change from a second record (Compare).
+    - The selected block's footprint, area, kind, resources and the routers that stand for it.
+  It draws what the record holds and nothing else; an estimated floorplan says so.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+:root {
+  --bg: #f4f5f6; --panel: #fcfcfb; --ink: #15181c; --ink-2: #4a5059; --ink-3: #7b828c;
+  --line: #d9dce0; --die: #eceef0; --sel: #d03b3b; --accent: #2a5db0;
+  --k-array: #f7f8f9; --k-compute: #e6e2da; --k-l3: #dfe3e8; --k-mem: #f0f2f4; --k-move: #d6e4f5;
+  --k-noc: #e9dff3; --k-ctl: #f3e8d6; --k-periph: #e3e5e8; --k-cpu: #dcdfe9;
+  --n-noc_request: #2a78d6; --n-noc_response: #1f9e74; --n-noc: #2a78d6; --n-ring: #2a78d6;
+  --n-control_tree: #c47a12; --n-dram_l3: #8a4fc7;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --die: #202327; --sel: #f06a6a; --accent: #7aa7ea;
+    --k-array: #1d2023; --k-compute: #322e28; --k-l3: #2a3038; --k-mem: #24282d; --k-move: #233246;
+    --k-noc: #2e2838; --k-ctl: #352d22; --k-periph: #2a2d33; --k-cpu: #282c38;
+    --n-noc_request: #5a9de8; --n-noc_response: #3cc596; --n-noc: #5a9de8; --n-ring: #5a9de8;
+    --n-control_tree: #e0a040; --n-dram_l3: #b183e6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --die: #202327; --sel: #f06a6a; --accent: #7aa7ea;
+    --k-array: #1d2023; --k-compute: #322e28; --k-l3: #2a3038; --k-mem: #24282d; --k-move: #233246;
+    --k-noc: #2e2838; --k-ctl: #352d22; --k-periph: #2a2d33; --k-cpu: #282c38;
+    --n-noc_request: #5a9de8; --n-noc_response: #3cc596; --n-noc: #5a9de8; --n-ring: #5a9de8;
+    --n-control_tree: #e0a040; --n-dram_l3: #b183e6;
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1500px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 13px; margin: 0 0 6px; color: var(--ink-2); font-weight: 600; }
+.sub { color: var(--ink-2); margin: 0; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+label.file, button { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); color: var(--ink); cursor: pointer; }
+label.file input { display: none; }
+button.on { border-color: var(--accent); color: var(--accent); }
+.grid { display: grid; grid-template-columns: 240px minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+@media (max-width: 1100px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+.stack { display: grid; gap: 14px; }
+.layer { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: center; font-size: 13px; padding: 2px 0; }
+.layer input[type=range] { width: 70px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+#stage { position: relative; height: min(72vh, 820px); border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; touch-action: none; }
+#stage svg { width: 100%; height: 100%; display: block; cursor: grab; }
+#stage svg.drag { cursor: grabbing; }
+#readout { position: absolute; left: 8px; bottom: 6px; font: 12px var(--font-data); color: var(--ink-2); background: var(--panel); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); }
+#zoom { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; }
+.blk { stroke: var(--ink-3); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.blk:hover { stroke: var(--ink); }
+.blk.sel { stroke: var(--sel); stroke-width: 2.5; }
+.lbl { fill: var(--ink-2); font-family: var(--font-ui); pointer-events: none; }
+.net path { fill: none; vector-effect: non-scaling-stroke; stroke-width: 2; pointer-events: none; }
+.net circle { pointer-events: none; stroke: none; }
+table.kv { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.kv td { padding: 2px 4px; vertical-align: top; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+table.kv td:first-child { color: var(--ink-2); white-space: nowrap; width: 40%; }
+.num { font-family: var(--font-data); }
+.bar { height: 8px; border-radius: 2px; background: var(--accent); }
+.note { font-size: 12px; color: var(--ink-3); }
+.warn { color: var(--sel); }
+#drop { position: fixed; inset: 0; background: rgba(42, 93, 176, .12); border: 3px dashed var(--accent); display: none; z-index: 9; }
+body.over #drop { display: block; }
+#empty { padding: 40px; text-align: center; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div id="drop"></div>
+<div class="wrap">
+  <header>
+    <h1>KPU Floorplan</h1>
+    <p class="sub" id="what">Open a structure record (kpu-structure v1), or drop one on the page.</p>
+    <div class="tools">
+      <label class="file">Open record<input type="file" id="file" accept=".json,application/json"></label>
+      <label class="file">Compare with…<input type="file" id="cmpfile" accept=".json,application/json"></label>
+      <button id="theme" title="Theme">Theme</button>
+    </div>
+  </header>
+  <div class="grid">
+    <div class="stack">
+      <section class="panel" id="layers"><h2>Layers</h2><div id="layerlist" class="note">No record.</div>
+        <div class="presets">
+          <button data-preset="blocks">Blocks only</button>
+          <button data-preset="networks">Networks</button>
+          <button data-preset="all">Everything</button>
+        </div>
+      </section>
+      <section class="panel"><h2>Provenance</h2><div id="prov" class="note">No record.</div></section>
+    </div>
+    <div id="stage">
+      <div id="empty">No record loaded.</div>
+      <svg id="die" xmlns="http://www.w3.org/2000/svg" hidden></svg>
+      <div id="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">−</button><button id="fit" title="Fit the die">Fit</button></div>
+      <div id="readout">—</div>
+    </div>
+    <div class="stack">
+      <section class="panel"><h2>Die size</h2><div id="size" class="note">No record.</div></section>
+      <section class="panel"><h2>Inspector</h2><div id="insp" class="note">Click a block.</div></section>
+    </div>
+  </div>
+</div>
+<!--FLOORPLAN_EMBED-->
+<script>
+"use strict";
+const FORMAT = "kpu-structure", VERSIONS = [1];
+const KIND_FILL = {
+  die: "--die", array: "--k-array", compute_tile: "--k-compute", l3_tile: "--k-l3", l3_bank: "--k-mem",
+  l2_bank: "--k-mem", l1_vector: "--k-mem", register_file: "--k-mem", block_mover: "--k-move",
+  noc_router: "--k-noc", noc_port: "--k-noc", memory_controller: "--k-ctl", dma_engine: "--k-move",
+  dram_phy: "--k-periph", io: "--k-periph", control: "--k-ctl", host_bridge: "--k-ctl", cpu: "--k-cpu",
+  cpu_hart: "--k-cpu", cpu_sram: "--k-mem", descriptor_ring: "--k-mem", completion_ring: "--k-mem",
+};
+const S = { rec: null, cmp: null, layers: {}, sel: null, view: null, H: 0, W: 0 };
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = (v, d = 3) => (typeof v === "number" && isFinite(v)) ? v.toFixed(d) : "—";
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+// A record a reader of v1 can draw, or why not.
+function refuse(rec) {
+  if (!rec || typeof rec !== "object") return "not a JSON object";
+  if (rec.format !== FORMAT) return "format '" + rec.format + "' is not " + FORMAT +
+    (rec.format === "kpu-gen-floorplan" || rec.format === "kpu-floorplan"
+      ? " (convert it: tools/trace/structure_from_floorplan.py)" : "");
+  if (!VERSIONS.includes(rec.version)) return "version " + rec.version + ": this viewer reads " + VERSIONS.join(", ");
+  if (!Array.isArray(rec.blocks) || !rec.blocks.length) return "it has no blocks";
+  return null;
+}
+
+function depthOf(rec) {
+  const by = new Map(rec.blocks.map(b => [b.id, b]));
+  const memo = new Map();
+  const d = id => {
+    if (memo.has(id)) return memo.get(id);
+    memo.set(id, 0);
+    const b = by.get(id), p = b && b.parent;
+    const v = p && by.has(p) ? d(p) + 1 : 0;
+    memo.set(id, v);
+    return v;
+  };
+  rec.blocks.forEach(b => d(b.id));
+  return memo;
+}
+
+function load(rec, name) {
+  const why = refuse(rec);
+  if (why) { show("Cannot draw " + name + ": " + why + "."); return; }
+  S.rec = rec; S.sel = null;
+  const die = (rec.floorplan && rec.floorplan.die) || null;
+  const root = rec.blocks.find(b => b.kind === "die" && b.rect);
+  S.W = die ? die.width : root ? root.rect[2] : 1;
+  S.H = die ? die.height : root ? root.rect[3] : 1;
+  S.layers = { blocks: { on: true, op: 1 }, labels: { on: true, op: 1 } };
+  (rec.networks || []).forEach(n => { S.layers["net:" + n.id] = { on: true, op: 0.45, net: n }; });
+  const p = rec.provenance || {};
+  $("what").textContent = (p.configuration || name) + " — " + (p.source === "rtl" ? "the RTL generator's" : "the model's") +
+    " floorplan" + (rec.floorplan && rec.floorplan.estimated ? " (estimated)" : "");
+  fit(); renderLayers(); renderProv(); renderSize(); renderInsp(); draw();
+}
+
+function show(msg) {
+  $("empty").hidden = false; $("empty").textContent = msg; $("die").setAttribute("hidden", "");
+}
+
+// mm (origin lower-left) -> SVG user units (origin upper-left), so text stays upright.
+const X = x => x, Y = y => S.H - y;
+
+function draw() {
+  const rec = S.rec; if (!rec) return;
+  const svg = $("die");
+  $("empty").hidden = true; svg.removeAttribute("hidden");
+  const v = S.view;
+  svg.setAttribute("viewBox", v.x + " " + v.y + " " + v.w + " " + v.h);
+  const depth = depthOf(rec);
+  const placed = rec.blocks.filter(b => Array.isArray(b.rect) && b.rect.length === 4)
+    .sort((a, b) => depth.get(a.id) - depth.get(b.id));
+  const L = S.layers;
+  let out = "";
+  out += '<rect x="0" y="0" width="' + S.W + '" height="' + S.H + '" fill="' + css("--die") + '"/>';
+  if (L.blocks.on) {
+    out += '<g opacity="' + L.blocks.op + '">';
+    for (const b of placed) {
+      const [x, y, w, h] = b.rect;
+      if (b.kind === "die") continue;
+      const fill = css(KIND_FILL[b.kind] || "--k-array");
+      out += '<rect class="blk' + (S.sel === b.id ? " sel" : "") + '" data-id="' + esc(b.id) + '" x="' + X(x) + '" y="' + Y(y + h) +
+        '" width="' + w + '" height="' + h + '" fill="' + fill + '"><title>' + esc(b.id) + " (" + esc(b.kind) + ")</title></rect>";
+    }
+    out += "</g>";
+  }
+  for (const [key, layer] of Object.entries(L)) {
+    if (!key.startsWith("net:") || !layer.on) continue;
+    const n = layer.net, col = css("--n-" + n.kind) || css("--accent");
+    out += '<g class="net" opacity="' + layer.op + '" stroke="' + col + '">';
+    for (const ln of n.links || []) {
+      const pts = ln.points && ln.points.length ? ln.points : null;
+      if (!pts) continue;
+      out += '<path d="' + pts.map((p, i) => (i ? "L" : "M") + X(p[0]) + " " + Y(p[1])).join(" ") + '"/>';
+    }
+    const r = Math.max(S.W, S.H) / 400;
+    for (const nd of n.nodes || []) if (nd.at) out += '<circle cx="' + X(nd.at[0]) + '" cy="' + Y(nd.at[1]) + '" r="' + r + '" fill="' + col + '"/>';
+    out += "</g>";
+  }
+  if (L.labels.on) {
+    out += '<g opacity="' + L.labels.op + '">';
+    const px = S.view.w / Math.max(1, svg.clientWidth || 800);       // mm per screen pixel
+    const parents = new Set(placed.map(b => b.parent).filter(Boolean));
+    for (const b of placed) {
+      if (b.kind === "die") continue;
+      const [x, y, w, h] = b.rect, text = b.label || b.id.split(/[./]/).pop();
+      if (parents.has(b.id)) {
+        // A container: a small label in its top-left corner, so it never covers its children.
+        const fs = 11 * px;
+        if (w < text.length * fs * 0.6 || h < fs * 1.6) continue;
+        // A child whose own corner label would sit on this one: the child's says more.
+        const top = y + h;
+        if (placed.some(c => c.parent === b.id && Math.abs(c.rect[0] - x) < 3 * fs && Math.abs(c.rect[1] + c.rect[3] - top) < 2 * fs)) continue;
+        out += '<text class="lbl" x="' + (X(x) + fs * 0.4) + '" y="' + (Y(y + h) + fs * 1.1) + '" font-size="' + fs + '">' + esc(text) + "</text>";
+        continue;
+      }
+      // A leaf: centred, as large as fits, from 9 to 16 screen pixels.
+      const fs = Math.min(h * 0.45, w / Math.max(3, text.length) * 1.6, 16 * px);
+      if (fs / px < 9) continue;                                        // too small to read at this zoom
+      out += '<text class="lbl" x="' + X(x + w / 2) + '" y="' + Y(y + h / 2) + '" font-size="' + fs +
+        '" text-anchor="middle" dominant-baseline="middle">' + esc(text) + "</text>";
+    }
+    out += "</g>";
+  }
+  svg.innerHTML = out;
+}
+
+function fit() {
+  const pad = Math.max(S.W, S.H) * 0.02;
+  S.view = { x: -pad, y: -pad, w: S.W + 2 * pad, h: S.H + 2 * pad };
+}
+function zoom(f, cx, cy) {
+  const v = S.view; if (!v) return;
+  cx = cx === undefined ? v.x + v.w / 2 : cx; cy = cy === undefined ? v.y + v.h / 2 : cy;
+  S.view = { x: cx - (cx - v.x) * f, y: cy - (cy - v.y) * f, w: v.w * f, h: v.h * f };
+  draw();
+}
+function toUser(ev) {
+  const svg = $("die"), r = svg.getBoundingClientRect(), v = S.view;
+  // preserveAspectRatio xMidYMid meet: one scale, centred.
+  const s = Math.max(v.w / r.width, v.h / r.height);
+  const ox = (r.width - v.w / s) / 2, oy = (r.height - v.h / s) / 2;
+  return [v.x + (ev.clientX - r.left - ox) * s, v.y + (ev.clientY - r.top - oy) * s];
+}
+
+function renderLayers() {
+  const rows = [];
+  for (const [key, layer] of Object.entries(S.layers)) {
+    const name = key === "blocks" ? "Blocks" : key === "labels" ? "Labels" :
+      layer.net.id + (layer.net.routing ? " (" + layer.net.routing + ")" : "");
+    const sw = key.startsWith("net:") ? '<span class="sw" style="background:' + esc(css("--n-" + layer.net.kind) || css("--accent")) + '"></span>' : "";
+    rows.push('<div class="layer"><input type="checkbox" data-layer="' + esc(key) + '"' + (layer.on ? " checked" : "") + '>' +
+      '<span>' + sw + esc(name) + '</span><input type="range" min="0" max="1" step="0.05" value="' + layer.op + '" data-op="' + esc(key) + '"></div>');
+  }
+  $("layerlist").innerHTML = rows.join("") || "No layers.";
+}
+
+function renderProv() {
+  const p = S.rec.provenance || {};
+  const rows = [["producer", p.producer], ["source", p.source], ["configuration", p.configuration],
+    ["digest", p.configuration_digest], ["converted from", p.from]].filter(r => r[1]);
+  $("prov").innerHTML = '<table class="kv">' + rows.map(r => "<tr><td>" + esc(r[0]) + '</td><td class="num">' + esc(r[1]) + "</td></tr>").join("") + "</table>";
+}
+
+function breakdown(rec) {
+  const a = rec.floorplan && rec.floorplan.area, out = new Map();
+  if (!a || !Array.isArray(a.items)) return out;
+  for (const it of a.items) out.set(it.category || "other", (out.get(it.category || "other") || 0) + (it.area || 0));
+  if (typeof a.whitespace === "number") out.set("whitespace", a.whitespace);
+  return out;
+}
+
+function renderSize() {
+  const rec = S.rec, die = (rec.floorplan && rec.floorplan.die) || { width: S.W, height: S.H, area: S.W * S.H };
+  const area = typeof die.area === "number" ? die.area : die.width * die.height;
+  let h = '<table class="kv"><tr><td>die</td><td class="num">' + fmt(die.width) + " × " + fmt(die.height) + " mm</td></tr>" +
+    '<tr><td>area</td><td class="num">' + fmt(area) + " mm²</td></tr>";
+  if (S.cmp) {
+    const c = S.cmp.floorplan && S.cmp.floorplan.die, ca = c ? (c.area || c.width * c.height) : null;
+    if (ca) {
+      const d = area - ca;
+      h += '<tr><td>vs ' + esc((S.cmp.provenance || {}).configuration || "compare") + '</td><td class="num">' +
+        (d >= 0 ? "+" : "") + fmt(d) + " mm² (" + (d >= 0 ? "+" : "") + fmt(100 * d / ca, 1) + "%)</td></tr>";
+    }
+  }
+  h += "</table>";
+  const bd = breakdown(rec), cb = S.cmp ? breakdown(S.cmp) : null;
+  if (bd.size) {
+    h += '<h2 style="margin-top:10px">Breakdown</h2><table class="kv">';
+    const max = Math.max(...bd.values(), 1e-12);
+    for (const [k, v] of [...bd.entries()].sort((a, b) => b[1] - a[1])) {
+      const dv = cb && cb.has(k) ? v - cb.get(k) : null;
+      h += "<tr><td>" + esc(k) + '</td><td><div class="num">' + fmt(v) + " mm² · " + fmt(100 * v / area, 1) + "%" +
+        (dv !== null ? " (" + (dv >= 0 ? "+" : "") + fmt(dv) + ")" : "") + '</div><div class="bar" style="width:' + (100 * v / max).toFixed(1) + '%"></div></td></tr>';
+    }
+    h += "</table>";
+  } else {
+    h += '<p class="note">No area breakdown in this record.</p>';
+  }
+  if (rec.floorplan && rec.floorplan.estimated)
+    h += '<p class="note">Estimated geometry: ' + (((rec.provenance || {}).source === "model")
+      ? "the model's illustrative pitch, not silicon." : "an area model's estimate, not a layout.") + "</p>";
+  $("size").innerHTML = h;
+}
+
+function renderInsp() {
+  const id = S.sel;
+  if (!id) { $("insp").innerHTML = '<span class="note">Click a block.</span>'; return; }
+  const b = S.rec.blocks.find(x => x.id === id);
+  if (!b) return;
+  const rows = [["id", b.id], ["kind", b.kind], ["label", b.label], ["parent", b.parent], ["class", b.class],
+    ["layer", b.layer], ["role", b.role], ["clock", b.clock_domain], ["resource", b.resource], ["RTL path", b.rtl_path]];
+  if (b.rect) {
+    rows.push(["origin", fmt(b.rect[0]) + ", " + fmt(b.rect[1]) + " mm"]);
+    rows.push(["size", fmt(b.rect[2]) + " × " + fmt(b.rect[3]) + " mm"]);
+  }
+  if (typeof b.area === "number") rows.push(["area", fmt(b.area, 4) + " mm²"]);
+  if (b.sites && b.sites.length) rows.push(["sites", b.sites.map(s => "[" + s.join(",") + "]").join(" ")]);
+  if (b.generated !== undefined) rows.push(["RTL generated", b.generated ? "yes" : "no"]);
+  const routers = [];
+  for (const n of S.rec.networks || []) for (const nd of n.nodes || []) if (nd.block === id) routers.push(n.id + ": " + nd.id);
+  if (routers.length) rows.push(["routers", routers.join("\n")]);
+  for (const r of b.resources || []) rows.push([r.kind, Object.entries(r).filter(e => e[0] !== "kind").map(e => e[0] + " " + e[1]).join(", ")]);
+  if (b.notes) rows.push(["notes", b.notes]);
+  const kids = S.rec.blocks.filter(x => x.parent === id).length;
+  if (kids) rows.push(["children", String(kids)]);
+  $("insp").innerHTML = '<table class="kv">' + rows.filter(r => r[1] !== undefined && r[1] !== null && r[1] !== "")
+    .map(r => "<tr><td>" + esc(r[0]) + '</td><td class="num" style="white-space:pre-wrap">' + esc(r[1]) + "</td></tr>").join("") + "</table>";
+}
+
+// ---- events ----
+$("layerlist").addEventListener("change", e => {
+  const k = e.target.dataset.layer; if (k && S.layers[k]) { S.layers[k].on = e.target.checked; draw(); }
+});
+$("layerlist").addEventListener("input", e => {
+  const k = e.target.dataset.op; if (k && S.layers[k]) { S.layers[k].op = +e.target.value; draw(); }
+});
+document.querySelector(".presets").addEventListener("click", e => {
+  const p = e.target.dataset.preset; if (!p || !S.rec) return;
+  for (const [k, l] of Object.entries(S.layers)) {
+    const net = k.startsWith("net:");
+    l.on = p === "all" ? true : p === "blocks" ? !net : (net || k === "blocks");
+  }
+  renderLayers(); draw();
+});
+$("die").addEventListener("click", e => {
+  if (S.dragged) return;
+  const t = e.target.closest("[data-id]");
+  S.sel = t ? t.dataset.id : null; renderInsp(); draw();
+});
+$("die").addEventListener("wheel", e => {
+  e.preventDefault(); const [x, y] = toUser(e); zoom(e.deltaY > 0 ? 1.15 : 1 / 1.15, x, y);
+}, { passive: false });
+$("die").addEventListener("pointerdown", e => {
+  S.drag = { x: e.clientX, y: e.clientY, v: { ...S.view } }; S.dragged = false; $("die").classList.add("drag");
+});
+window.addEventListener("pointerup", () => { S.drag = null; $("die").classList.remove("drag"); });
+$("die").addEventListener("pointermove", e => {
+  if (!S.rec) return;
+  const [ux, uy] = toUser(e);
+  $("readout").textContent = "x " + fmt(ux) + " mm, y " + fmt(S.H - uy) + " mm";
+  if (!S.drag) return;
+  const r = $("die").getBoundingClientRect(), v = S.drag.v, s = Math.max(v.w / r.width, v.h / r.height);
+  const dx = (e.clientX - S.drag.x) * s, dy = (e.clientY - S.drag.y) * s;
+  if (Math.abs(e.clientX - S.drag.x) + Math.abs(e.clientY - S.drag.y) > 3) S.dragged = true;
+  S.view = { x: v.x - dx, y: v.y - dy, w: v.w, h: v.h }; draw();
+});
+$("zin").onclick = () => zoom(1 / 1.4);
+$("zout").onclick = () => zoom(1.4);
+$("fit").onclick = () => { if (S.rec) { fit(); draw(); } };
+$("theme").onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark"
+    : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark"; if (S.rec) { renderLayers(); draw(); }
+};
+function readFile(f, then) {
+  const rd = new FileReader();
+  rd.onload = () => { try { then(JSON.parse(rd.result), f.name); } catch (err) { show("Cannot read " + f.name + ": " + err.message); } };
+  rd.readAsText(f);
+}
+$("file").onchange = e => e.target.files[0] && readFile(e.target.files[0], load);
+$("cmpfile").onchange = e => e.target.files[0] && readFile(e.target.files[0], (rec, name) => {
+  const why = refuse(rec); if (why) { alert("Cannot compare with " + name + ": " + why); return; }
+  S.cmp = rec; if (S.rec) renderSize();
+});
+window.addEventListener("dragover", e => { e.preventDefault(); document.body.classList.add("over"); });
+window.addEventListener("dragleave", e => { if (e.target === $("drop")) document.body.classList.remove("over"); });
+window.addEventListener("drop", e => {
+  e.preventDefault(); document.body.classList.remove("over");
+  const f = e.dataTransfer.files[0]; if (f) readFile(f, load);
+});
+window.addEventListener("resize", () => S.rec && draw());
+// An embedded record (pack.py), or none.
+if (window.FLOORPLAN_EMBED) load(window.FLOORPLAN_EMBED.record, window.FLOORPLAN_EMBED.name || "the embedded record");
+</script>
+</body>
+</html>
