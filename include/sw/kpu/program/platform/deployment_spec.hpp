@@ -50,6 +50,17 @@
 
 namespace sw::kpu::program::platform {
 
+// The operations a vector unit (movers.vector.bm, combiner) can list: the CSP language's (VeOp,
+// csp/csp_program.hpp), the requantization's scale and the block formats among them. A deployment
+// that cannot name them cannot declare the Combiner a requantized or block-format program needs.
+// test_deployment_spec checks this list against parse_veop.
+inline const std::vector<std::string> kVectorOps = {"add", "relu", "gelu", "silu", "atan", "mxint8", "mxfp8", "scale"};
+inline std::string vector_op_names() {
+    std::string s;
+    for (const std::string& op : kVectorOps) s += (s.empty() ? "" : ", ") + op;
+    return s;
+}
+
 using characterize::DeviceDescriptor;
 using characterize::Topology;
 
@@ -473,8 +484,8 @@ inline std::string DeploymentSpec::validate() const {
             if ((*v)->lanes == 0) return at + ".lanes must be non-zero";
             if (!finite_positive((*v)->rate)) return at + ".rate" + kFinitePos;
             for (const std::string& op : (*v)->ops)
-                if (op != "add" && op != "relu" && op != "gelu" && op != "silu" && op != "atan")
-                    return at + ".ops: '" + op + "' is not a vector operation (add, relu, gelu, silu, atan)";
+                if (std::find(kVectorOps.begin(), kVectorOps.end(), op) == kVectorOps.end())
+                    return at + ".ops: '" + op + "' is not a vector operation (" + vector_op_names() + ")";
         }
         if (!finite_positive(d.analytical.bytes_per_cycle))
             return where + ": analytical.bytes_per_cycle" + kFinitePos;

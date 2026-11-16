@@ -281,3 +281,69 @@ TEST_CASE("Block formats: the trace records BLOCK_CONVERT (opset 1.6), and reads
     std::istringstream bis(bad);
     CHECK_THROWS_WITH(serialize::read_l0(bis), ContainsSubstring("BLOCK_CONVERT format=mxfp4"));
 }
+
+TEST_CASE("Combiner: the fused-operation matrix of a real result, bias x activation x format",
+          "[program][csp][run][mx][combiner]") {
+    // #427's matrix for an fp32 result: every subset of {add(b[j]), relu, mxint8} on the Combiner,
+    // under OS, WS and IS (the integer half, with the scale, is in test_csp_requant). The oracle
+    // is computed here: the same linear with no stage, then the subset applied tile by tile, in
+    // the Combiner's order.
+    const auto d = s1_with_formats();
+    const std::string full = " via add(b[j]) @ combiner, relu @ combiner, mxint8 @ combiner";
+    for (const char* df : {"os", "ws", "is"}) {
+        const std::string src = linear(df, "combiner", "mxint8");
+        REQUIRE(src.find(full) != std::string::npos);
+        auto with = [&](bool bias, bool relu, bool format) {
+            std::string via;
+            if (bias) via += "add(b[j]) @ combiner";
+            if (relu) via += (via.empty() ? "" : ", ") + std::string("relu @ combiner");
+            if (format) via += (via.empty() ? "" : ", ") + std::string("mxint8 @ combiner");
+            std::string s = src;
+            const std::string by = via.empty() ? std::string() : " via " + via;
+            for (std::size_t at = 0; (at = s.find(full, at)) != std::string::npos; at += by.size())
+                s.replace(at, full.size(), by);          // resume after it: `by` may contain `full`
+            return s;
+        };
+        const lang::Program bare_ast = lang::parse(with(false, false, false));
+        const TileProgram inputs = driver::csp_inputs(bare_ast);
+        const auto bare = driver::csp_reference(bare_ast, inputs, 1'000'000);
+        REQUIRE(bare.values);
+        const TensorOperand& b = inputs.operand("b");
+        for (const bool bias : {false, true})
+            for (const bool relu : {false, true})
+                for (const bool format : {false, true}) {
+                    if (!bias && !relu && !format) continue;
+                    CAPTURE(df, bias, relu, format);
+                    TileProgram expect = *bare.values;
+                    TensorOperand& C = expect.operand("C");
+                    for (Dim ti = 0; ti < C.n_tile_rows(); ++ti)
+                        for (Dim tj = 0; tj < C.n_tile_cols(); ++tj) {
+                            std::vector<float> t;
+                            for (Dim r = C.row_begin(ti); r < C.row_end(ti); ++r)
+                                for (Dim k = C.col_begin(tj); k < C.col_end(tj); ++k) {
+                                    float v = C.at(r, k);
+                                    if (bias) v += b.at(k, 0);
+                                    if (relu) v = v > 0.0f ? v : 0.0f;
+                                    t.push_back(v);
+                                }
+                            if (format) numeric::block_convert("mxint8", t.data(), t.size());
+                            std::size_t n = 0;
+                            for (Dim r = C.row_begin(ti); r < C.row_end(ti); ++r)
+                                for (Dim k = C.col_begin(tj); k < C.col_end(tj); ++k) C.at(r, k) = t[n++];
+                        }
+                    const lang::Program ast = lang::parse(with(bias, relu, format));
+                    driver::CspRunRequest req{ast, &d, inputs,
+                                              {ExecutionLevel::BlockSequential, ExecutionLevel::CycleAccurate}};
+                    const auto r = driver::run_csp(req);
+                    REQUIRE(r.reference);
+                    CHECK(r.reference_note.empty());     // the trace's replay agreed with L-B
+                    CHECK(same_bits(r.reference->operand("C").values, expect.operand("C").values));
+                    for (const auto& o : r.levels) {
+                        CAPTURE(to_string(o.level));
+                        INFO(o.skipped.value_or(""));
+                        REQUIRE_FALSE(o.skipped);
+                        CHECK(same_bits(o.values.operand("C").values, expect.operand("C").values));
+                    }
+                }
+    }
+}

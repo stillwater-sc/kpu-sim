@@ -163,9 +163,11 @@ Vector operations start with the epilogue (Q4): `add(vector)` (a broadcast bias)
 `relu`, `gelu`, `silu`, and **`atan`**. The block-format conversions `mxint8` and `mxfp8` (#427)
 come last in a context, on the Combiner or at bm.egress, never in the fabric. `scale(m, shift)`
 (#427) requantizes a tensor declared with an accumulator, `tensor C[..] int8 tile .. out acc
-int32`, on the Combiner: round(x * m / 2^shift), ties to even, saturated. It is the only stage
-such a tensor's context takes, and every store of it (or, for an L2 accumulator, its final merge)
-must carry it. Each stage costs vector-processor time
+int32`, on the Combiner: round(x * m / 2^shift), ties to even, saturated. Every store of such a
+tensor (or, for an L2 accumulator, its final merge) must carry it. Beside it, the tensor's
+context takes a bias before it, a vector in the accumulator's type (`vector b[..] int32`), and
+relu after it, on the integer result; gelu, silu, atan and the block formats need real values
+and are refused. Each stage costs vector-processor time
 (elements / lanes x rate). That time overlaps the move it rides on, unless the vector processor
 is the slower of the two.
 

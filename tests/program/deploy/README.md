@@ -7,6 +7,7 @@ Checked-in `.json` deployment specs that CI **loads** (#282 increment 1).
 | `canonical_single.json` | the **canonical** form of the default single-device deployment; compared **byte for byte** |
 | `adr_checkerboard16.json` | ADR 0002 §3.5's example **verbatim**, in its flat spelling |
 | `two_devices.json` | a **two-device** deployment: the naming map spans it, `run()` refuses it |
+| `kpu_s1_combiner.json` | S1 with a **Combiner** that runs every vector operation, the scale and the block formats among them: what a requantized or block-format program needs from a file (#427) |
 
 ## Why two, and why they are checked differently
 

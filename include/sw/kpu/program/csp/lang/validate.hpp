@@ -472,43 +472,49 @@ private:
     // A result's `via` list (context.hpp), and each add's vector provably resident and tiled as
     // the result's columns.
     // A requantized result (`acc` declared, #427): its accumulator values need a scale on every
-    // path into storage (`required`), and its context is that scale alone. Any other tile's
-    // context has no scale.
+    // path into storage (`required`). Its context may also hold a bias before the scale, in the
+    // accumulator's type, and relu after it (integer_context_refusal). Any other tile's context
+    // has no scale, and computes in fp32.
     bool context(const Stmt& s, const Family& y, bool required = false) {
-        const auto all = resolve_result_context(s.context, target_, [](int line, const std::string& m) {
-            throw CompileError(line, m);
-        });
-        const bool has = std::any_of(all.begin(), all.end(), [](const ResolvedStage& r) { return r.op == VeOp::Scale; });
-        if (scaled(y.operand)) {
-            if (all.size() > 1 || (required && !has))
-                throw CompileError(s.line, "via ...: " + text(y) + " holds " + acc_of(y.operand) + " accumulator values; "
-                                           "its context is scale(m, shift) @ combiner, which makes them " +
-                                           type_of(y.operand) + (all.size() > 1 ? ", and nothing else" : ""));
-            return has;
-        }
-        if (has)
-            throw CompileError(s.line, "via ... scale: scale requantizes an accumulator into its tensor's type, and " +
-                                           y.operand + " declares no acc");
-        if (!s.context.empty() && type_of(y.operand) != numeric::kFp32)
-            throw CompileError(s.line, "via ...: a tile context computes in fp32; " + y.operand + " is " +
-                                           type_of(y.operand));
         const auto resolved = resolve_result_context(s.context, target_, [](int line, const std::string& m) {
             throw CompileError(line, m);
         });
+        const bool has =
+            std::any_of(resolved.begin(), resolved.end(), [](const ResolvedStage& r) { return r.op == VeOp::Scale; });
+        // The type a bias is added in: the accumulator's, before a requantized result's scale.
+        std::string bias_type = numeric::kFp32;
+        if (scaled(y.operand)) {
+            std::vector<VeOp> ops;
+            for (const ResolvedStage& r : resolved) ops.push_back(r.op);
+            if (const auto why = integer_context_refusal(ops, text(y), type_of(y.operand), acc_of(y.operand), required))
+                throw CompileError(s.line, "via ...: " + *why);
+            bias_type = acc_of(y.operand);
+        } else {
+            if (has)
+                throw CompileError(s.line, "via ... scale: scale requantizes an accumulator into its tensor's type, and " +
+                                               y.operand + " declares no acc");
+            if (!s.context.empty() && type_of(y.operand) != numeric::kFp32)
+                throw CompileError(s.line, "via ...: a tile context computes in fp32; " + y.operand + " is " +
+                                               type_of(y.operand));
+        }
         for (const ResolvedStage& r : resolved) {
             if (!r.arg) continue;
             if (!vectors_.count(r.arg->name))
                 throw CompileError(r.arg->line, "add(" + r.arg->name + "[..]): add takes a vector operand");
             const Family b = single(*r.arg);
             check_width(b.operand, y.operand, r.arg->line);
-            if (type_of(b.operand) != numeric::kFp32)
-                throw CompileError(r.arg->line, "add(" + text(b) + "): a tile context computes in fp32; " +
+            if (type_of(b.operand) != bias_type)
+                throw CompileError(r.arg->line, "add(" + text(b) + "): " +
+                                                    (bias_type == numeric::kFp32
+                                                         ? std::string("a tile context computes in fp32; ")
+                                                         : "a bias before " + y.operand + "'s scale is added to its " +
+                                                               bias_type + " accumulator values; ") +
                                                     b.operand + " is " + type_of(b.operand));
             if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, b); }))
                 throw CompileError(r.arg->line, "add(" + text(b) + ") @ " + to_string(r.place) + " reads " + text(b) +
                                                     ", which is not provably resident; make it resident first");
         }
-        return false;
+        return has;                                     // a non-scaled result's has none (refused above)
     }
     // `acc y in fabric init x` (docs/plans/accumulator-init-stream.md), as the walker checks it: x
     // provably resident and tiled as y (a vector: as y's columns). `init y` on its own accumulator

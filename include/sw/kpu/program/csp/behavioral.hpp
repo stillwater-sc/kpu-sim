@@ -458,19 +458,22 @@ private:
         if (a.context.empty()) return;
         const TensorOperand& t = work_.operand(a.tile.operand);
         const std::size_t cols = t.col_end(a.tile.tj) - t.col_begin(a.tile.tj);
+        // The words' type: a requantized result's accumulator type until its scale, then its own.
+        std::string word = t.acc_type();
         for (const Stage& st : a.context) {
             if (st.op == VeOp::Add) {
                 const std::string b = st.arg.to_string();
                 if (!l3_index_.count(b))
                     throw BehavioralError(where + ": add(" + b + ") @ " + to_string(st.place) + ": " + b +
                                           " is not resident in L3");
-                bias_tile(v, cols, slot_of(b).values);
+                bias_tile(v, cols, slot_of(b).values, word);
             } else if (is_block_format(st.op)) {
                 numeric::block_convert(block_format_of(st.op), v.data(), v.size());
             } else if (st.op == VeOp::Scale) {     // the accumulator's values into the tensor's type
                 requant_tile(t.acc_type(), t.type, v, st.m, st.shift);
+                word = t.type;
             } else {
-                activate_tile(v, activation_of(st.op));
+                activate_tile(v, activation_of(st.op), word);
             }
         }
     }

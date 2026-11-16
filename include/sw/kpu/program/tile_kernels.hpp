@@ -281,15 +281,38 @@ inline float activate(float x, ActivationFn f) {
     return x;
 }
 
-// A row-major tile of `cols` columns, in place.
-inline void activate_tile(std::vector<float>& y, ActivationFn f) {
-    for (float& v : y) v = activate(v, f);
+// The integer forms (#427), on the words of a requantized result: a bias added to its
+// accumulator values (int32), as the MAC adds, so the sum wraps as an N-bit register does; and
+// relu on its integer values after the scale. gelu, silu and atan need real values: refused.
+inline numeric::Word add_word(const std::string& type, numeric::Word a, numeric::Word b) {
+    return numeric::encode(type, numeric::decode(type, a) + numeric::decode(type, b));
 }
-inline void bias_tile(std::vector<float>& y, std::size_t cols, const std::vector<float>& b) {
+inline numeric::Word activate_word(const std::string& type, numeric::Word w, ActivationFn f) {
+    if (f != ActivationFn::Relu)
+        throw std::invalid_argument("Activation: " + type + " values take relu only; gelu, silu and atan need real "
+                                    "values");
+    return numeric::decode(type, w) > 0.0 ? w : numeric::encode(type, 0.0);
+}
+
+// A row-major tile of `cols` columns, in place, its words in `type` (fp32: the floats).
+inline void activate_tile(std::vector<float>& y, ActivationFn f, const std::string& type = numeric::kFp32) {
+    if (type == numeric::kFp32) {
+        for (float& v : y) v = activate(v, f);
+        return;
+    }
+    for (float& v : y) v = numeric::float_of(activate_word(type, numeric::word_of(v), f));
+}
+inline void bias_tile(std::vector<float>& y, std::size_t cols, const std::vector<float>& b,
+                      const std::string& type = numeric::kFp32) {
     if (b.size() != cols)
         throw std::invalid_argument("BiasAdd: a bias of " + std::to_string(b.size()) + " elements on a tile of " +
                                     std::to_string(cols) + " columns");
-    for (std::size_t i = 0; i < y.size(); ++i) y[i] += b[i % cols];
+    if (type == numeric::kFp32) {
+        for (std::size_t i = 0; i < y.size(); ++i) y[i] += b[i % cols];
+        return;
+    }
+    for (std::size_t i = 0; i < y.size(); ++i)
+        y[i] = numeric::float_of(add_word(type, numeric::word_of(y[i]), numeric::word_of(b[i % cols])));
 }
 
 // Y[r, c] += b[c]: inputs = {b's tile}, outputs = {Y's tile}. b is a vector operand (one
@@ -299,12 +322,23 @@ inline void kernel_bias_add(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
     const TensorOperand& B = prog.operand(bc.operand);
     TensorOperand& Y = prog.operand(yc.operand);
-    require_fp32(B, "kernel_bias_add"); require_fp32(Y, "kernel_bias_add");
     const Dim b0 = B.row_begin(bc.ti), b1 = B.row_end(bc.ti);
     const Dim r0 = Y.row_begin(yc.ti), r1 = Y.row_end(yc.ti);
     const Dim c0 = Y.col_begin(yc.tj), c1 = Y.col_end(yc.tj);
     if (B.cols != 1 || b1 - b0 != c1 - c0)
         throw std::invalid_argument("BiasAdd: " + bc.to_string() + " is not a vector tile as wide as " + yc.to_string());
+    // A requantized result (opset 1.8): the bias precedes its REQUANT, so Y holds accumulator
+    // values, and the bias is in their type.
+    if (Y.acc_type() != Y.type) {
+        if (B.type != Y.acc_type())
+            throw std::invalid_argument("BiasAdd: " + Y.name + " accumulates in " + Y.acc_type() + "; the bias " +
+                                        B.name + " is " + B.type);
+        for (Dim r = r0; r < r1; ++r)
+            for (Dim c = c0; c < c1; ++c)
+                Y.set_word(r, c, add_word(Y.acc_type(), Y.word(r, c), B.word(b0 + (c - c0), 0)));
+        return;
+    }
+    require_fp32(B, "kernel_bias_add"); require_fp32(Y, "kernel_bias_add");
     for (Dim r = r0; r < r1; ++r)
         for (Dim c = c0; c < c1; ++c) Y.at(r, c) += B.at(b0 + (c - c0), 0);
 }
@@ -436,6 +470,13 @@ inline void kernel_requant(TileProgram& prog, const TileOp& op) {
 inline void kernel_activation(TileProgram& prog, const TileOp& op) {
     const TileCoord& yc = op.outputs.at(0);
     TensorOperand& Y = prog.operand(yc.operand);
+    // A requantized result (opset 1.8): the activation follows its REQUANT, on Y's integer values.
+    if (Y.acc_type() != Y.type) {
+        for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
+            for (Dim c = Y.col_begin(yc.tj); c < Y.col_end(yc.tj); ++c)
+                Y.set_word(r, c, activate_word(Y.type, Y.word(r, c), op.act));
+        return;
+    }
     require_fp32(Y, "kernel_activation");
     for (Dim r = Y.row_begin(yc.ti); r < Y.row_end(yc.ti); ++r)
         for (Dim c = Y.col_begin(yc.tj); c < Y.col_end(yc.tj); ++c) Y.at(r, c) = activate(Y.at(r, c), op.act);
