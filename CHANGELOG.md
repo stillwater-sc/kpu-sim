@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-16
+
+v0.9.0 closes its milestone: one tile at three levels (L-B, L-T1, L-CA), and the first RTL
+cross-check (the tile command stream, #397, whose RTL half continues in v0.10.0). It is `main` as
+merged, so it also carries v0.10.0 work that landed before the milestone's last issue closed:
+the Combiner's epilogue and per-channel scale, the L2 accumulator's init, the structure record
+and the floorplan view.
+
 ### Documentation
 
 - **ADR 0005: viewers and debug tools live in the architecture simulator.** esg (the RTL
