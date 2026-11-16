@@ -407,7 +407,9 @@ if(KPU_BUILD_TESTS)
             -DMUST_NOT_MATCH=FAILED
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
-    set_tests_properties(kpu_run_csp_linear_requant PROPERTIES DEPENDS csp_gen_linear_requant)
+    # A fixture, not DEPENDS: `ctest -R kpu_run_csp_linear_requant` alone must still generate it.
+    set_tests_properties(csp_gen_linear_requant PROPERTIES FIXTURES_SETUP linear_requant_csp)
+    set_tests_properties(kpu_run_csp_linear_requant PROPERTIES FIXTURES_REQUIRED linear_requant_csp)
     add_test(NAME kpu_run_csp_lu_skips_lca
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
