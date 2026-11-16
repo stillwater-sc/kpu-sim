@@ -173,6 +173,19 @@ TEST_CASE("executing a corpus file is bit-identical to executing the program's t
     }
 }
 
+// The PRODUCER record names the BUILD that wrote a file (producer_version(), from the release
+// tag), not its format: the format's versions are KPUL0, MIN_CONSUMER and OPSET, which the
+// comparisons below still hold byte for byte. So the build's version is masked, and a release
+// tag does not fail these tests (v0.9.0 did: the corpus was written at 0.8.0).
+static std::string unproduced(std::string text) {
+    const std::string key = "\nPRODUCER kpu-sim ";
+    for (std::size_t at = text.find(key); at != std::string::npos; at = text.find(key, at + key.size())) {
+        const std::size_t from = at + key.size(), to = text.find('\n', from);
+        text.replace(from, (to == std::string::npos ? text.size() : to) - from, "<build>");
+    }
+    return text;
+}
+
 TEST_CASE("re-serializing a corpus file reproduces it byte for byte",
           "[program][serialize][corpus]") {
     // Deliberately strict, and it WILL fail on any format change -- that is the point.
@@ -185,7 +198,7 @@ TEST_CASE("re-serializing a corpus file reproduces it byte for byte",
             const TileProgram loaded = from_string(on_disk);
             const std::string rewritten = to_test_case(loaded);
             INFO("corpus file " << path);
-            CHECK(rewritten == on_disk);
+            CHECK(unproduced(rewritten) == unproduced(on_disk));
         }
     }
 }
@@ -252,7 +265,7 @@ TEST_CASE("every corpus file is still the trace kpu-sim produces from its progra
     // The inputs are exact (multiples of 1/8), so the bytes are the same on every host.
     for (const Case& c : cases()) {
         INFO("corpus input " << c.input);
-        CHECK(to_test_case(trace_of(c.program)) == read_file(std::string(kCorpus) + c.input));
+        CHECK(unproduced(to_test_case(trace_of(c.program))) == unproduced(read_file(std::string(kCorpus) + c.input)));
     }
 }
 
@@ -281,7 +294,7 @@ TEST_CASE("the corpus's kernel case carries no values, and runs once they are sy
     // check the valued cases get, and it doubles as byte stability, so a format change fails
     // here and forces the version question rather than being absorbed silently.
     const TileProgram trace = trace_of("matmul_32x32x32_t16.csp");
-    CHECK(to_string(trace) == text);
+    CHECK(unproduced(to_string(trace)) == unproduced(text));
 
     // And it executes once inputs are SYNTHESIZED -- which is `kpu-run --program ...
     // --fill-inputs`. Executing it as loaded would run on zeros and agree with any reference

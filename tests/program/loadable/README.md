@@ -55,6 +55,13 @@ files were at least human-readable. `-diff` keeps git from trying to render a bi
 transactions, `docs/plans/l3-placement-at-lb.md` step 4). The container format did not change;
 its embedded L0 text did, which a reader older than opset 1.2.0 refuses by op name.
 
+It was regenerated again on 2026-11-16 for the v0.9.0 tag, which moved the build's version: two
+bytes changed, `producer_version` 0.8.0 → 0.9.0 (offset 0x38) and the embedded L0 text's
+`PRODUCER kpu-sim` line. The format did not change. **Every release tag needs this
+regeneration, right after the tag**: the build takes its version from the tag, so until the file
+is regenerated `test_loadable` fails on every fresh build, `main` included. (The L0 corpus masks its `PRODUCER` line instead:
+it is text, and the format's versions sit on the lines around it.)
+
 `matmul_32_external.kpuld` is `write()` applied to the loadable that
 `tests/program/test_loadable.cpp` builds in `canonical_fixture()` — the test asserts that
 equality, so the two cannot drift. There is deliberately **no tool** that regenerates the
