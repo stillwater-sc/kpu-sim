@@ -14,6 +14,7 @@
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
 #include <sw/kpu/program/driver/csp_run.hpp>
+#include <sw/kpu/program/platform/deployment_json.hpp>
 
 #include <map>
 #include <string>
@@ -181,3 +182,105 @@ TEST_CASE("Bubbles: the cause follows the binding resource", "[program][csp][bub
 }
 
 
+
+namespace {
+
+// S1 with a Combiner (the WS and IS schedules merge their partials there).
+platform::DeviceSpecification s1_combiner() {
+    auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    d.combiner = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu"}};
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("Bubbles: L-CA's run, read from its protocol events, is the program's actions", "[program][csp][bubbles][lca]") {
+    // #425's report at L-CA: the events matched back to the actions (timing/csp_records.hpp). The
+    // same program at L-T1 is the check: one leg per action, the same reuse, a report that adds up.
+    const auto d = s1_combiner();
+    for (const char* df : {"os", "ws", "is"}) {
+        CAPTURE(df);
+        const std::string src = matmul(df);
+        const lang::Program ast = lang::parse(src);
+        const TileProgram in = driver::csp_inputs(ast);
+        const auto lt1 = driver::csp_run_level(driver::ExecutionLevel::BlockSequential, ast, &d, in);
+        const auto lca = driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, ast, &d, in, 256, true);
+        REQUIRE_FALSE(lca.skipped);
+        CHECK(lca.unmatched_events == 0);
+        // One leg per action, as at L-T1 (a Store has two), kind by kind.
+        std::map<std::pair<std::size_t, int>, std::size_t> a, b;
+        for (const auto& r : lt1.records) ++a[{r.action, static_cast<int>(r.kind)}];
+        for (const auto& r : lca.records) ++b[{r.action, static_cast<int>(r.kind)}];
+        CHECK(a == b);
+        for (const auto& r : lca.records) {
+            CHECK(r.ready <= r.start);
+            CHECK(r.start <= r.finish);
+            CHECK(r.finish <= lca.makespan);
+        }
+        const BubbleReport rep = bubble_report(lca.records, lca.makespan, lca.busy, lca.lanes, "L-CA");
+        const BubbleReport ref = bubble_report(lt1.records, lt1.makespan, lt1.busy, lt1.lanes);
+        CHECK(rep.calls == ref.calls);
+        REQUIRE(rep.reuse.size() == ref.reuse.size());
+        for (std::size_t i = 0; i < rep.reuse.size(); ++i) {     // the reuse is the program's, not a level's
+            CHECK(rep.reuse[i].operand == ref.reuse[i].operand);
+            CHECK(rep.reuse[i].loads == ref.reuse[i].loads);
+            CHECK(rep.reuse[i].moves == ref.reuse[i].moves);
+            CHECK(rep.reuse[i].feeds == ref.reuse[i].feeds);
+        }
+        CHECK(reuse_of(rep, "A").loads == lca.dram_loads - reuse_of(rep, "B").loads);
+        BubbleReport::Cycle sum = 0;
+        for (const auto& bb : rep.bubbles) {
+            CHECK(bb.idle > 0);
+            CHECK(bb.cause != Cause::Unknown);
+            sum += bb.idle;
+        }
+        CHECK(sum == rep.cf_idle);
+        CHECK(rep.cf_busy == lca.busy.at("cf"));
+        for (const auto& l : rep.loads) CHECK(l.utilization <= 1.0);
+        CHECK_THAT(rep.text(), ContainsSubstring("(L-CA, uncalibrated)"));
+    }
+    // A run that keeps no events has no records: they are the report's, not every run's.
+    const lang::Program ast = lang::parse(matmul("os"));
+    const auto plain = driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, ast, &d, driver::csp_inputs(ast));
+    CHECK(plain.records.empty());
+}
+
+TEST_CASE("Bubbles: an L-CA credit stall belongs to the action that was pending", "[program][csp][bubbles][lca]") {
+    // #443's review: stalls were kept by process and tile and read from each action's handover, so
+    // a later Move on the tile took an earlier Move's credit stalls as its own L2 wait (and ready).
+    using sw::kpu::timing::CspDriver;
+    using sw::kpu::timing::EventType;
+    using K = Action::Kind;
+    const TileCoord t{"A", 0, 0};
+    std::vector<CspDriver::Result::Handover> hand = {{0, K::Load, t, 0}, {1, K::Move, t, 0}, {2, K::Load, t, 0},
+                                                     {3, K::Move, t, 0}};
+    std::vector<CspDriver::ProtocolEvent> ev;
+    auto add = [&](std::uint64_t c, EventType ty, const std::string& comp, std::uint32_t id) {
+        CspDriver::ProtocolEvent e;
+        e.cycle = c;
+        e.type = ty;
+        e.component = comp;
+        e.component_id = id;
+        e.tile = t;
+        ev.push_back(e);
+    };
+    add(0, EventType::DMA_LOAD_START, "DMA0", 0);
+    add(5, EventType::DMA_LOAD_COMPLETE, "DMA0", 0);
+    for (std::uint64_t c = 10; c < 20; ++c) add(c, EventType::BM_STALL_CREDIT, "BM", 100);   // the first Move's
+    add(20, EventType::BM_MOVE_START, "BM", 100);
+    add(30, EventType::BM_MOVE_COMPLETE, "BM", 100);
+    add(50, EventType::DMA_LOAD_START, "DMA0", 0);
+    add(99, EventType::DMA_LOAD_COMPLETE, "DMA0", 0);
+    add(100, EventType::BM_MOVE_START, "BM", 100);
+    add(110, EventType::BM_MOVE_COMPLETE, "BM", 100);
+    const auto out = sw::kpu::timing::csp_records(hand, ev, 1, 1, 1);
+    CHECK(out.unmatched == 0);
+    REQUIRE(out.records.size() == 4);
+    const auto& first = out.records[1];
+    const auto& second = out.records[3];
+    CHECK(first.l2_wait == 10);                       // it waited 10..19 for its L2 slot
+    CHECK(first.ready == 20);
+    CHECK(second.l2_wait == 0);                       // the earlier stalls are not its own
+    CHECK(second.ready == 100);                       // its Load finished at 99: ready on the next tick
+    CHECK(second.lane == 0);                          // BlockMovers numbered from 0
+}

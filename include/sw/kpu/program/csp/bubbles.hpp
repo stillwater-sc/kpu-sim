@@ -1,7 +1,8 @@
 // ============================================================================
 // include/sw/kpu/program/csp/bubbles.hpp
-// The reuse and bubble report of an L-T1 run (#425): where the compute fabric waited for data,
-// why, and what reuse the program stated.
+// The reuse and bubble report of an L-T1 or L-CA run (#425): where the compute fabric waited for
+// data, why, and what reuse the program stated. L-CA's run is read as records too: its protocol
+// events matched to the program's actions (timing/csp_records.hpp).
 //
 // Every pipelined tiling depends on reuse, and reuse must be deliberate: the program states it,
 // as L2 stagings and stationary operands. Where it states too little, the movers cannot keep the
@@ -112,6 +113,7 @@ struct BubbleReport {
 
     Cycle makespan = 0;
     std::size_t calls = 0;
+    std::string level = "L-T1";         // the level whose run it reads: L-T1, or L-CA (timing/csp_records.hpp)
     Cycle cf_busy = 0;                  // the calls' cycles, over every compute lane
     Cycle cf_idle = 0;                  // the bubbles' cycles, over every compute lane
     std::vector<Bubble> bubbles;        // every call with idle > 0, in program order
@@ -128,7 +130,7 @@ struct BubbleReport {
         o << std::fixed << std::setprecision(1);
         o << "bubbles  " << calls << " calls; compute busy " << cf_busy << ", idle " << cf_idle << " ("
           << 100.0 * bubble_fraction() << "% of the compute lanes' span), makespan " << makespan
-          << " (L-T1, uncalibrated)\n";
+          << " (" << level << ", uncalibrated)\n";
         for (const auto& [c, n] : idle_by_cause)
             o << "  idle " << std::setw(8) << n << "  " << to_string(c) << "\n";
         o << "reuse    (feeds per load: across DRAM; feeds per move: across L3)\n";
@@ -173,12 +175,14 @@ inline const TransactionalInterpreter::Record* record_of(
 inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Record>& records,
                                   TransactionalInterpreter::Cycle makespan,
                                   const std::map<std::string, TransactionalInterpreter::Cycle>& busy,
-                                  const std::map<std::string, std::size_t>& lanes) {
+                                  const std::map<std::string, std::size_t>& lanes,
+                                  const std::string& level = "L-T1") {
     using Rec = TransactionalInterpreter::Record;
     using Proc = TransactionalInterpreter::Proc;
     using Cause = BubbleReport::Cause;
     BubbleReport rep;
     rep.makespan = makespan;
+    rep.level = level;
 
     // Records in program order, the first leg of each action.
     std::vector<const Rec*> order;

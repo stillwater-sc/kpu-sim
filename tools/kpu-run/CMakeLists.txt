@@ -373,13 +373,24 @@ if(KPU_BUILD_TESTS)
             -DMUST_NOT_MATCH=values.vs
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
-    # ...as is --bubbles in a sweep that makes no L-T1 run...
+    # The reuse and bubble report at L-T1 and at L-CA (#425): L-CA's read from its protocol events,
+    # with the same reuse as L-T1's, and a cause for every bubble.
+    add_test(NAME kpu_run_csp_bubbles_lca
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--bubbles
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=bubbles..27.calls.*L-T1,.uncalibrated.*B..loads.9,.moves.27,.feeds.27.*bubbles..27.calls.*L-CA,.uncalibrated.*BlockMover.lanes.busy.*B..loads.9,.moves.27,.feeds.27.*OK:.every.level
+            -DMUST_NOT_MATCH=matched.no.action
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
+    )
+    # ...as is --bubbles in a sweep that makes no L-T1 or L-CA run...
     add_test(NAME kpu_run_csp_sweep_bubbles_needs_lt1
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--bubbles
             -DEXPECT_CODE=2
-            -DMUST_MATCH=--bubbles.reads.the.L-T1.run,.which.a.sweep.at.--level.behavioral.does.not.make
+            -DMUST_MATCH=--bubbles.reads.the.L-T1.or.L-CA.run,.which.a.sweep.at.--level.behavioral.does.not.make
             -DMUST_NOT_MATCH=values.vs
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
@@ -759,7 +770,7 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_step_lt1 kpu_run_csp_step_lb kpu_run_csp_step_lca
         kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1 kpu_run_csp_retain kpu_run_csp_inherit
         kpu_run_csp_sweep kpu_run_csp_sweep_refuses_one_run_records kpu_run_csp_sweep_bubbles_needs_lt1
-        csp_gen_linear_requant kpu_run_csp_linear_requant
+        csp_gen_linear_requant kpu_run_csp_linear_requant kpu_run_csp_bubbles_lca
         kpu_run_l0_refuses_sweep
         PROPERTIES LABELS "program;driver;csp")
 

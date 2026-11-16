@@ -92,10 +92,11 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             version 1, #397): LOAD / STORE / EXEC with their sync and chain bits,
                             for one output-stationary int8 tile, with the inputs and L-B's results
   --timeline <file.json>    the L-T1 run as Chrome-trace intervals, one per leg
-  --bubbles                 the L-T1 run's reuse and bubble report: each compute lane's idle time
-                            before a call and what it waited for (an operand's Feed, Move or
-                            Load, a slot's credit, a busy lane), the reuse each operand's
-                            program states, and each process's load (#425)
+  --bubbles                 the reuse and bubble report of the L-T1 and L-CA runs: each compute
+                            lane's idle time before a call and what it waited for (an
+                            operand's Feed, Move or Load, a slot's credit, a busy lane), the
+                            reuse each operand's program states, and each process's load (#425).
+                            L-CA's is read from its protocol events, matched to the actions
   --step                    single-step the finest level that ran (L-B: one action per step;
                             L-T1: one record; L-CA: one cycle, with its protocol events and
                             the transfers in flight per process)
@@ -215,6 +216,25 @@ bool print_value_check(const std::vector<CspLevelOutcome>& levels, const TilePro
     return all_agree;
 }
 
+// --bubbles: the reuse and bubble report (#425) of every level among L-T1 and L-CA that ran (L-CA's
+// read from its protocol events, timing/csp_records.hpp). false: neither ran.
+bool print_bubbles(const std::vector<CspLevelOutcome>& levels) {
+    bool any = false;
+    for (const auto& o : levels) {
+        if (o.skipped) continue;
+        if (o.level != ExecutionLevel::BlockSequential && o.level != ExecutionLevel::CycleAccurate) continue;
+        const char* name = o.level == ExecutionLevel::CycleAccurate ? "L-CA" : "L-T1";
+        std::cout << "\n" << sw::kpu::program::csp::bubble_report(o.records, o.makespan, o.busy, o.lanes, name).text();
+        if (o.unmatched_events)
+            std::cout << "  (L-CA: " << o.unmatched_events << " transfer events matched no action)\n";
+        any = true;
+    }
+    return any;
+}
+inline bool bubble_level(ExecutionLevel l) {
+    return l == ExecutionLevel::BlockSequential || l == ExecutionLevel::CycleAccurate;
+}
+
 // The values of two runs, bit for bit: every operand, in the same order, the same shape and type,
 // the same words. L-B is the same computation on every deployment, so here bit equality is the bar.
 bool same_values(const TileProgram& a, const TileProgram& b, std::string& first_difference) {
@@ -265,11 +285,11 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
         }
     }
     const bool compare = !has_flag(a, "--no-compare");
-    // --bubbles reads each deployment's L-T1 run, as a single run's does.
-    if (has_flag(a, "--bubbles") &&
-        std::find(levels.begin(), levels.end(), ExecutionLevel::BlockSequential) == levels.end()) {
-        std::cerr << "kpu-run: --bubbles reads the L-T1 run, which a sweep at --level " << arg(a, "--level", "all")
-                  << " does not make (add block-sequential to --level)\n";
+    // --bubbles reads each deployment's L-T1 and L-CA runs, as a single run's does.
+    const bool bubbles = has_flag(a, "--bubbles");
+    if (bubbles && std::none_of(levels.begin(), levels.end(), bubble_level)) {
+        std::cerr << "kpu-run: --bubbles reads the L-T1 or L-CA run, which a sweep at --level " << arg(a, "--level", "all")
+                  << " does not make (add block-sequential or cycle-accurate to --level)\n";
         return 2;
     }
 
@@ -281,7 +301,7 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
         std::optional<TileProgram> oracle;               // L-B's values on this deployment
         bool agree = true;                               // every level within bound of L-B
         bool replay_ok = true;
-        bool no_bubbles = false;                         // --bubbles, and L-T1 did not run here
+        bool no_bubbles = false;                         // --bubbles, and neither L-T1 nor L-CA ran here
     };
     std::vector<Row> rows(specs.size());
 
@@ -312,7 +332,7 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
             row.oracle = ref.values;
             row.replay_ok = ref.replay_mismatch.empty();
             for (ExecutionLevel l : levels) {
-                auto r = vp.run_csp(h, l, window);
+                auto r = vp.run_csp(h, l, window, bubbles && l == ExecutionLevel::CycleAccurate);
                 row.run_ids.push_back(r.outcome.skipped ? std::string() : r.identity.str());
                 row.levels.push_back(std::move(r.outcome));
             }
@@ -323,16 +343,8 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
         }
         print_levels(row.levels, row.run_ids, ast, window);
         if (!row.replay_ok) std::cout << "\n  FAILED: the trace does not reproduce L-B on this deployment\n";
-        if (has_flag(a, "--bubbles")) {
-            bool reported = false;
-            for (const auto& o : row.levels)
-                if (o.level == ExecutionLevel::BlockSequential && !o.skipped) {
-                    std::cout << "\n" << sw::kpu::program::csp::bubble_report(o.records, o.makespan, o.busy, o.lanes).text();
-                    reported = true;
-                }
-            // L-T1 skipped on this deployment: the report it asked for is missing, which is a refusal.
-            if (!reported) row.no_bubbles = true;
-        }
+        // Neither L-T1 nor L-CA ran on this deployment: the report it asked for is missing, a refusal.
+        if (bubbles && !print_bubbles(row.levels)) row.no_bubbles = true;
         if (compare && row.oracle) row.agree = print_value_check(row.levels, *row.oracle);
     }
 
@@ -612,7 +624,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                 run_ids.emplace_back();
                 continue;
             }
-            auto r = vp->run_csp(handle, l, window);
+            auto r = vp->run_csp(handle, l, window, has_flag(a, "--bubbles") && l == ExecutionLevel::CycleAccurate);
             run_ids.push_back(r.outcome.skipped ? std::string() : r.identity.str());
             outcomes.push_back(std::move(r.outcome));
         }
@@ -729,17 +741,12 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                   << " events, one per leg, from L-T1; per process and lane)\n";
     }
 
-    // --bubbles: the L-T1 run's reuse and bubble report (#425): where the compute lanes waited for
-    // data, why, and the reuse the program stated.
-    if (has_flag(a, "--bubbles")) {
-        const CspLevelOutcome* lt1 = nullptr;
-        for (const auto& o : res.levels)
-            if (o.level == ExecutionLevel::BlockSequential && !o.skipped) lt1 = &o;
-        if (!lt1) {
-            std::cerr << "kpu-run: --bubbles reads the L-T1 run, which did not run (add block-sequential to --level)\n";
-            return 2;
-        }
-        std::cout << sw::kpu::program::csp::bubble_report(lt1->records, lt1->makespan, lt1->busy, lt1->lanes).text();
+    // --bubbles: the reuse and bubble report (#425) of L-T1's run and of L-CA's: where the compute
+    // lanes waited for data, why, and the reuse the program stated.
+    if (has_flag(a, "--bubbles") && !print_bubbles(res.levels)) {
+        std::cerr << "kpu-run: --bubbles reads the L-T1 or L-CA run, and neither ran (add block-sequential or "
+                     "cycle-accurate to --level)\n";
+        return 2;
     }
 
     // --step: walk the program at the finest level that ran, through the platform (step 4c).
