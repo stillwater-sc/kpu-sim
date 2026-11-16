@@ -1,7 +1,9 @@
 # The Combiner
 
 The **Combiner** is the KPU tile's unit on the result path, between L1 and L2. It is a new
-concept, added on 2026-11-14 for the KPU RTL generator (branes-ai/embodied-ai-soc-generator#68).
+concept in the architecture, added on 2026-11-14. kpu-sim defines it and demonstrates that the
+machine works with it; the KPU RTL generator then implements what kpu-sim has shown
+(branes-ai/embodied-ai-soc-generator#68 replaces the RTL's accumulator with it).
 
 **The Combiner is kpu-sim's Vector Engine, renamed and extended.** The Vector Engine already
 sits on this path (it processes results during the L1 → L2 transfer) and fuses bias and
@@ -56,7 +58,7 @@ fused operations cost no extra pass over memory.
 | The Vector Engine, in two places. The ISA path: `VectorEngine` and `BehavioralVectorEngine`, the `VE_*` instructions, `VE_ENABLE` on `STR_DRAIN_OUTPUT` and its fused drain (`docs/06-compiler/schedule-dsl.md`). The CSP levels: the place `@ str.drain`, timed on each streamer's drain from the deployment's `movers.vector.str` | **The Combiner**, renamed (#429). On the ISA path: `Combiner`, `BehavioralCombiner` and the `CMB_` prefix (`CMB_ELEMENTWISE`, `CMB_REDUCE`, `CMB_ENABLE`). In CSP programs: the place `@ combiner`, from the deployment's `combiner` block. The old spellings are accepted as deprecated aliases for one release. It keeps its operations, the softmax's elementwise ops and reductions among them, and gains the merge of partials, scaling and block-format conversion. |
 | The fused epilogue: `MatMulComputeSpec { bias, activation }` applied in `execute_matmul` (`docs/plans/e10_fused_epilogue_pattern.md`) | The Combiner's bias and activation, applied as the result is written to L2. |
 | The accumulator as its own banked memory with slot credits: planned for L-CA (#401, #383, #387), not built. Today only the tile command lowering (#397) names accumulator slots | Gone. Partials and results occupy L2 slots, and the Combiner's merges are L2 traffic. |
-| The `systolic` block of a deployment: accumulator slots, banks, rows, latency (#396) | The Combiner's configuration. The accumulator fields retire when the RTL drops them (branes-ai/embodied-ai-soc-generator#67). |
+| The `systolic` block of a deployment: accumulator slots, banks, rows, latency (#396) | The Combiner's configuration. The accumulator fields retire from the model with #427; the RTL's rename of its blocks is branes-ai/embodied-ai-soc-generator#67. |
 | `kpu-tile-cmds` (#397): a LOAD into the accumulator for a bias, COMPUTE accumulate or overwrite | A COMPUTE names its Combiner operation: merge or overwrite, bias, scale, activation, format. |
 
 ## The merge of partials, as built
@@ -90,7 +92,7 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
 
 - **Block-format conversion** (#427): `mxint8 @ combiner` and `mxfp8 @ combiner` (or
   `@ bm.egress`) convert a result into an OCP Microscaling format as the last of its fused
-  operations, after bias and activation (esg#68's order). Each run of 32 row-major elements
+  operations, after bias and activation (the Combiner's order: bias, scale, activation, format). Each run of 32 row-major elements
   shares an e8m0 scale.
   - Both are converted per OCP MX v1.0 in `src/program/numeric.cpp`. MXFP8's elements are
     Universal's e4m3 (saturating), and MXINT8's are int8 codes with an implicit 2^-6, ties to
@@ -109,11 +111,13 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
   int32`. Its gemm accumulates in int32, and the scale is on every path into memory: a
   fabric accumulator's store, or an L2 accumulator's final merge. It is the context's only
   stage, so no int8 bias or activation yet, and it runs on the Combiner, after a bias and before
-  an activation or format (esg#68's order). The trace records `REQUANT` (opset 1.7), and an
+  an activation or format (the Combiner's order). The trace records `REQUANT` (opset 1.7), and an
   operand's `acc=` (container 1.4). `kpu-csp-gen --algo matmul --dtype int8 --requant m,shift`
   writes it under OS, WS and IS.
-  - **The rounding mode is kpu-sim's choice.** esg#68 asks for "a scale and shift ... with
-    rounding and saturation" without fixing the mode. kpu-sim's follows the RTL when it does.
+  - **The rounding mode is part of the architecture: ties to even, saturated.** It matches the
+    block formats' rounding and is unbiased. kpu-sim fixes it, and the RTL implements it
+    (esg#68 asks for "a scale and shift ... with rounding and saturation" and leaves the mode
+    to this specification).
   - **A per-channel scale** (a vector of multipliers) is not built yet.
 
 Not built yet:

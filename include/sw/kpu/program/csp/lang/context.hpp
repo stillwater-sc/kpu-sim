@@ -109,7 +109,7 @@ std::vector<ResolvedStage> resolve_result_context(const std::vector<Stage>& via,
                 fail(s.line, s.op + " @ fabric: a block-format conversion runs where the result leaves for memory, "
                              "on the Combiner or at bm.egress");
         }
-        // esg#68's order: bias, scale, activation, format.
+        // The Combiner's order: bias, scale, activation, format.
         if (r.op == VeOp::Scale) {
             if (s.nums.size() != 2) fail(s.line, "scale takes a multiplier and a shift: scale(m, shift)");
             if (s.nums[0] <= -(1LL << 31) || s.nums[0] >= (1LL << 31))
