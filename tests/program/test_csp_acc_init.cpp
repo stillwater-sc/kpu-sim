@@ -15,6 +15,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
@@ -554,4 +555,79 @@ TEST_CASE("acc init: what an L2 accumulator's init refuses", "[program][csp][ini
     o.dataflow = "ws";
     o.init = "accumulate";
     CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("init accumulate (C += A . B) onto an L2 accumulator"));
+}
+
+TEST_CASE("acc init: an L2 init is checked where the walker checks it (#446's review)", "[program][csp][init][l2acc][refuse]") {
+    auto verdicts = [](const std::string& src) {
+        std::pair<std::string, std::string> v{"accepted", "accepted"};
+        try { (void)lang::compile(src); } catch (const std::exception& e) { v.first = e.what(); }
+        try { (void)lang::validate(src); } catch (const std::exception& e) { v.second = e.what(); }
+        return v;
+    };
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+                             "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                             "  tensor C[32,32] tile 16x16 out;\n  tensor D[32,32] tile 16x16 in;\n";
+    // 1. Released before the first merge: resident at the acc statement is not enough.
+    {
+        const auto v = verdicts(head + "  resident D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n    release D[0, 0];\n"
+                                       "    resident A[0, 0], B[0, 0];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "    release A[0, 0], B[0, 0];\n  }\n  store C[0, 0];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("its first merge adds the init"));
+        CHECK_THAT(v.second, ContainsSubstring("its first merge adds the init"));
+    }
+    // 2. In the wrong place: D[1, 1] for C[0, 0], though D is shaped as C and D[1, 1] is resident.
+    {
+        const auto v = verdicts(head + "  resident D[1, 1];\n  acc C[0, 0] in l2 init D[1, 1] {\n"
+                                       "    resident A[0, 0], B[0, 0];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "    release A[0, 0], B[0, 0];\n  }\n  release D[1, 1];\n  store C[0, 0];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("the init names no tile in its place"));
+        CHECK_THAT(v.second, ContainsSubstring("a tensor init starts each tile in the same place"));
+    }
+    // 3. A slice is resident only where all its tiles are: D[0, 0] does not hold D[0, :].
+    {
+        const auto v = verdicts(head + "  resident D[0, 0];\n  acc C[0, :] in l2 init D[0, :] {\n"
+                                       "    resident A[0, 0], B[0, :];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n    release A[0, 0], B[0, :];\n  }\n"
+                                       "  release D[0, 0];\n  store C[0, :];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("which is not resident"));
+        CHECK_THAT(v.second, ContainsSubstring("which is not provably resident"));
+    }
+}
+
+TEST_CASE("acc init: L-T1's first merge waits for its init's Load (#446's review)", "[program][csp][init][l2acc][lt1]") {
+    // One DMA engine, slow, and D loaded last: the gemm and its Drain would otherwise finish
+    // before D is in L3.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                            "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+                            "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
+                            "  resident A[0, 0], B[0, 0], D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                            "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                            "  release A[0, 0], B[0, 0], D[0, 0];\n  store C[0, 0];\n}\n";
+    auto dev = characterize::DeviceDescriptor::single();
+    dev.dma_engines = 1;
+    dev.dma_bytes_per_cycle = 1.0;
+    dev.bm_bytes_per_cycle = 4096.0;
+    dev.str_bytes_per_cycle = 4096.0;
+    CspProgram p = lang::compile(src);
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
+    TransactionalInterpreter lt(dev, p.channel(Chan::L3).capacity, 0);
+    lt.begin(p.source);
+    for (const Action& a : p.actions) lt.step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+    (void)lt.finish();
+    std::uint64_t d_loaded = 0, drain_start = 0;
+    bool drained = false;
+    for (const auto& r : lt.records()) {
+        if (r.kind == Action::Kind::Load && r.tile.operand == "D") d_loaded = r.finish;
+        if (r.kind == Action::Kind::Drain && r.tile.operand == "C") {
+            drain_start = r.start;
+            drained = true;
+        }
+    }
+    REQUIRE(drained);
+    REQUIRE(d_loaded > 0);
+    CHECK(drain_start >= d_loaded);
 }

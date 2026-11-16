@@ -154,7 +154,8 @@ private:
     // requantized: the tiles whose final merge carried the scale (#427), widened over a loop's
     // variable when the loop ends, as finals are; a requantized result's store must be covered.
     struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false;
-                 std::vector<Family> finals = {}; bool formatted = false; std::vector<Family> requantized = {}; };
+                 std::vector<Family> finals = {}; bool formatted = false; std::vector<Family> requantized = {};
+                 std::optional<Family> init = {}; bool merged = false; };   // `in l2 init X`: X until the first merge
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
@@ -208,6 +209,11 @@ private:
         l2_live_ += n;
         peak_l2_ = std::max(peak_l2_, l2_live_);
         accs_.push_back(Acc{y, false, false, depth, true});
+        if (s.init) {                                   // its residency is checked again at the first merge
+            Family x = family(*s.init);
+            x.line = s.line;
+            accs_.back().init = x;
+        }
         for (const Stmt& b : s.body) stmt(b, depth, definite);
         Acc& a = *std::find_if(accs_.begin(), accs_.end(), [&](const Acc& x) { return same(x.tile, y); });
         if (!a.fed)
@@ -373,6 +379,16 @@ private:
             if (a.dims[i].all || b.dims[i].all) continue;
             const Interval d = range(a.dims[i].a + scale(b.dims[i].a, -1));
             if (d.lo > 0 || d.hi < 0) return false;          // provably distinct along this dimension
+        }
+        return true;
+    }
+    // Is family `t` provably inside family `f`? A slice of t is inside only a slice of f, so a
+    // resident X[0, 0] does not hold X[0, :] (covers() takes t as a single tile).
+    static bool contains(const Family& f, const Family& t) {
+        if (f.operand != t.operand) return false;
+        for (std::size_t i = 0; i < f.dims.size(); ++i) {
+            if (f.dims[i].all) continue;
+            if (t.dims[i].all || !(f.dims[i].a == t.dims[i].a)) return false;
         }
         return true;
     }
@@ -601,16 +617,28 @@ private:
                 throw CompileError(s.line, what + ": a vector init is a bias row, broadcast down " + y.operand +
                                            "'s rows; " + y.operand + " has one column, so give it a tensor init");
             check_width(x.operand, y.operand, s.line);
+            // A bias row is indexed by each tile's column: X's one dimension is Y's second.
+            if (y.dims.size() == 2 && !same_dim(x.dims[0], y.dims[1]))
+                throw CompileError(s.line, what + ": a bias row is indexed by the accumulator's column, " + x.operand +
+                                           "[" + dim_text(y.dims[1]) + "]");
         } else if (xo.rows != yo.rows || xo.cols != yo.cols || xo.tile_rows != yo.tile_rows ||
                    xo.tile_cols != yo.tile_cols) {
             throw CompileError(s.line, what + ": a tensor init is tiled as the accumulator (" + y.operand + " is " +
                                        std::to_string(yo.rows) + "x" + std::to_string(yo.cols) + " in " +
                                        std::to_string(yo.tile_rows) + "x" + std::to_string(yo.tile_cols) + " tiles)");
+        } else {
+            // Each tile's init is X's tile in the same place: X names the same tiles as Y.
+            for (std::size_t i = 0; i < y.dims.size() && i < x.dims.size(); ++i)
+                if (!same_dim(x.dims[i], y.dims[i]))
+                    throw CompileError(s.line, what + ": a tensor init starts each tile in the same place, " + x.operand +
+                                               "[" + dim_text(y.dims[0]) + ", " + dim_text(y.dims[1]) + "]");
         }
-        if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, x); }))
+        if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return contains(e.family, x); }))
             throw CompileError(s.line, what + " reads " + text(x) + ", which is not provably resident; make it resident "
                                        "first");
     }
+    static bool same_dim(const Dimension& a, const Dimension& b) { return a.all == b.all && (a.all || a.a == b.a); }
+    std::string dim_text(const Dimension& d) const { return d.all ? std::string(":") : text(d.a); }
 
     void check_width(const std::string& b, const std::string& y, int line) const {
         const TensorOperand& bo = operands_.operand(b);
@@ -909,6 +937,14 @@ private:
                 if (std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return covers(e.family, a); }))
                     throw CompileError(s.line, "call " + s.fn + " reads " + text(a) + ", which is not provably resident; "
                                                "make it resident first");
+            // The first merge adds the init, so it is still resident here (#446's review): the first
+            // call into the accumulator, as written, is the first merge of the tiles it reaches.
+            if (acc->init && !acc->merged &&
+                std::none_of(state_.begin(), state_.end(), [&](const Entry& e) { return contains(e.family, *acc->init); }))
+                throw CompileError(s.line, "call gemm +-> " + text(y) + ": its first merge adds the init " +
+                                           text(*acc->init) + " (csp line " + std::to_string(acc->init->line) +
+                                           "), which is not provably resident; make it resident until then");
+            acc->merged = true;
             if (definite || depth <= acc->depth) acc->fed = true;
             calls_ += multiplier_;
             return;
