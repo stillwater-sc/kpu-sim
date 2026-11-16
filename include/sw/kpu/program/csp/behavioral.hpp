@@ -461,7 +461,12 @@ private:
         // The words' type: a requantized result's accumulator type until its scale, then its own.
         std::string word = t.acc_type();
         for (const Stage& st : a.context) {
-            if (st.op == VeOp::Add) {
+            if (st.op == VeOp::Init) {             // an L2 accumulator's init, on its first merge (#427)
+                const std::string x = st.arg.to_string();
+                if (!l3_index_.count(x))
+                    throw BehavioralError(where + ": the init " + x + " is not resident in L3");
+                init_tile(v, cols, slot_of(x).values, word);
+            } else if (st.op == VeOp::Add) {
                 const std::string b = st.arg.to_string();
                 if (!l3_index_.count(b))
                     throw BehavioralError(where + ": add(" + b + ") @ " + to_string(st.place) + ": " + b +

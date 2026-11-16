@@ -217,6 +217,11 @@ inline TileDependencies build_tile_dependencies(const TileProgram& prog) {
                 reads.push_back(&op.outputs[0]);
                 writes.push_back(&op.outputs[0]);
                 break;
+            case TileOpKind::MergeInit:                 // Y in place, and its init
+                reads.push_back(&op.inputs[0]);
+                reads.push_back(&op.outputs[0]);
+                writes.push_back(&op.outputs[0]);
+                break;
             case TileOpKind::RequantChannels:           // Y in place, and its m and s vectors
                 reads.push_back(&op.inputs[0]);
                 reads.push_back(&op.inputs[1]);

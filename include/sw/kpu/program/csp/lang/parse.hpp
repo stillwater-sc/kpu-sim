@@ -568,10 +568,7 @@ private:
             } else {
                 expect_word("fabric");
             }
-            if (word("init")) {
-                if (s.in_l2)
-                    throw SyntaxError(line(), "acc ... in l2 init: an L2 accumulator's first merge overwrites its "
-                                              "slot, so it takes no init (not built yet)");
+            if (word("init")) {              // in l2: the Combiner adds it on the first merge (#427)
                 take();
                 s.init = tile();
             }

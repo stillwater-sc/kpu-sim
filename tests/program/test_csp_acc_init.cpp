@@ -15,6 +15,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <sw/kpu/program/characterize/device_model.hpp>
 #include <sw/kpu/program/csp/behavioral.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
@@ -26,9 +27,11 @@
 #include <sw/kpu/program/driver/csp_run.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/serialize/l0_format.hpp>
+#include <sw/kpu/program/tile_check.hpp>
 #include <sw/kpu/program/tile_program_reference.hpp>
 
 #include <cmath>
+#include <cstring>
 #include <cstddef>
 #include <map>
 #include <set>
@@ -422,4 +425,407 @@ TEST_CASE("acc init: kpu-csp-gen's options", "[program][csp][gen][init]") {
     o = matmul("accumulate");
     o.l3 = 5;
     CHECK_NOTHROW(gen::generate(o));                     // C's slot is handed to the fabric
+}
+
+namespace {
+
+// An L2 accumulator's init (#427): the weight- or input-stationary matmul, its panel's partials
+// merged by the Combiner, which adds the init on each tile's first merge.
+std::string stationary(const std::string& df, const std::string& init, const std::string& dtype) {
+    gen::Options o;
+    o.size = 16;
+    o.tile = 4;
+    o.l3 = 16;
+    o.dataflow = df;
+    o.init = init;
+    o.dtype = dtype;
+    return gen::generate(o);
+}
+
+platform::DeviceSpecification s1_combiner() {
+    auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    d.combiner = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu"}};
+    return d;
+}
+
+}  // namespace
+
+TEST_CASE("acc init: an L2 accumulator's init, added by the Combiner on the first merge, at every level",
+          "[program][csp][init][l2acc]") {
+    using driver::ExecutionLevel;
+    const auto d = s1_combiner();
+    CHECK_THAT(stationary("ws", "bias", "fp32"), ContainsSubstring("acc C[:, j] in l2 init D[:, j] {"));
+    CHECK_THAT(stationary("is", "bias-row", "fp32"), ContainsSubstring("acc C[i, :] in l2 init b[:] {"));
+    for (const char* df : {"ws", "is"})
+        for (const char* init : {"bias", "bias-row"})
+            for (const char* dtype : {"fp32", "int8"}) {
+                CAPTURE(df, init, dtype);
+                const lang::Program ast = lang::parse(stationary(df, init, dtype));
+                const TileProgram in = driver::csp_inputs(ast);
+                driver::CspRunRequest req{ast, &d, in,
+                                          {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential,
+                                           ExecutionLevel::CycleAccurate}};
+                const auto r = driver::run_csp(req);
+                REQUIRE(r.reference);
+                CHECK(r.reference_note.empty());                  // the trace (MERGE_INIT) replays L-B
+                // The expectation, computed here: the plain matmul, plus the init.
+                TileProgram expect = *r.reference;
+                TensorOperand& C = expect.operand("C");
+                if (std::string(dtype) == "fp32") {
+                    const auto ref = reference(in, init);
+                    for (Dim rr = 0; rr < C.rows; ++rr)
+                        for (Dim cc = 0; cc < C.cols; ++cc) C.at(rr, cc) = ref[static_cast<std::size_t>(rr) * C.rows + cc];
+                } else {
+                    const lang::Program plain_ast = lang::parse(stationary(df, "none", dtype));
+                    TileProgram plain_in = driver::csp_inputs(plain_ast);
+                    for (const char* n : {"A", "B"}) plain_in.operand(n).values = in.operand(n).values;
+                    const auto plain = driver::csp_reference(plain_ast, plain_in, 1'000'000);
+                    REQUIRE(plain.values);
+                    const TensorOperand& p = plain.values->operand("C");
+                    for (Dim rr = 0; rr < C.rows; ++rr)
+                        for (Dim cc = 0; cc < C.cols; ++cc) {
+                            const numeric::Word x = std::string(init) == "bias" ? in.operand("D").word(rr, cc)
+                                                                                : in.operand("b").word(cc, 0);
+                            C.set_word(rr, cc, numeric::encode("int32", numeric::decode("int32", p.word(rr, cc)) +
+                                                                            numeric::decode("int32", x)));
+                        }
+                }
+                CHECK(check_operands(r.reference.value(), expect).pass);    // L-B against the reference
+                for (const auto& o : r.levels) {
+                    CAPTURE(driver::to_string(o.level));
+                    INFO(o.skipped.value_or(""));
+                    REQUIRE_FALSE(o.skipped);
+                    CHECK(check_operands(o.values, *r.reference).pass);
+                }
+            }
+}
+
+TEST_CASE("acc init: an L2 accumulator's init in the trace is MERGE_INIT (opset 1.10)", "[program][csp][init][l2acc]") {
+    const lang::Program ast = lang::parse(stationary("ws", "bias", "fp32"));
+    const auto ref = driver::csp_reference(ast, driver::csp_inputs(ast), 1'000'000);
+    REQUIRE(ref.trace);
+    std::size_t inits = 0;
+    for (const TileOp& op : ref.trace->ops()) inits += op.kind == TileOpKind::MergeInit;
+    CHECK(inits == 16);                                       // one per C tile, on its first merge
+    std::ostringstream os;
+    serialize::WriteOptions with_values;
+    with_values.include_values = true;
+    serialize::write_l0(os, *ref.trace, with_values);
+    CHECK_THAT(os.str(), ContainsSubstring("OPSET tile 1.10.0"));
+    CHECK_THAT(os.str(), ContainsSubstring("kind=MERGE_INIT in=D:0,0 out=C:0,0"));
+    std::istringstream is(os.str());
+    TileProgram back = serialize::read_l0(is);
+    (void)TileProgramReference().run(back);
+    const auto& a = back.operand("C").values;
+    const auto& w = ref.values->operand("C").values;
+    CHECK((a.size() == w.size() && std::memcmp(a.data(), w.data(), a.size() * sizeof(float)) == 0));
+}
+
+TEST_CASE("acc init: what an L2 accumulator's init refuses", "[program][csp][init][l2acc][refuse]") {
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                             "  tensor A[8,8] tile 4x4 in;\n  tensor B[8,8] tile 4x4 in;\n"
+                             "  tensor C[8,8] tile 4x4 out;\n  tensor D[8,8] tile 4x4 in;\n"
+                             "  tensor E[8,8] int32 tile 4x4 in;\n  vector b[8] tile 4 in;\n";
+    auto program = [&](const std::string& before, const std::string& init, const std::string& after) {
+        return head + before + "  acc C[0, 0] in l2 init " + init + " {\n    resident A[0, 0], B[0, 0];\n"
+               "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n    release A[0, 0], B[0, 0];\n  }\n" + after +
+               "  store C[0, 0];\n}\n";
+    };
+    auto both = [&](const std::string& src, const std::string& text) {
+        std::string walk = "accepted", sym = "accepted";
+        try { (void)lang::compile(src); } catch (const std::exception& e) { walk = e.what(); }
+        try { (void)lang::validate(src); } catch (const std::exception& e) { sym = e.what(); }
+        INFO("walker: " << walk);
+        CHECK_THAT(walk, ContainsSubstring(text));
+        INFO("validator: " << sym);
+        CHECK_THAT(sym, ContainsSubstring(text));
+    };
+    const std::string ok = program("  resident D[0, 0];\n", "D[0, 0]", "  release D[0, 0];\n");
+    CHECK_NOTHROW(lang::compile(ok));
+    CHECK_NOTHROW(lang::validate(ok));
+    CHECK_NOTHROW(lang::compile(program("  resident b[0];\n", "b[0]", "  release b[0];\n")));
+    both(program("", "D[0, 0]", ""), "resident; make it resident first");
+    both(program("  resident E[0, 0];\n", "E[0, 0]", "  release E[0, 0];\n"), "an init is in the accumulator's number system");
+    // Onto the accumulator itself: not built yet, said so.
+    CHECK_THAT(lang::format(lang::parse(ok)), ContainsSubstring("acc C[0, 0] in l2 init D[0, 0] {"));
+    gen::Options o;
+    o.size = 16;
+    o.tile = 4;
+    o.l3 = 16;
+    o.dataflow = "ws";
+    o.init = "accumulate";
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("init accumulate (C += A . B) onto an L2 accumulator"));
+}
+
+TEST_CASE("acc init: an L2 init is checked where the walker checks it (#446's review)", "[program][csp][init][l2acc][refuse]") {
+    auto verdicts = [](const std::string& src) {
+        std::pair<std::string, std::string> v{"accepted", "accepted"};
+        try { (void)lang::compile(src); } catch (const std::exception& e) { v.first = e.what(); }
+        try { (void)lang::validate(src); } catch (const std::exception& e) { v.second = e.what(); }
+        return v;
+    };
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+                             "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                             "  tensor C[32,32] tile 16x16 out;\n  tensor D[32,32] tile 16x16 in;\n";
+    // 1. Released before the first merge: resident at the acc statement is not enough.
+    {
+        const auto v = verdicts(head + "  resident D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n    release D[0, 0];\n"
+                                       "    resident A[0, 0], B[0, 0];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "    release A[0, 0], B[0, 0];\n  }\n  store C[0, 0];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("its first merge adds the init"));
+        CHECK_THAT(v.second, ContainsSubstring("its first merge adds the init"));
+    }
+    // 2. In the wrong place: D[1, 1] for C[0, 0], though D is shaped as C and D[1, 1] is resident.
+    {
+        const auto v = verdicts(head + "  resident D[1, 1];\n  acc C[0, 0] in l2 init D[1, 1] {\n"
+                                       "    resident A[0, 0], B[0, 0];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "    release A[0, 0], B[0, 0];\n  }\n  release D[1, 1];\n  store C[0, 0];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("the init names no tile in its place"));
+        CHECK_THAT(v.second, ContainsSubstring("a tensor init starts each tile in the same place"));
+    }
+    // 3. A slice is resident only where all its tiles are: D[0, 0] does not hold D[0, :].
+    {
+        const auto v = verdicts(head + "  resident D[0, 0];\n  acc C[0, :] in l2 init D[0, :] {\n"
+                                       "    resident A[0, 0], B[0, :];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n    release A[0, 0], B[0, :];\n  }\n"
+                                       "  release D[0, 0];\n  store C[0, :];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("which is not resident"));
+        CHECK_THAT(v.second, ContainsSubstring("which is not provably resident"));
+    }
+}
+
+TEST_CASE("acc init: L-T1's first merge waits for its init's Load (#446's review)", "[program][csp][init][l2acc][lt1]") {
+    // One DMA engine, slow, and D loaded last: the gemm and its Drain would otherwise finish
+    // before D is in L3.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                            "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+                            "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
+                            "  resident A[0, 0], B[0, 0], D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                            "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                            "  release A[0, 0], B[0, 0], D[0, 0];\n  store C[0, 0];\n}\n";
+    auto dev = characterize::DeviceDescriptor::single();
+    dev.dma_engines = 1;
+    dev.dma_bytes_per_cycle = 1.0;
+    dev.bm_bytes_per_cycle = 4096.0;
+    dev.str_bytes_per_cycle = 4096.0;
+    CspProgram p = lang::compile(src);
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
+    TransactionalInterpreter lt(dev, p.channel(Chan::L3).capacity, 0);
+    lt.begin(p.source);
+    for (const Action& a : p.actions) lt.step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+    (void)lt.finish();
+    std::uint64_t d_loaded = 0, drain_start = 0;
+    bool drained = false;
+    for (const auto& r : lt.records()) {
+        if (r.kind == Action::Kind::Load && r.tile.operand == "D") d_loaded = r.finish;
+        if (r.kind == Action::Kind::Drain && r.tile.operand == "C") {
+            drain_start = r.start;
+            drained = true;
+        }
+    }
+    REQUIRE(drained);
+    REQUIRE(d_loaded > 0);
+    CHECK(drain_start >= d_loaded);
+}
+
+TEST_CASE("acc init: each tile's first merge finds its init resident, and a vector takes no tensor init",
+          "[program][csp][init][l2acc][refuse]") {
+    auto verdicts = [](const std::string& src) {
+        std::pair<std::string, std::string> v{"accepted", "accepted"};
+        try { (void)lang::compile(src); } catch (const std::exception& e) { v.first = e.what(); }
+        try { (void)lang::validate(src); } catch (const std::exception& e) { v.second = e.what(); }
+        return v;
+    };
+    // The second review of #446: C[0, 1]'s first merge comes after the init is released, in a
+    // second call statement. Marking the whole family merged at the first call let it through.
+    {
+        const auto v = verdicts("csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+                                "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
+                                "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n"
+                                "  resident D[0, :];\n  acc C[0, :] in l2 init D[0, :] {\n"
+                                "    resident A[0, 0], B[0, :];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                "    release D[0, :];\n    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                                "    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("its first merge adds the init"));
+        CHECK_THAT(v.second, ContainsSubstring("call gemm +-> C[0, 1]: its first merge adds the init"));
+    }
+    // A tensor init on a vector accumulator: refused, not compared past the vector's one dimension.
+    {
+        const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                                "  vector Y[16] tile 16 out;\n  tensor X[16,1] tile 16x1 in;\n"
+                                "  resident X[0, 0];\n  acc Y[0] in l2 init X[0, 0] { }\n  release X[0, 0];\n}\n";
+        std::string sym = "accepted";
+        try { (void)lang::validate(src); } catch (const std::exception& e) { sym = e.what(); }
+        CHECK_THAT(sym, ContainsSubstring("a tensor init needs a tensor accumulator, and Y is a vector"));
+    }
+}
+
+TEST_CASE("acc init: an in-place writeback of the init's tile waits for the merge that reads it",
+          "[program][csp][init][l2acc][lt1]") {
+    // The second review of #446: D is the init of C's first merge, then updated in place. The
+    // Writeback of D must not finish before C's first merge has read D. A slow gemm makes that late.
+    // The streamer's in-order issue orders them already (D's Feed follows C's Drain); the in-place
+    // Writeback's bound on the stages' reads, as Release and Retain have it, keeps this so if
+    // that order ever loosens. The test pins the invariant.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                            "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+                            "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 inout;\n"
+                            "  resident A[0, 0], B[0, 0], D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                            "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                            "  call relu(D[0, 0]) -> D[0, 0];\n  store D[0, 0];\n"
+                            "  release A[0, 0], B[0, 0], D[0, 0];\n  store C[0, 0];\n}\n";
+    auto dev = characterize::DeviceDescriptor::single();
+    dev.fabric_macs_per_cycle = 1.0;               // the gemm, and so C's first merge, is late
+    dev.compute_tiles = 2;                         // and the relu on D runs beside it, on the other tile
+    CspProgram p = lang::compile(src);
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
+    TransactionalInterpreter lt(dev, p.channel(Chan::L3).capacity, 0);
+    lt.begin(p.source);
+    for (const Action& a : p.actions) lt.step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+    (void)lt.finish();
+    std::uint64_t merge_read = 0, wb_finish = 0;
+    bool merged = false, wrote = false;
+    for (const auto& r : lt.records()) {
+        if (r.kind == Action::Kind::Drain && r.tile.operand == "C") {
+            merge_read = r.finish;                 // the init is read as the merge's Drain runs
+            merged = true;
+        }
+        if (r.kind == Action::Kind::Writeback && r.tile.operand == "D") {
+            wb_finish = r.finish;
+            wrote = true;
+        }
+    }
+    REQUIRE(merged);
+    REQUIRE(wrote);
+    CHECK(wb_finish >= merge_read);
+}
+
+TEST_CASE("acc init: a first merge reads only its own tile's init, and a loop that may not run merges nothing",
+          "[program][csp][init][l2acc][refuse]") {
+    // The third review of #446. Each case is checked by the walker and the validator alike.
+    auto verdicts = [](const std::string& src) {
+        std::pair<std::string, std::string> v{"accepted", "accepted"};
+        try { (void)lang::compile(src); } catch (const std::exception& e) { v.first = e.what(); }
+        try { (void)lang::validate(src); } catch (const std::exception& e) { v.second = e.what(); }
+        return v;
+    };
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+                             "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
+                             "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n";
+    // 1. C[0, 1]'s first merge reads D[0, 1] alone: D[0, :] released and D[0, 1] made resident
+    //    again is enough. The whole family is checked at the acc statement, not at each merge.
+    {
+        const auto v = verdicts(head + "  resident D[0, :];\n  acc C[0, :] in l2 init D[0, :] {\n"
+                                       "    resident A[0, 0], B[0, :];\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "    release D[0, :];\n    resident D[0, 1];\n"
+                                       "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                                       "    release D[0, 1];\n    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK(v.first == "accepted");
+        CHECK(v.second == "accepted");
+    }
+    // 2. The inner loop runs zero times when i = 0, so the second call is then C[0, 0]'s first
+    //    merge, after D[0, 0] is released.
+    {
+        const auto v = verdicts(head + "  resident D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                                       "    resident A[0, 0], B[0, 0];\n    for i in 0..2 {\n"
+                                       "      for k in 0..i {\n        call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n      }\n"
+                                       "      release D[0, 0];\n      call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
+                                       "      resident D[0, 0];\n    }\n    release A[0, 0], B[0, 0];\n  }\n"
+                                       "  release D[0, 0];\n  store C[0, 0];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK_THAT(v.first, ContainsSubstring("its first merge adds the init"));
+        CHECK_THAT(v.second, ContainsSubstring("its first merge adds the init"));
+    }
+    // 3. A loop over exactly C's columns merged every tile: past it, a call into C[0, 1] is not a
+    //    first merge, and needs no init.
+    {
+        const auto v = verdicts(head + "  resident D[0, :];\n  acc C[0, :] in l2 init D[0, :] {\n"
+                                       "    resident A[0, 0], B[0, :];\n    for j in 0..2 {\n"
+                                       "      call gemm(A[0, 0], B[0, j]) +-> C[0, j];\n    }\n    release D[0, :];\n"
+                                       "    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n"
+                                       "    release A[0, 0], B[0, :];\n  }\n  store C[0, :];\n}\n");
+        INFO("walker: " << v.first << "\nvalidator: " << v.second);
+        CHECK(v.first == "accepted");
+        CHECK(v.second == "accepted");
+    }
+}
+
+TEST_CASE("acc init: an L2 credit that arrives before the init is not an L2 stall", "[program][csp][init][l2acc][lt1]") {
+    // The second review of #446: the init's Load bounds the first merge's Drain, so an L2 credit
+    // that arrives before it decides nothing and is no L2 stall. One L2 slot, one slow DMA
+    // engine: D[0, 1] loads last. The streamer's in-order issue already frees C[0, 0]'s slot
+    // before C[0, 1]'s partial is ready, so this pins the invariant rather than reproducing a
+    // failure: the stage inputs are applied before the credit comparison.
+    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 1) {\n"
+                            "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
+                            "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n"
+                            "  resident A[0, 0], B[0, :];\n"
+                            "  acc C[0, 0] in l2 {\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n  store C[0, 0];\n"
+                            "  resident D[0, 1];\n"
+                            "  acc C[0, 1] in l2 init D[0, 1] {\n    call gemm(A[0, 0], B[0, 1]) +-> C[0, 1];\n  }\n"
+                            "  release A[0, 0], B[0, :], D[0, 1];\n  store C[0, 1];\n}\n";
+    auto dev = characterize::DeviceDescriptor::single();
+    dev.dma_engines = 1;
+    dev.dma_bytes_per_cycle = 1.0;
+    dev.bm_bytes_per_cycle = 4096.0;
+    dev.str_bytes_per_cycle = 4096.0;
+    CspProgram p = lang::compile(src);
+    const TileProgram in = driver::csp_inputs(lang::parse(src));
+    for (const auto& name : p.source.operand_order()) p.source.operand(name).values = in.operand(name).values;
+    TransactionalInterpreter lt(dev, p.channel(Chan::L3).capacity, 0);
+    lt.begin(p.source);
+    for (const Action& a : p.actions) lt.step(a, a.kind == Action::Kind::Call ? &p.source.ops().at(a.l0_op) : nullptr);
+    (void)lt.finish();
+    std::uint64_t d_loaded = 0;
+    const TransactionalInterpreter::Record* drain = nullptr;
+    for (const auto& r : lt.records()) {
+        if (r.kind == Action::Kind::Load && r.tile.operand == "D") d_loaded = r.finish;
+        if (r.kind == Action::Kind::Drain && r.tile.operand == "C" && r.tile.tj == 1) drain = &r;
+    }
+    REQUIRE(drain != nullptr);
+    REQUIRE(d_loaded > 0);
+    INFO("D loaded " << d_loaded << ", drain start " << drain->start << ", l2_wait " << drain->l2_wait);
+    CHECK(drain->start >= d_loaded);
+    CHECK(drain->l2_wait == 0);
+}
+
+TEST_CASE("acc init: a Combiner that does not run add cannot take an init", "[program][csp][init][l2acc][refuse]") {
+    // The fourth review of #446: the init is the Combiner's add on the first merge (L-CA runs it
+    // as VectorStage AddInit), so a target whose Combiner lists no `add` refuses it, at the acc
+    // statement, in both the walker and the validator. The same program without the init compiles.
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                             "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+                             "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
+                             "  resident A[0, 0], B[0, 0], D[0, 0];\n";
+    const std::string with = head + "  acc C[0, 0] in l2 init D[0, 0] {\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                                    "  release A[0, 0], B[0, 0], D[0, 0];\n  store C[0, 0];\n}\n";
+    const std::string without = head + "  acc C[0, 0] in l2 {\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                                       "  release A[0, 0], B[0, 0], D[0, 0];\n  store C[0, 0];\n}\n";
+    lang::Target no_add;
+    no_add.combiner = std::set<VeOp>{VeOp::Relu, VeOp::Scale};
+    lang::Target with_add = no_add;
+    with_add.combiner->insert(VeOp::Add);
+    auto verdicts = [](const std::string& src, const lang::Target& t) {
+        std::pair<std::string, std::string> v{"accepted", "accepted"};
+        try { (void)lang::compile(src, &t); } catch (const std::exception& e) { v.first = e.what(); }
+        try { (void)lang::validate(src, &t); } catch (const std::exception& e) { v.second = e.what(); }
+        return v;
+    };
+    const auto refused = verdicts(with, no_add);
+    INFO("walker: " << refused.first << "\nvalidator: " << refused.second);
+    CHECK_THAT(refused.first, ContainsSubstring("the target's Combiner does not run add"));
+    CHECK_THAT(refused.second, ContainsSubstring("the target's Combiner does not run add"));
+    const auto plain = verdicts(without, no_add);
+    CHECK(plain.first == "accepted");
+    CHECK(plain.second == "accepted");
+    const auto ok = verdicts(with, with_add);
+    CHECK(ok.first == "accepted");
+    CHECK(ok.second == "accepted");
 }

@@ -206,6 +206,10 @@ enum class TileOpKind {
     // {m's tile, s's tile}, outputs = {Y}. A new op rather than inputs on REQUANT: a 1.8 reader
     // would drop them and scale by REQUANT's defaults; this one it refuses by name.
     RequantChannels,
+    // An L2 accumulator's init (opset 1.10; #427): the Combiner adds X to the first merge's
+    // partial, Y += X -- X a tile tiled as Y, or a vector broadcast down Y's rows -- in Y's
+    // accumulator type. inputs = {X}, outputs = {Y}.
+    MergeInit,
 };
 
 // An L3 transaction: carries an L3 address and one tile (outputs[0]); computes nothing.
@@ -249,6 +253,7 @@ inline const char* to_string(TileOpKind k) {
         case TileOpKind::BlockConvert:   return "BLOCK_CONVERT";
         case TileOpKind::Requant:        return "REQUANT";
         case TileOpKind::RequantChannels: return "REQUANT_CHANNELS";
+        case TileOpKind::MergeInit:      return "MERGE_INIT";
     }
     return "?";
 }

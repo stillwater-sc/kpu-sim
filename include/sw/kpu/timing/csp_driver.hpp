@@ -165,6 +165,7 @@ public:
             if (op.kind != program::TileOpKind::Feed && op.kind != program::TileOpKind::Drain &&
                 op.kind != program::TileOpKind::AccInit && op.kind != program::TileOpKind::BlockConvert &&
                 op.kind != program::TileOpKind::Requant && op.kind != program::TileOpKind::RequantChannels &&
+                op.kind != program::TileOpKind::MergeInit &&
                 !program::is_l3(op.kind) && !program::is_l2(op.kind))
                 check_call(op);
         check_machine(p.channel(program::csp::Chan::L3).capacity, p.l2_slots);
@@ -599,6 +600,14 @@ private:
                 v.arg_loads = n == loads_pulled_.end() ? 0 : n->second;
                 // Before a requantized result's scale: its accumulator values (the validator
                 // orders a bias before the scale).
+                v.word_type = inputs_.operand(tile.operand).acc_type();
+                break;
+            }
+            case program::csp::VeOp::Init: {      // an L2 accumulator's init, read from L3 (#427)
+                v.op = VectorStage::Op::AddInit;
+                v.arg = id(st.arg);
+                auto n = loads_pulled_.find(v.arg);
+                v.arg_loads = n == loads_pulled_.end() ? 0 : n->second;
                 v.word_type = inputs_.operand(tile.operand).acc_type();
                 break;
             }

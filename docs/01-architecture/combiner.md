@@ -137,8 +137,23 @@ The merge is in the CSP language and at every level (#429's merge, #430's progra
     on `REQUANT`, which a 1.8 reader would drop. `kpu-csp-gen ... --requant m,shift
     --requant-channels` writes it, with qm and qs resident beside B's panel.
 
+- **An L2 accumulator's init** (#427): `acc C[:, j] in l2 init D[:, j] { ... }`, or `init b[j]`.
+  The Combiner adds the init on each tile's first merge: the slot is written with partial + X.
+  - X is a tile tiled as the accumulator, or a vector broadcast down its rows (a bias row).
+  - X is read from L3, as a bias vector is. So it must be resident at the `acc` statement and
+    still resident at the first merge.
+  - It is in the accumulator's number system, int32 for an int8 gemm, and it adds as the merges
+    do.
+  - The first merge stays an overwrite, as the replay requires. The trace records the add after
+    it as `MERGE_INIT` (opset 1.10).
+  - At the levels it is an internal stage, first on the first merge's Drain, so L-T1 and L-CA
+    time X's read for its Release as they time an add's vector.
+  - `kpu-csp-gen --dataflow ws|is --init bias|bias-row` writes it.
+  - Accumulating onto C itself (`init C`, C += A . B) through the Combiner is not built yet. A
+    fabric accumulator takes it.
+
 Not built yet:
-- an init (`acc ... in l2 init ...`);
+- accumulating onto the result itself through the Combiner (`acc C .. in l2 init C ..`);
 - a weight-stationary timing of the array. L-T1 and L-CA time each merge's gemm as a
   one-call output-stationary chain.
 

@@ -1208,7 +1208,8 @@ inline void ConcurrentTimingExecutor::create_components() {
 inline ConcurrentTimingExecutor::ArgLoads ConcurrentTimingExecutor::track_reads(std::vector<VectorStage>& stages) {
     ArgLoads deps;
     for (VectorStage& st : stages) {
-        if (st.op == VectorStage::Op::Add || (st.op == VectorStage::Op::Scale && st.channels)) {
+        if (st.op == VectorStage::Op::Add || st.op == VectorStage::Op::AddInit ||
+            (st.op == VectorStage::Op::Scale && st.channels)) {
             st.read_seq = stage_reads_scheduled_[st.arg]++;
             deps.emplace_back(st.arg, st.arg_loads ? st.arg_loads : loads_scheduled_[st.arg]);
         }
@@ -1493,6 +1494,13 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
                                              ": the vector is not in L3");
                 program::bias_tile(y.values, y.cols, b->second.payload.values,
                                    st.word_type.empty() ? program::numeric::kFp32 : st.word_type);
+            } else if (st.op == VectorStage::Op::AddInit) {
+                auto x = l3_payloads_.find(st.arg);
+                if (x == l3_payloads_.end())
+                    throw std::runtime_error("Tile context: the init " + st.arg.to_string() + " of " + id.to_string() +
+                                             " is not in L3");
+                program::init_tile(y.values, y.cols, x->second.payload.values,
+                                   st.word_type.empty() ? program::numeric::kFp32 : st.word_type);
             } else if (st.op == VectorStage::Op::Scale && st.channels) {
                 auto m = l3_payloads_.find(st.arg);
                 auto sh = l3_payloads_.find(st.arg2);
@@ -1525,7 +1533,9 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
         for (auto d = done.begin(); d != done.end() && *d == prefix; d = done.erase(d)) ++prefix;
     };
     for (const VectorStage& st : stages) {
-        if (st.op == VectorStage::Op::Add || (st.op == VectorStage::Op::Scale && st.channels)) applied(st.arg, st.read_seq);
+        if (st.op == VectorStage::Op::Add || st.op == VectorStage::Op::AddInit ||
+            (st.op == VectorStage::Op::Scale && st.channels))
+            applied(st.arg, st.read_seq);
         if (st.op == VectorStage::Op::Scale && st.channels) applied(st.arg2, st.read_seq2);
     }
 }
