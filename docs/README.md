@@ -8,6 +8,7 @@ This documentation is organized by software development categories for the KPU (
 
 1. [KPU Execution Model](01-architecture/kpu-execution-model.md) - **MUST READ** - Credit-based dataflow model
 2. [Simulation Fidelity Framework](02-simulation/fidelity-framework.md) - Multi-fidelity simulation design
+   - [The Simulator's Architecture](02-simulation/simulator-architecture.md) - how a program runs, stage by stage, with the code path of each
 3. [KPU Specification](01-architecture/kpu-specification.md) - Overall KPU specification
 
 ## Documentation Structure
@@ -30,6 +31,7 @@ Simulation framework documentation - fidelity levels, calibration, configuration
 
 | Document | Description |
 |----------|-------------|
+| [simulator-architecture.md](02-simulation/simulator-architecture.md) | **How a program runs:** the pipeline from a `.csp` program to the records, and the code path of each stage |
 | [fidelity-framework.md](02-simulation/fidelity-framework.md) | Multi-fidelity simulation design |
 | [multi-fidelity-calibration.md](02-simulation/multi-fidelity-calibration.md) | Calibration workflow |
 | [functional-simulation-gaps.md](02-simulation/functional-simulation-gaps.md) | Gap analysis |
