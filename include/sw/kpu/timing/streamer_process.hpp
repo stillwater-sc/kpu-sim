@@ -313,6 +313,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
+                    events.back().set_slot(in_flight_l2_slot_);
                 }
             } else {
                 // Drain complete: result tile arrived at L2
@@ -534,7 +535,7 @@ private:
         ));
         events.back().set_slot(l2_slot);
 
-        if (!accumulate)
+        if (!accumulate) {
             events.push_back(TimingEvent(
                 EventType::CREDIT_ACQUIRED,
                 current_cycle,
@@ -542,6 +543,8 @@ private:
                 drain_tile.tile_id,
                 name()
             ));
+            events.back().set_slot(l2_slot);
+        }
 
         return true;
     }

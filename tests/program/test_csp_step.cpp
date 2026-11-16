@@ -166,8 +166,13 @@ TEST_CASE("csp step: L-CA replays its protocol events, one cycle per step", "[cs
                 stores += e.type == sw::kpu::timing::EventType::DMA_STORE_COMPLETE;
                 // A slot only where the producer names one: a DMA engine's L3 credit, never the
                 // memory controller's load (whose slot field is left at its default).
-                if (e.type == sw::kpu::timing::EventType::CREDIT_ACQUIRED && e.component.rfind("DMA", 0) == 0)
+                // Every credit, and every transfer's start, names the slot it takes or frees.
+                using T = sw::kpu::timing::EventType;
+                if (e.type == T::CREDIT_ACQUIRED || e.type == T::CREDIT_RELEASED || e.type == T::BM_MOVE_START ||
+                    e.type == T::BM_WRITEBACK_START || e.type == T::BM_EJECT_START || e.type == T::STR_DRAIN_START) {
+                    CAPTURE(sw::kpu::timing::to_string(e.type), e.component);
                     CHECK(e.slot.has_value());
+                }
                 if (e.type == sw::kpu::timing::EventType::DMA_LOAD_START) CHECK_FALSE(e.slot.has_value());
                 if (e.tile) {
                     ++tiled;

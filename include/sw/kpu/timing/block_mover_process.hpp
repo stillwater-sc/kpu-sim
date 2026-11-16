@@ -466,6 +466,7 @@ private:
                                            in_flight_->tile.consumer_count));
                 // Only release L3 credit if tile was fully removed (ref_count reached 0). A
                 // program-held entry is not the Move's to consume: its Release retires it.
+                const auto l3_source = l3_tag_cam_.match(in_flight_->tile.tile_id);   // the slot it frees
                 bool credit_released = !in_flight_->tile.l3_held &&
                                        l3_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
@@ -502,6 +503,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
+                    if (l3_source) events.back().set_slot(l3_source->slot_id);   // L3, not the L2 it landed in
                 }
             } else {
                 // Writeback complete: tile arrived at L3. Into a program-held entry it overwrites
@@ -510,6 +512,7 @@ private:
                     l3_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
                 // Only release L2 credit if tile was fully removed (ref_count reached 0). An L2
                 // accumulator's partial is held (#429): its L2Release retires it.
+                const auto l2_source = l2_tag_cam_.match(in_flight_->tile.tile_id);   // the slot it frees
                 bool credit_released = !in_flight_->tile.l2_held &&
                                        l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
@@ -546,6 +549,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
+                    if (l2_source) events.back().set_slot(l2_source->slot_id);   // L2, not the L3 it landed in
                 }
             }
 
@@ -674,6 +678,7 @@ private:
                     dedup_tile.tile_id,
                     name()
                 ));
+                events.back().set_slot(l3_entry->slot_id);   // the L3 reference it consumed
             }
             // Do not advance i - remove_at shifted the next element into i
         }
@@ -960,8 +965,9 @@ private:
             wb_tile.tile_id,
             name()
         ));
+        events.back().set_slot(l3_slot);
 
-        if (!in_place)
+        if (!in_place) {
             events.push_back(TimingEvent(
                 EventType::CREDIT_ACQUIRED,
                 current_cycle,
@@ -969,6 +975,8 @@ private:
                 wb_tile.tile_id,
                 name()
             ));
+            events.back().set_slot(l3_slot);
+        }
 
         return true;
     }
@@ -999,6 +1007,7 @@ private:
             in_flight_ticket_ = ej.ticket;
             events.push_back(TimingEvent(EventType::BM_EJECT_START, current_cycle,
                                          config_.mover_id, ej.tile.tile_id, name()));
+            events.back().set_slot(l3_entry->slot_id);
             events.back().store_ticket = ej.ticket;
             return true;
         }
