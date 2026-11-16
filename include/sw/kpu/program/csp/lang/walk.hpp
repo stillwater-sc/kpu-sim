@@ -822,6 +822,9 @@ private:
         if (target_ && !target_->combiner)
             throw CompileError(s.line, "acc ... in l2: the Combiner merges its partials, and the target has no Combiner "
                                        "(the deployment's `combiner` block)");
+        if (s.init && target_ && !target_->combiner->count(VeOp::Add))
+            throw CompileError(s.line, "acc ... in l2 init: the Combiner adds the init to the first merge's partial, and "
+                                       "the target's Combiner does not run add (the deployment's `combiner` ops)");
         // `init X` (#427): each tile's init is X's tile in the same place (a tensor tiled as the
         // accumulator) or at its column (a vector: a bias row). The Combiner adds it on the first merge.
         std::vector<TileCoord> inits;

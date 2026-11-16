@@ -795,3 +795,37 @@ TEST_CASE("acc init: an L2 credit that arrives before the init is not an L2 stal
     CHECK(drain->start >= d_loaded);
     CHECK(drain->l2_wait == 0);
 }
+
+TEST_CASE("acc init: a Combiner that does not run add cannot take an init", "[program][csp][init][l2acc][refuse]") {
+    // The fourth review of #446: the init is the Combiner's add on the first merge (L-CA runs it
+    // as VectorStage AddInit), so a target whose Combiner lists no `add` refuses it, at the acc
+    // statement, in both the walker and the validator. The same program without the init compiles.
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                             "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+                             "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
+                             "  resident A[0, 0], B[0, 0], D[0, 0];\n";
+    const std::string with = head + "  acc C[0, 0] in l2 init D[0, 0] {\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                                    "  release A[0, 0], B[0, 0], D[0, 0];\n  store C[0, 0];\n}\n";
+    const std::string without = head + "  acc C[0, 0] in l2 {\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                                       "  release A[0, 0], B[0, 0], D[0, 0];\n  store C[0, 0];\n}\n";
+    lang::Target no_add;
+    no_add.combiner = std::set<VeOp>{VeOp::Relu, VeOp::Scale};
+    lang::Target with_add = no_add;
+    with_add.combiner->insert(VeOp::Add);
+    auto verdicts = [](const std::string& src, const lang::Target& t) {
+        std::pair<std::string, std::string> v{"accepted", "accepted"};
+        try { (void)lang::compile(src, &t); } catch (const std::exception& e) { v.first = e.what(); }
+        try { (void)lang::validate(src, &t); } catch (const std::exception& e) { v.second = e.what(); }
+        return v;
+    };
+    const auto refused = verdicts(with, no_add);
+    INFO("walker: " << refused.first << "\nvalidator: " << refused.second);
+    CHECK_THAT(refused.first, ContainsSubstring("the target's Combiner does not run add"));
+    CHECK_THAT(refused.second, ContainsSubstring("the target's Combiner does not run add"));
+    const auto plain = verdicts(without, no_add);
+    CHECK(plain.first == "accepted");
+    CHECK(plain.second == "accepted");
+    const auto ok = verdicts(with, with_add);
+    CHECK(ok.first == "accepted");
+    CHECK(ok.second == "accepted");
+}
