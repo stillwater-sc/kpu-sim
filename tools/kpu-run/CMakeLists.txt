@@ -434,22 +434,23 @@ if(KPU_BUILD_TESTS)
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
         set_tests_properties(kpu_run_calibration_${_cal} PROPERTIES LABELS "program;driver;csp;calibration")
     endforeach()
-    # A per-channel scale (#427): its multipliers and shifts come with the inputs. Synthesized ones
-    # span int32, so the run is refused where a shift is first used, naming the stage and the value.
+    # A per-channel scale (#427): synthesized multipliers and shifts keep the scale's domains
+    # (#457; driver::operand_roles), so the program runs at every level with no --inputs. A shift
+    # outside 0..62, given explicitly, is still refused (test_csp_requant: "refuses bad values").
     add_test(NAME csp_gen_linear_requant_channels
         COMMAND $<TARGET_FILE:csp-gen> --algo linear --size 64 --tile 16 --l3 14 --dtype int8 --requant 3,9
                 --requant-channels --place combiner -o ${CMAKE_CURRENT_BINARY_DIR}/linear_requant_channels.csp)
-    add_test(NAME kpu_run_csp_requant_channels_needs_inputs
+    add_test(NAME kpu_run_csp_requant_channels_synthesized
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/linear_requant_channels.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1_combiner.json
-            -DEXPECT_CODE=2
-            -DMUST_MATCH=scale.qm.0,0.,.qs.0,0..:.requantize:.the.shift.-?[0-9]+.is.outside.0..62
-            -DMUST_NOT_MATCH=OK:.every.level
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=OK:.every.level
+            -DMUST_NOT_MATCH=outside.0..62
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(csp_gen_linear_requant_channels PROPERTIES FIXTURES_SETUP linear_requant_channels_csp)
-    set_tests_properties(kpu_run_csp_requant_channels_needs_inputs PROPERTIES FIXTURES_REQUIRED linear_requant_channels_csp)
+    set_tests_properties(kpu_run_csp_requant_channels_synthesized PROPERTIES FIXTURES_REQUIRED linear_requant_channels_csp)
     add_test(NAME kpu_run_csp_lu_skips_lca
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
@@ -615,6 +616,22 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(kpu_run_csp_dflow_staged PROPERTIES
             FIXTURES_REQUIRED dflow_staged_csp FIXTURES_SETUP dflow_staged)
         set_tests_properties(dflow_check_staged PROPERTIES FIXTURES_REQUIRED dflow_staged)
+        # Synthesized inputs keep a per-channel scale's domains (#457): kpu-csp-gen writes an int8
+        # matmul with scale(qm[j], qs[j]), and kpu-run runs it at every level with no --inputs.
+        add_test(NAME csp_gen_requant_channels
+            COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 64 --tile 16 --dtype int8 --requant 3,8
+                    --requant-channels --target ${_deploy}/kpu_s1_combiner.json
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/requant_channels.csp)
+        set_tests_properties(csp_gen_requant_channels PROPERTIES FIXTURES_SETUP requant_channels_csp)
+        add_test(NAME kpu_run_requant_channels_synthesized
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/requant_channels.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1_combiner.json$<SEMICOLON>--level$<SEMICOLON>all
+                -DEXPECT_CODE=0
+                -DMUST_MATCH=cycle-accurate.*within.bound
+                -DMUST_NOT_MATCH=outside.0..62
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+        set_tests_properties(kpu_run_requant_channels_synthesized PROPERTIES FIXTURES_REQUIRED requant_channels_csp)
         # An L2 accumulator (#455): kpu-csp-gen --dataflow ws --init bias writes `acc C[:, j] in l2
         # init D[:, j]`, recorded at L-T1 (its .dflow and .tflow), checked (S5, TF13 for a partial),
         # and each rule broken on purpose in a copy.
@@ -717,6 +734,7 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(domainflow_viewer PROPERTIES FIXTURES_REQUIRED
             "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged;dflow_rtl_sample;dflow_rtl_sample_addressed")
         set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
+            csp_gen_requant_channels kpu_run_requant_channels_synthesized
             csp_gen_dflow_l2acc kpu_run_csp_dflow_l2acc dflow_check_l2acc tflow_check_l2acc l2acc_checks_selftest l2acc_views
             kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest domainflow_viewer
             kpu_run_csp_dflow_values_refuses kpu_run_csp_dflow_streamed dflow_check_streamed
@@ -829,7 +847,7 @@ if(KPU_BUILD_TESTS)
         kpu_run_csp_timeline kpu_run_csp_timeline_needs_lt1 kpu_run_csp_retain kpu_run_csp_inherit
         kpu_run_csp_sweep kpu_run_csp_sweep_refuses_one_run_records kpu_run_csp_sweep_bubbles_needs_lt1
         csp_gen_linear_requant kpu_run_csp_linear_requant kpu_run_csp_bubbles_lca
-        csp_gen_linear_requant_channels kpu_run_csp_requant_channels_needs_inputs
+        csp_gen_linear_requant_channels kpu_run_csp_requant_channels_synthesized
         kpu_run_l0_refuses_sweep
         PROPERTIES LABELS "program;driver;csp")
 
