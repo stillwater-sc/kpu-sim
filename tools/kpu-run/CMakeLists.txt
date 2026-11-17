@@ -720,6 +720,13 @@ if(KPU_BUILD_TESTS)
             "dflow_rtl_sample;dflow_matmul_48x48x48_t16;dflow_rtl_sample_addressed")
         # The viewer (step 3): pack each bundle, refuse a non-bundle, and run the page's data layer
         # in Node on the reference run, a retain chain, LU, a cut bundle and the RTL sample.
+        # The playback speeds, slowest one step per second, in a headless browser (skipped without
+        # Playwright).
+        add_test(NAME domainflow_playback
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/domainflow/test_playback.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow)
+        set_tests_properties(domainflow_playback PROPERTIES FIXTURES_REQUIRED dflow_reference
+            LABELS "program;csp;domainflow")
         add_test(NAME domainflow_viewer
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/domainflow/test_viewer.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_reference.dflow
