@@ -143,6 +143,25 @@ class L2AccViews(unittest.TestCase):
         page.close()
 
     # ---- domain-flow -----------------------------------------------------------------------
+    def test_domainflow_reads_partial_without_merges(self):
+        # #460's review: each optional column defaults on its own, as the C++ reader does, so a
+        # record with `partial` and no `merges` still loads and steps through a partial.
+        part = self.tmp / "partial-only.dflow"
+        shutil.copytree(DFLOW, part)
+        m = json.loads((part / "manifest.json").read_text())
+        t = m["tables"]["l2_staging"]
+        t["columns"] = [c for c in t["columns"] if c["name"] != "merges"]
+        (part / "manifest.json").write_text(json.dumps(m))
+        _m, T = dflow_check.load(Path(DFLOW))
+        first = next(i for i in range(T["steps"]["rows"]) if T["steps"]["merge"][i] == 1)
+        page, errors = self.open(pack("domainflow", part, self.tmp / "partial-only.html"))
+        page.fill("#jump", str(first))
+        page.press("#jump", "Enter")
+        page.wait_for_timeout(200)
+        self.assertRegex(page.inner_text("#l2-tiles"), r"p\d+ 1/0")   # merged once so far, of none recorded
+        self.assertEqual(errors, [])
+        page.close()
+
     def test_domainflow_follows_a_partial(self):
         m, T = dflow_check.load(Path(DFLOW))
         merge = T["steps"]["merge"]

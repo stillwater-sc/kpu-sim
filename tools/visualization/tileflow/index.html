@@ -225,7 +225,19 @@ function parse(files) {
     if (!R.l2.partialIv.has(s)) R.l2.partialIv.set(s, []);
     R.l2.partialIv.get(s).push([R.l2.t0[i], R.l2.t1[i]]);
   }
-  for (const v of R.l2.partialIv.values()) v.sort((x, y) => x[0] - y[0]);
+  // Sorted by start, then merged: partials of different compute tiles can share a slot index and
+  // overlap (TF13 keeps them apart per compute tile, not per slot index), and the binary search
+  // needs disjoint intervals, which are sorted by end too (#460's review).
+  for (const [s, v] of R.l2.partialIv) {
+    v.sort((x, y) => x[0] - y[0]);
+    const merged = [];
+    for (const [a, b] of v) {
+      const last = merged[merged.length - 1];
+      if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+      else merged.push([a, b]);
+    }
+    R.l2.partialIv.set(s, merged);
+  }
   R.ch = m.version === 6 ? tb("chain") : { rows: 0, n: 0 };
   {
     const t = m.tables.op_tiles, buf = files[t.file];
@@ -941,8 +953,8 @@ function slotResidencyAt(station, slot, t) {
 }
 // Version 6: the staged copy an L2 slot row holds at cycle t, the chain a compute tile's in or out row
 // carries at t (-1: none), and which of L-T1's phases t falls in. The phases are the record's.
-// Whether a partial in L2 slot `slot` overlaps [a, b). The copies in one slot never overlap
-// (tflow_check TF13), so sorted by start they are sorted by end too.
+// Whether a partial in L2 slot `slot` overlaps [a, b): a binary search over the slot's merged,
+// disjoint partial intervals (so sorted by end as well as by start).
 function partialOverlaps(slot, a, b) {
   const v = R.l2.partialIv.get(slot);
   if (!v) return false;

@@ -465,6 +465,9 @@ globalThis.DflowCore = (() => {
       if (!buf) throw new Error("missing " + t.file);
       R.l2_staging = { rows: t.rows };
       for (const c of t.columns) R.l2_staging[c.name] = column(buf, t, c.name);
+      // The optional partial and merges columns (#455) default to zero each when absent, as the C++
+      // reader does: a record may carry one without the other.
+      for (const name of ["partial", "merges"]) if (!R.l2_staging[name]) R.l2_staging[name] = new Array(t.rows).fill(0);
     }
     // Version 4: the fabric pipeline. Each accumulator's gemm chain as L-T1 timed it on the systolic
     // array (in0, front, in1, last, out1, per chain; each stream call's place in its chain).
