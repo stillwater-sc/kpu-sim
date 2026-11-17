@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The viewers show the L2 accumulator** (#456), from #455's record columns.
+  - **Domain-flow:** the L2 box shows each partial as an accumulator chip, `p<slot> <merged>/<merges>`,
+    from its first merge to its L2Release. The capacity line counts staged copies and partials
+    apart. The step panel names a Drain's merge (overwrite opens the partial and adds its init;
+    accumulate adds a call's result) and says whether its L2 address is a partial or a staging.
+    An accumulate Drain no longer resets the partial's arrival.
+  - **Tile-flow:**
+    - The header and the diagnostics count staged copies and accumulator partials apart, with an
+      "L2 accumulator" line (partials, merges, cycles held).
+    - An L2 slot holding a partial is drawn on its own teal ramp, with its own tooltip and
+      inspector line.
+  - **Fixed:** the tile-flow viewer's chain table has a column called `rows`, which overwrote the
+    row count. The header read "fabric chains NaN", the compute tiles' swimlane inspector said
+    "no chains", and its chain overlay loop never ran.
+  - Tests: `tools/visualization/test_l2acc_views.py` (CTest `l2acc_views`) loads both pages in a
+    headless browser on the L2-accumulator fixture, and on a record without the columns. It is
+    skipped without Playwright. It fails on the old pages.
+
 - **The record checkers know the L2 accumulator** (#455). A program with `acc ... in l2` (and its
   init) failed both checkers: `dflow_check` S2 ("a DRAIN carries an L2 address") and
   `tflow_check` TF13 ("staged in L2 ... and never fed"). Every `kpu-csp-gen --dataflow ws|is`
