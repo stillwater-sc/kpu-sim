@@ -106,11 +106,13 @@ tile into an L2 slot, the calls inside it feed the copy, and its L2_RELEASE free
     S4 all free at the end    every staging closes after it opens (only a refused run leaves one
                               open)
     S5 an L2 accumulator      (#455; the optional columns l2_staging.partial and .merges, and
-                              steps.merge) a partial's slot is opened by its overwrite Drain, every
-                              other Drain into it accumulates inside its life, it is written back
-                              once before its L2Release, it is never fed, and its merges are its
-                              Drains; a staged copy takes no merge. A partial's Drains and Writeback
-                              carry its L2 address (S2 allows them there, and only there)
+                              steps.merge) a partial's slot is opened by its overwrite Drain (its
+                              open step, checked from the partial's side: a Drain that names it,
+                              carries its L2 address and opens it), every other Drain into it
+                              accumulates inside its life, it is written back once, after its last
+                              Drain and before its L2Release, it is never fed, and its merges are
+                              its Drains; a staged copy takes no merge. A partial's Drains and
+                              Writeback carry its L2 address (S2 allows them there, and only there)
 
 Version 6 is the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md; #386):
 the level and producer, time where the level has it, each layer's geometry, the events both sides
@@ -817,6 +819,7 @@ def check_partials(m, T, bad, partial, merges, merge, complete):
     G, S = T["l2_staging"], T["steps"]
     ng, n = G["rows"], S["rows"]
     drains, writebacks = [0] * ng, [0] * ng
+    last_drain, writeback_at = [None] * ng, [None] * ng
     for i in range(n):
         g, k, mg = S["staging"][i], S["kind"][i], merge[i]
         if mg not in (0, OVERWRITE, ACCUMULATE):
@@ -838,6 +841,10 @@ def check_partials(m, T, bad, partial, merges, merge, complete):
             bad("S5", f"step {i} feeds staging {g}, an L2 accumulator's partial: a partial is merged into, never fed")
         elif k == DRAIN_KIND:
             drains[g] += 1
+            last_drain[g] = i
+            if writeback_at[g] is not None:
+                bad("S5", f"step {i} merges into partial {g} after its Writeback at step {writeback_at[g]}: "
+                          f"the Writeback carries no later merge")
             if i == o and mg != OVERWRITE:
                 bad("S5", f"step {i} opens partial {g} with merge {mg}, not overwrite")
             if i != o and mg != ACCUMULATE:
@@ -847,11 +854,22 @@ def check_partials(m, T, bad, partial, merges, merge, complete):
                 bad("S5", f"step {i} merges into partial {g} outside its life ({o}, {c})")
         elif k == WRITEBACK_KIND:
             writebacks[g] += 1
+            writeback_at[g] = i
             if not (o < i and (c == NONE64 or i < c)):
                 bad("S5", f"step {i} writes partial {g} back outside its life ({o}, {c})")
     for g in range(ng):
         if not partial[g]:
             continue
+        # Its open step, from the partial's side: the steps' own references can be lost, and then
+        # nothing above sees the opening at all.
+        o = G["open"][g]
+        if o < n:
+            f = S["flags"][o]
+            if (S["kind"][o] != DRAIN_KIND or merge[o] != OVERWRITE or S["staging"][o] != g
+                    or not (f & HAS_L2) or not (f & STAGES)):
+                bad("S5", f"partial {g} opens at step {o}, which is not an overwrite Drain that names it, carries "
+                          f"its L2 address and opens it (kind {S['kind'][o]}, merge {merge[o]}, staging "
+                          f"{S['staging'][o]}, flags {f:#x})")
         if G["feeds"][g]:
             bad("S5", f"partial {g} records {G['feeds'][g]} feeds; a partial is never fed")
         if complete and G["close"][g] != NONE64:
