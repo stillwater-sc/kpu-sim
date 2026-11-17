@@ -938,7 +938,8 @@ def check_fabric(m, T, bad):
     # A chain's dataflow is its Calls' (#395): a step that states none (0) takes the deployment's
     # default, lt1.fabric.default_dataflow. Compared only when the record carries both columns.
     step_df = S.get("dataflow") if C.get("dataflow") else None
-    default_df = {"os": 1, "ws": 2, "is": 3}.get(f.get("default_dataflow", ""), None)
+    # A manifest written before the field reads as os, as read_dflow does.
+    default_df = {"os": 1, "ws": 2, "is": 3}.get(f.get("default_dataflow", "os"), None)
     for c in range(C["rows"]):
         rows, cols, lane = C["used_rows"][c], C["used_cols"][c], C["lane"][c]
         in0, front, in1, last, out1, delay = (C[k][c] for k in ("in0", "front", "in1", "last", "out1", "link_delay"))

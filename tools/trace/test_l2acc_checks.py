@@ -324,6 +324,13 @@ class DflowStationary(unittest.TestCase):
         self.b.set("steps", "dataflow", self.call_step(), 0)
         self.fails("P2", "is os (the deployment's default)")
 
+    def test_an_older_manifest_defaults_to_os(self):
+        # Written before default_dataflow: a default Call reads as os, as read_dflow has it.
+        del self.b.manifest["lt1"]["fabric"]["default_dataflow"]
+        self.b.save_manifest()
+        self.b.set("steps", "dataflow", self.call_step(), 0)
+        self.fails("P2", "is os (the deployment's default)")
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
