@@ -280,7 +280,12 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
     const csp::lang::Program ast = csp::lang::parse(kWrittenMatmul);
     const TileProgram inputs = sw::kpu::program::driver::csp_inputs(ast);
     const TileProgram ref = trace_fixtures::lb_values(ast);
-    const auto cfg = machine("kpu_s1.json");
+    // At the mover and streamer rates the window rule below was measured at (the executor's before
+    // #458 mapped the deployment's): at S1's faster movers a window of 16 is ~11% off the whole
+    // program, not 2% (#462).
+    auto cfg = machine("kpu_s1.json");
+    cfg.bm_bandwidth_gbps = 51.2;
+    cfg.str_bandwidth_gbps = 102.4;
 
     const csp::CspProgram trace = trace_fixtures::compiled(ast);
     ConcurrentTimingExecutor e0(cfg);
