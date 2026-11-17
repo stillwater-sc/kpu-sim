@@ -276,6 +276,9 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         // the checker keys a table's row count by that name
         t.put("used_cols", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.cols; }));
         t.put("calls", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.calls; }));
+        t.put("dataflow", "u8", col<std::uint8_t>(rec.chains, [](const Ch& x) { return x.dataflow; }));   // #395
+        t.put("preload", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.preload; }));
+        t.put("streamed", "u32", col<std::uint32_t>(rec.chains, [](const Ch& x) { return x.streamed; }));
         tables["lt1_chains"] = write_table(t, dir);
     }
     {
@@ -616,9 +619,13 @@ DFR read_dflow(const std::string& dir) {
                 auto rows = read_col<std::uint32_t>(t, blob, "used_rows", "u32", n);
                 auto cols = read_col<std::uint32_t>(t, blob, "used_cols", "u32", n);
                 auto calls = read_col<std::uint32_t>(t, blob, "calls", "u32", n);
+                auto dataflow = columnar::read_col_or<std::uint8_t>(t, blob, "dataflow", "u8", n, 1);   // #395; older: os
+                auto preload = columnar::read_col_or<std::uint32_t>(t, blob, "preload", "u32", n, 0);
+                auto streamed = columnar::read_col_or<std::uint32_t>(t, blob, "streamed", "u32", n, 0);
                 for (std::size_t i = 0; i < n; ++i)
                     rec.chains.push_back({tile[i], lane[i], rows[i], cols[i], calls[i], first[i], lastA[i], drain[i],
-                                          in0[i], front[i], in1[i], last[i], out1[i], delay[i]});
+                                          in0[i], front[i], in1[i], last[i], out1[i], delay[i], dataflow[i], preload[i],
+                                          streamed[i]});
             }
             {
                 auto [t, blob] = table("lt1_calls", n);

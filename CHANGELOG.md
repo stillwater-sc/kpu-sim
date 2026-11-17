@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A reduction's dataflow, stated in the program** (#395, step 1 of 2).
   - `acc C[:, j] in l2 dataflow ws { ... }` (or `is`, `os`) says which operand the array holds.
-    Unstated, the deployment's new `fabric.dataflow` applies (os when undeclared, and written
-    only when declared, so existing specs keep their digests).
+    Unstated on an L2 accumulator, the deployment's new `fabric.dataflow` applies (os when
+    undeclared, and written only when declared, so existing specs keep their digests). A fabric
+    accumulator holds C in the PEs, so it is always os.
   - `ws` and `is` need `in l2`, because each call's partial sums leave the array. The walker and
     the validator both refuse them on an in-fabric accumulator.
   - The walker stamps the dataflow on the accumulator's Calls and their Drains (`Action::dataflow`).
@@ -22,6 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - L-B's values do not depend on it (the existing per-tile test).
   - Next, step 2: L-T1 times each dataflow by the RTL's rules, and the `.tflow` record says which
     it used. L-CA follows the cycle-accurate tile (#401).
+- **L-T1 times weight- and input-stationary reductions by the RTL's rules** (#395, step 2 of 2).
+  - A ws or is call is a chain of one. Its PRELOAD shifts the held tile (B's K x N, or Aᵀ's
+    K x M) down the columns in R clocks, R being the array's rows, whatever K is. Then S rows
+    stream through (ws: M rows of A; is: N columns of B), and the partial sums leave south:
+    `last = in1 + W − 1`, `out1 = last + R`. The compute tile is busy `R + max(S, R)`, so the
+    next PRELOAD waits for the previous stream to leave (systars
+    `docs/architecture/systolic-tile.md`). There is no north link.
+  - OS is unchanged. A stationary tile larger than the array stays one leg.
+  - The `.tflow` `chain` table and the `.dflow` `lt1_chains` table gain the optional columns
+    `dataflow`, `preload` and `streamed`. `tflow_check` TF14 and `dflow_check` P2/P3/P5 check each
+    dataflow's formulas; only OS chains are in the top-link sequence.
+  - `kpu-run` names each dataflow's chains on its fabric line. The domain-flow viewer's pipeline
+    note and the tile-flow viewer's chain phases and labels name the dataflow, instead of calling
+    every chain output-stationary.
+  - On S1 (128 x 64 PEs), 64-cube in 16-tiles: OS 1596 cycles; ws and is 16748. A 16-row tile
+    pays the 128-clock PRELOAD and a 128-clock command interval on every call. That is the cost
+    of a small tile on a large array under the RTL's rules, not a fault of the model.
 
 - **The domain-flow viewer plays at one step per second**, a new slowest speed, for following
   each event as it happens. The speed control was 4, 15, 60 and 240 steps per second. Tested in a

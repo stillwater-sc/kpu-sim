@@ -73,8 +73,10 @@ as its default. The checkers type-check an optional column when it is present. T
 | `steps` | `merge` | `u8` | 0 | a Drain's merge into an L2 accumulator: 0 none, 1 overwrite, 2 accumulate |
 | `steps` | `stages` | `u16` | 0 | the vector stages the action applies as it moves its tile, a bit per `csp::VeOp` (add 0, relu 1, gelu 2, silu 3, atan 4, mxint8 5, mxfp8 6, scale 7, init 8); on a merge they are the Combiner's, in the order the language fixes (#456) |
 | `steps` | `init_tile` | `u32` | none | the init stage's tile (an index into `tiles`): the first merge's MERGE_INIT (#456) |
-| `steps` | `dataflow` | `u8` | 0 | a Call's, or its Drain's, dataflow as the program states it (`acc ... dataflow ws`): 0 default (the deployment's `fabric.dataflow`), 1 os, 2 ws, 3 is (#395) |
+| `steps` | `dataflow` | `u8` | 0 | a Call's, or its Drain's, dataflow as the program states it (`acc ... dataflow ws`): 0 default (an L2 accumulator that states none: the deployment's `fabric.dataflow`), 1 os, 2 ws, 3 is; a fabric accumulator's is always 1 (#395) |
 | `.tflow` `l2_residency` | `partial`, `merges` | `u8`, `u32` | 0 | the same, for L-T1's L2 slots |
+| `.tflow` `chain`, `.dflow` `lt1_chains` | `dataflow` | `u8` | 1 | the dataflow L-T1 timed the chain by, resolved: 1 os, 2 ws, 3 is (#395) |
+| `.tflow` `chain`, `.dflow` `lt1_chains` | `preload`, `streamed` | `u32` | 0 | a ws or is chain's PRELOAD clocks (R, the array's rows) and rows streamed (S): `front = in0 + R`, `in1 = front + S`, `last = in1 + W − 1`, `out1 = last + R`, its call holding the compute tile `R + max(S, R)`; checked by `tflow_check` TF14 and `dflow_check` P2/P3 |
 
 `dflow_check` S5 and `tflow_check` TF13 check a partial. A record written before these columns had
 no partials (L2 accumulators came later), so it reads as before.

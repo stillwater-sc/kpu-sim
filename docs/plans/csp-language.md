@@ -99,8 +99,9 @@ acc        := 'acc' tile 'in' 'fabric' [ 'dataflow' 'os' ] [ 'init' tile ] '{' s
                                            -- an L2 accumulator (#429, #430): each tile's partial in
                                            -- an L2 slot, every call merged into it by the Combiner
 df         := 'os' | 'ws' | 'is'           -- the reduction's dataflow on the array (#395): which
-                                           -- operand the PEs hold. Unstated: the deployment's
-                                           -- fabric.dataflow, os when undeclared. ws and is leave
+                                           -- operand the PEs hold. Unstated on an l2 acc: the
+                                           -- deployment's fabric.dataflow, os when undeclared; a
+                                           -- fabric acc is always os. ws and is leave
                                            -- each call's partial sums south, so they need 'in l2'.
 stage      := 'stage' tiles 'in' 'l2' '{' stmt* '}'           -- resident tiles copied into L2 for the block
 call       := 'call' FN '(' tiles ')' ( '->' | '+->' ) tile [ context ] ';'

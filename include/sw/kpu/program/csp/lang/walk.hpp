@@ -649,7 +649,9 @@ private:
                 if (x) init_acc(s, y, *x, self);
                 acc_[k] = AccState::Open;
                 acc_calls_[k] = 0;
-                dataflow_[k] = dataflow_of(s);
+                // A fabric accumulator holds C in the PEs: output-stationary, stated or not, so the
+                // deployment's default (fabric.dataflow) is for an L2 accumulator only.
+                dataflow_[k] = Dataflow::OS;
                 frames_.push_back(Frame{&s.body, 0, Frame::Kind::Acc, {}, 0, 0, k, s.line, late_seq_});
                 break;
             }

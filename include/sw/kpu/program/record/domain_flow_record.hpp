@@ -243,6 +243,10 @@ struct DomainFlowRecord {
         std::uint32_t tile = 0, lane = 0, rows = 0, cols = 0, calls = 0;
         std::uint64_t first_action = 0, last_action = 0, drain_action = kNone64;   // none: no Drain recorded
         std::uint64_t in0 = 0, front = 0, in1 = 0, last = kNone64, out1 = kNone64, link_delay = 0;   // none: calls not over
+        // #395: its dataflow (1 os, 2 ws, 3 is) and, for ws and is, PRELOAD's R clocks and S rows
+        // streamed. Optional columns: absent = os.
+        std::uint8_t dataflow = 1;
+        std::uint32_t preload = 0, streamed = 0;
     };
     struct Call { std::uint64_t action = 0; std::uint32_t chain = 0, pos = 0; };
     bool fabric = false;
@@ -320,6 +324,9 @@ inline void attach_lt1(DomainFlowRecord& rec, const driver::CspLevelOutcome& lt1
         x.in0 = c.in0;
         x.front = c.front;
         x.in1 = c.in1;
+        x.dataflow = static_cast<std::uint8_t>(c.dataflow);
+        x.preload = c.preload;
+        x.streamed = c.streamed;
         if (c.closed) {                     // its calls are over: last and out1 are known
             x.last = c.last;
             x.out1 = c.out1;
