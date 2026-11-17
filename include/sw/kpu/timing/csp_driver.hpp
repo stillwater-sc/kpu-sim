@@ -130,6 +130,9 @@ public:
         std::size_t staged_feeds = 0;       // Feeds that read an L2-staged copy
         std::uint64_t merges = 0;           // Drains the Combiner merged into an L2 partial (#429)
         std::uint64_t merge_accumulates = 0;    //   of them, read-modify-writes
+        // The banked L2 (#401): its row accesses and the clocks rows waited for a bank, by client
+        // (BlockMover, Streamer, drain, Combiner) and by bank. Absent: L2 is pooled.
+        std::optional<L2Banks::Stats> l2_banks;
         // Each staged copy's L2 slot as L-CA executed it: (tile, slot), in claim order (#399).
         std::vector<std::pair<program::TileCoord, std::uint32_t>> l2_placement;
         // Each residency's L3 slot as L-CA executed it: (tile, slot), in the order the slots were
@@ -289,6 +292,7 @@ public:
         r.staged_feeds = staged_feeds_;
         r.merges = exec_.merges();
         r.merge_accumulates = exec_.merge_accumulates();
+        if (const L2Banks* b = exec_.l2_banks()) r.l2_banks = b->stats();
         for (const auto& [slot, tile] : exec_.l3_tile_tag_cam(0).claim_log())
             r.l3_placement.emplace_back(coord_.at(tile), slot);
         for (const auto& [slot, tile] : exec_.l2_tag_cam().claim_log())

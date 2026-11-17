@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <sw/kpu/timing/l2_banks.hpp>
 #include <sw/kpu/timing/process_interface.hpp>
 #include <sw/kpu/timing/dma_engine_process.hpp>
 #include <sw/kpu/timing/credit_pool.hpp>
@@ -77,6 +78,7 @@ public:
         double clock_ghz = 1.0;        ///< Reference clock in GHz
         bool supports_transpose = true; ///< Can transpose during move
         bool priority_aging = false;   ///< If true, prefer oldest ready tile (prevents starvation)
+        L2Banks* l2_banks = nullptr;   ///< the banked L2 (#401); null: the pooled L2
         size_t l2_credit_reserve = 0;  ///< L2 credits moves may NOT consume (reserved for
                                        ///< compute-result drains; prevents credit starvation)
         std::string name = "BM";       ///< Human-readable name
@@ -396,6 +398,17 @@ private:
     [[nodiscard]] Cycle compute_transfer_cycles(Size bytes) const {
         Cycle data_cycles = static_cast<Cycle>(std::ceil(bytes * cycles_per_byte_));
         return config_.startup_latency + data_cycles;
+    }
+
+    // An L2 transfer's cycles (#401): banked, its rows booked on their banks' ports from `now`;
+    // pooled (no banks declared), bytes over the rate, as before.
+    [[nodiscard]] Cycle l2_transfer_cycles(const TileDescriptor& t, uint32_t slot, L2Banks::Access a,
+                                           L2Banks::Client who, Cycle now) const {
+        if (!config_.l2_banks) return compute_transfer_cycles(t.size_bytes);
+        L2Banks& b = *config_.l2_banks;
+        return config_.startup_latency +
+               b.book(t.cf_tile < 0 ? 0 : static_cast<std::size_t>(t.cf_tile), slot, t.size_bytes, a, who, now,
+                      b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz));
     }
 
     /**
@@ -797,7 +810,6 @@ private:
                                    static_cast<std::ptrdiff_t>(found_index));
         }
 
-        Cycle transfer_cycles = compute_transfer_cycles(move_tile.size_bytes);
         // A staging Move's copy lives in the program's L2 slot, claimed with the credit (the scan
         // chose one whose slot is ready); an unstaged copy takes a transient slot.
         uint32_t l2_slot = 0;
@@ -807,6 +819,8 @@ private:
         } else {
             l2_slot = allocate_l2_slot();
         }
+        Cycle transfer_cycles = l2_transfer_cycles(move_tile, l2_slot, L2Banks::Access::Write,
+                                                   L2Banks::Client::BlockMover, current_cycle);
 
         in_flight_ = InFlightTransfer(
             move_tile,
@@ -937,7 +951,8 @@ private:
         // Start the writeback - remove from queue at found position
         TileDescriptor wb_tile = writeback_queue_.remove_at(found_index);
         // The vector unit (bm.egress) works on the tile as it streams: the slower sets the pace.
-        const Cycle move = compute_transfer_cycles(wb_tile.size_bytes);
+        const Cycle move = l2_transfer_cycles(wb_tile, found_entry->slot_id, L2Banks::Access::Read,
+                                              L2Banks::Client::BlockMover, current_cycle);
         Cycle transfer_cycles = std::max(move, wb_tile.ve_cycles);
         ve_busy_cycles_ += wb_tile.ve_cycles;
         if (wb_tile.ve_cycles > move) ve_bound_cycles_ += wb_tile.ve_cycles - move;

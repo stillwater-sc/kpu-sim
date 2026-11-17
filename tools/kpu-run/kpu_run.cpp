@@ -194,6 +194,17 @@ void print_levels(const std::vector<CspLevelOutcome>& levels, const std::vector<
         }
         std::cout << "        vector  combiner " << o.ve.combiner_busy << "/" << o.ve.combiner_bound << "  bm " << o.ve.bm_busy << "/"
                   << o.ve.bm_bound << "  fabric " << o.ve.fabric << "   (busy/bound)   window " << window << "\n";
+        // The banked L2 (#401): its row accesses, and the clocks rows waited for their bank.
+        if (o.l2_banks) {
+            const auto& b = *o.l2_banks;
+            std::cout << "        L2 banks  " << b.bank_stalls.size() << " banks, " << b.accesses << " row accesses, "
+                      << b.stalls_total() << " stalled clocks";
+            const char* who[] = {"BlockMover", "Streamer", "drain", "Combiner"};
+            const char* sep = " (";
+            for (std::size_t c = 0; c < b.stalls.size(); ++c)
+                if (b.stalls[c]) { std::cout << sep << who[c] << " " << b.stalls[c]; sep = ", "; }
+            std::cout << (std::string(sep) == ", " ? ")" : "") << "\n";
+        }
         for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
     }
     // Calibration (#458): timing answers to L-CA, so L-T1's makespan is reported against it. Report

@@ -36,15 +36,17 @@
 //                            rate for its statistics, and `unmapped` names the gap (decided
 //                            2026-11-17: name it, leave the legacy model).
 //
-// NOT MAPPED, listed in `unmapped`: fabric.pe_rows/pe_cols (with the cycle-accurate tile, #401)
-// and l2.banks_per_tile, which is an L-T2 bank count and not a count of tile-sized L2 buffers
-// (with #388/#417). The executor keeps its defaults for those.
+// NOT MAPPED, listed in `unmapped`: fabric.pe_rows/pe_cols (with the cycle-accurate tile, #401).
+// MAPPED (#401 slice 1): l2.banks_per_tile, or the systolic block's scratchpad, bank the L2
+// (timing/l2_banks.hpp), each bank with esg#24's ports; the defaults they leave (a row width,
+// rows per bank, the read latency) are listed in `unmapped`.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 #pragma once
 
+#include <cmath>
 #include <sw/kpu/program/platform/array_layout.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
 #include <sw/kpu/program/platform/floorplan.hpp>
@@ -168,12 +170,35 @@ inline std::optional<CspDeviceConfig> csp_config_from(
     if (!(d.macs_per_cycle > 0.0)) return fail("macs_per_cycle must be positive");
     c.num_compute_tiles = d.compute_tiles;
     c.macs_per_cycle = d.macs_per_cycle;
-    if (d.l2.banks_per_tile)
-        out.unmapped.push_back("l2.banks_per_tile: an L-T2 bank count, not tile-sized L2 "
-                               "buffers; l2_bank_count keeps its default");
-    if (d.systolic)
-        out.unmapped.push_back("systolic: the RTL tile's slots, banks, latencies, widths and dataflow (#396) "
-                               "are declared; the executor keeps its own L2 and accumulator model");
+    // The banked L2 (#401; docs/plans/banked-l2-at-lca.md): the RTL tile's systolic block when
+    // declared (its scratchpad's banks, rows, row width and read latency), else l2.banks_per_tile
+    // with a row of the array's columns and the RTL's read latency. Each bank serves esg#24's 2
+    // reads and 1 write per clock. Neither declared: the pooled L2, as before.
+    if (d.systolic) {
+        const auto& y = *d.systolic;
+        L2Banks::Geometry g;
+        g.banks = static_cast<std::uint32_t>(y.sp_banks);
+        g.rows_per_bank = static_cast<std::uint32_t>(y.sp_rows_per_bank);
+        g.row_bytes = static_cast<std::uint32_t>(
+            std::max<program::Dim>(1, y.grid_cols * y.tile_cols * std::max<program::Dim>(1, y.input_bits / 8)));
+        g.read_latency = static_cast<Cycle>(y.spad_read_delay);
+        c.l2_banks = g;
+        out.unmapped.push_back("systolic: L2 is banked from its scratchpad (sp_banks, sp_rows_per_bank, a row of "
+                               "grid_cols x tile_cols inputs, spad_read_delay); its slots, accumulator banks, "
+                               "widths and dataflow (#396) are declared, not modelled");
+    } else if (d.l2.banks_per_tile) {
+        const program::Dim cols = d.fabric.pe_cols ? *d.fabric.pe_cols
+                                          : std::max<program::Dim>(1, static_cast<program::Dim>(std::llround(std::sqrt(d.macs_per_cycle))));
+        L2Banks::Geometry g;
+        g.banks = static_cast<std::uint32_t>(*d.l2.banks_per_tile);
+        g.row_bytes = static_cast<std::uint32_t>(std::max<program::Dim>(1, cols * std::max<program::Dim>(1, d.element_bytes)));
+        c.l2_banks = g;
+        out.unmapped.push_back("l2.banks_per_tile: L2 is banked, but its row (" + std::to_string(g.row_bytes) +
+                               " bytes: " + (d.fabric.pe_cols ? "the array's columns" : "macs_per_cycle's square root") +
+                               " of elements), its rows per bank (as many as the slots need) and its read latency (" +
+                               std::to_string(g.read_latency) + " clocks, the RTL's) are defaults; a systolic block "
+                               "declares them");
+    }
     return out;
 }
 

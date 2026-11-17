@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <sw/kpu/timing/l2_banks.hpp>
 #include <sw/kpu/timing/process_interface.hpp>
 #include <sw/kpu/timing/credit_pool.hpp>
 #include <sw/kpu/timing/tag_cam.hpp>
@@ -59,6 +60,7 @@ public:
         double bandwidth_gbps = 102.4; ///< L2↔L1 bandwidth (internal, very high)
         double clock_ghz = 1.0;        ///< Reference clock in GHz
         bool priority_aging = false;   ///< If true, prefer oldest ready tile (prevents starvation)
+        L2Banks* l2_banks = nullptr;   ///< the banked L2 (#401); null: the pooled L2
         std::string name = "STR";      ///< Human-readable name
 
         /// Generate human-readable name: "CT(0,0):RowSTR" or "CT(0,1):ColSTR" format
@@ -267,6 +269,17 @@ private:
         return config_.startup_latency + data_cycles;
     }
 
+    // An L2 transfer's cycles (#401): banked, its rows booked on their banks' ports from `now`;
+    // pooled (no banks declared), bytes over the rate, as before.
+    [[nodiscard]] Cycle l2_transfer_cycles(const TileDescriptor& t, uint32_t slot, L2Banks::Access a,
+                                           L2Banks::Client who, Cycle now) const {
+        if (!config_.l2_banks) return compute_transfer_cycles(t.size_bytes);
+        L2Banks& b = *config_.l2_banks;
+        return config_.startup_latency +
+               b.book(t.cf_tile < 0 ? 0 : static_cast<std::size_t>(t.cf_tile), slot, t.size_bytes, a, who, now,
+                      b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz));
+    }
+
     /**
      * @brief Check for and process completed transfer
      */
@@ -400,7 +413,8 @@ private:
 
         // Start the feed - remove from queue at found position
         TileDescriptor feed_tile = feed_queue_.remove_at(found_index);
-        Cycle transfer_cycles = compute_transfer_cycles(feed_tile.size_bytes);
+        Cycle transfer_cycles = l2_transfer_cycles(feed_tile, found_entry->slot_id, L2Banks::Access::Read,
+                                                   L2Banks::Client::Streamer, current_cycle);
 
         in_flight_ = InFlightTransfer(
             feed_tile,
@@ -505,10 +519,6 @@ private:
         TileDescriptor drain_tile = drain_queue_.dequeue();
         // The fabric's epilogue first, then the drain with the vector unit working on the tile
         // as it streams: the longer of the two sets the pace.
-        const Cycle move = compute_transfer_cycles(drain_tile.size_bytes);
-        Cycle transfer_cycles = drain_tile.fabric_cycles + std::max(move, drain_tile.ve_cycles);
-        ve_busy_cycles_ += drain_tile.ve_cycles;
-        if (drain_tile.ve_cycles > move) ve_bound_cycles_ += drain_tile.ve_cycles - move;
         uint32_t l2_slot = 0;
         if (drain_tile.merge != TileDescriptor::kMergeNone) {
             l2_slot = static_cast<uint32_t>(drain_tile.l2_slot);
@@ -516,6 +526,13 @@ private:
         } else {
             l2_slot = allocate_l2_slot();
         }
+        // Into L2: a write, or the Combiner's read-modify-write when it merges into a partial.
+        const Cycle move = l2_transfer_cycles(
+            drain_tile, l2_slot, accumulate ? L2Banks::Access::ReadModifyWrite : L2Banks::Access::Write,
+            accumulate ? L2Banks::Client::Combiner : L2Banks::Client::Drain, current_cycle);
+        Cycle transfer_cycles = drain_tile.fabric_cycles + std::max(move, drain_tile.ve_cycles);
+        ve_busy_cycles_ += drain_tile.ve_cycles;
+        if (drain_tile.ve_cycles > move) ve_bound_cycles_ += drain_tile.ve_cycles - move;
 
         in_flight_ = InFlightTransfer(
             drain_tile,

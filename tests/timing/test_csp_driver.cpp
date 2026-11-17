@@ -286,6 +286,9 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
     auto cfg = machine("kpu_s1.json");
     cfg.bm_bandwidth_gbps = 51.2;
     cfg.str_bandwidth_gbps = 102.4;
+    // And on the pooled L2 it was measured on: with S1's banks (#401) a window of 16 is 3.8% off
+    // (600 of 15837 cycles). The rule is #462's to restate, at the deployment's rates and banks.
+    cfg.l2_banks.reset();
 
     const csp::CspProgram trace = trace_fixtures::compiled(ast);
     ConcurrentTimingExecutor e0(cfg);

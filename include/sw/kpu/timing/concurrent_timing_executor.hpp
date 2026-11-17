@@ -9,6 +9,7 @@
 #pragma once
 
 #include <sw/kpu/program/tile_kernels.hpp>
+#include <sw/kpu/timing/l2_banks.hpp>
 #include <sw/kpu/timing/tile_descriptor.hpp>
 #include <sw/kpu/timing/credit_pool.hpp>
 #include <sw/kpu/timing/tag_cam.hpp>
@@ -173,8 +174,11 @@ public:
         Cycle bm_startup_latency = 4;     ///< BlockMover startup latency
 
         // L2 configuration
-        size_t l2_bank_count = 64;        ///< Number of L2 banks
+        size_t l2_bank_count = 64;        ///< L2 slots (tile-sized; the credit pool's size)
         size_t l2_bank_size = 64 * 1024;  ///< Size of each L2 bank (64KB)
+        /// The banked L2 (#401; timing/l2_banks.hpp): banks of rows, each with its ports, that
+        /// time every L2 transfer row by row. Absent: the pooled L2, every transfer at its rate.
+        std::optional<L2Banks::Geometry> l2_banks;
 
         // Streamer configuration
         size_t num_row_streamers = 2;     ///< Row streamers (West edge)
@@ -689,6 +693,8 @@ public:
     // l3_tile_credits(h), l3_tile_tag_cam(h) and l3_credits_available().
     [[nodiscard]] CreditPool& l3_credits() { return l3_tile_credits(single_l3_tile("l3_credits")); }
     [[nodiscard]] CreditPool& l2_credits() { return l2_credits_; }
+    /// The banked L2's calendar and its counts (#401); null when L2 is pooled.
+    [[nodiscard]] const L2Banks* l2_banks() const { return l2_banks_.get(); }
     [[nodiscard]] TagCAM& l3_tag_cam() { return l3_tile_tag_cam(single_l3_tile("l3_tag_cam")); }
     [[nodiscard]] size_t l3_tiles() const { return l3_tile_credits_.size(); }
     /// The compute fabric: its tiles (0 = the legacy unbounded model) and each one's busy cycles.
@@ -721,6 +727,7 @@ private:
     std::vector<std::unique_ptr<TagCAM>> l3_tile_cams_;
     CreditPool l2_credits_;
     TagCAM l2_tag_cam_;
+    std::unique_ptr<L2Banks> l2_banks_;     // the banked L2 (#401), or null: pooled
 
     // The NoC (step 4b.4): the fabric, and the adapters the DMA engines and BlockMovers
     // push through. Deliveries are read from the fabric's lists past these cursors.
@@ -1102,6 +1109,12 @@ inline void ConcurrentTimingExecutor::create_components() {
         if (movers_on_[h].empty())
             throw std::invalid_argument("ConcurrentTimingExecutor: L3 tile " + std::to_string(h) +
                                         " has no BlockMover, so nothing could leave it");
+    // The banked L2 (#401): one port calendar per compute tile, shared by its BlockMovers and
+    // Streamers, before they are built.
+    if (config_.l2_banks) {
+        L2Banks::Geometry g = *config_.l2_banks;
+        l2_banks_ = std::make_unique<L2Banks>(g, std::max<size_t>(1, config_.num_compute_tiles));
+    }
     for (size_t i = 0; i < config_.num_block_movers; ++i) {
         BlockMoverProcess::Config bm_config;
         bm_config.mover_id = static_cast<uint32_t>(100 + i);  // 100, 101, 102, ...
@@ -1110,6 +1123,7 @@ inline void ConcurrentTimingExecutor::create_components() {
             static_cast<uint32_t>(i % config_.l3_tile_cols)
         );
         bm_config.bandwidth_gbps = config_.bm_bandwidth_gbps;
+        bm_config.l2_banks = l2_banks_.get();
         bm_config.startup_latency = config_.bm_startup_latency;
         bm_config.clock_ghz = config_.clock_ghz;
         bm_config.priority_aging = config_.enable_priority_aging;
@@ -1146,6 +1160,7 @@ inline void ConcurrentTimingExecutor::create_components() {
     // Row streamers are positioned along the West edge of the compute grid
     for (size_t i = 0; i < config_.num_row_streamers; ++i) {
         StreamerProcess::Config str_config;
+        str_config.l2_banks = l2_banks_.get();
         str_config.streamer_id = static_cast<uint32_t>(200 + i);  // 200, 201, ...
         str_config.type = StreamerType::ROW_STREAMER;
         str_config.compute_tile_pos = GridPosition(
@@ -1177,6 +1192,7 @@ inline void ConcurrentTimingExecutor::create_components() {
     // Column streamers are positioned along the North edge of the compute grid
     for (size_t i = 0; i < config_.num_col_streamers; ++i) {
         StreamerProcess::Config str_config;
+        str_config.l2_banks = l2_banks_.get();
         str_config.streamer_id = static_cast<uint32_t>(210 + i);  // 210, 211, ...
         str_config.type = StreamerType::COL_STREAMER;
         str_config.compute_tile_pos = GridPosition(

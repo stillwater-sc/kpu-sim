@@ -135,8 +135,11 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
             // The MODULE count, which nothing schedules on yet -- it exists for the
             // naming map (#282 increment 3). Not the capacity: see DeviceSpecification::L3.
             return false;
-        case SpecField::L3Banks:
         case SpecField::L2BanksPerTile:
+            // L-CA banks its L2 (#401; timing/l2_banks.hpp): rows walk the banks, each with its
+            // ports. L-T1 times a tile move, not its rows.
+            return l == ExecutionLevel::CycleAccurate;
+        case SpecField::L3Banks:
         case SpecField::L1Vectors:
         case SpecField::DmaBurst:
             return false;                        // §3.3 resource vocabulary -- #283
@@ -159,7 +162,8 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
         case SpecField::Systolic:
             // The RTL tile's own configuration (#396): its slots, banks, latencies, widths and
             // dataflow. Declared and validated so a deployment derived from the generator states
-            // the same machine; no level models the tile at that grain yet.
+            // the same machine. L-CA takes its scratchpad's banks, rows and read latency for its
+            // banked L2 (#401), and says so; the rest is not modelled, so the block as a whole is not.
             return false;
     }
     return false;
