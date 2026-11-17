@@ -136,7 +136,8 @@ emit (with identities), typed element values, operand domains, expected values a
                               position and parent exist; its layers are modelled and its addresses
                               inside them; a transaction moves between the layers its kind names
     E2 identities             no two events share a key (kind, process, tile, layers and addresses,
-                              loop indices, row, beat), and none shares (kind, action, row, beat)
+                              the position's program line and loop indices, row, beat), and none
+                              shares (kind, action, row, beat)
     E3 progress               a row event (BM_ROW, STR_ROW, DRAIN_ROW) is a child of a transaction
                               of its kind, of the same tile and action, its row inside the tile, and
                               (timed) inside its parent's [cycle, end]; only row events have rows
@@ -161,6 +162,12 @@ accumulator straight to L3 (it joins the WRITEBACK action and stands for the til
 too), and an L3 declared as flat word-addressed memory (geometry.l3 words and word_bytes instead
 of slots and banks): its addresses are words, a residency keeps one, and no credit names it. A
 6.0 record may use neither, and an L3 declared both ways is refused (G1).
+
+Version 6.2 (manifest "minor": 2; #402) describes kpu-sim's timed levels: L2, the accumulator and
+the array's edge addressed by slot, not by banks and rows (geometry.<layer> {"modelled": true,
+"slots": N}, N >= 0). An event's address in such a layer is a slot, < N, or none; a layer of 0
+slots has no addresses. 6.2 includes 6.1. A layer declared both ways (slots, and banks, rows, a
+row width, an interleave, or cols) is refused (G1).
 
     --result prints only the result -- the level, the producer, the cycles to result and a digest
     of each operand's final values -- which is what CI compares (D3), never the event sequence.
@@ -239,7 +246,8 @@ PROGRESS = {EV_BM_ROW: EV_BM, EV_STR_ROW: EV_STREAM, EV_DRAIN_ROW: EV_DRAIN}
 DATA_EDGES = {(DRAM, L3), (L3, L2), (L2, L1), (L1, ACC), (ACC, L2), (L2, L3), (L3, DRAM)}
 DATA_EDGES_61 = DATA_EDGES | {(ACC, L3)}           # 6.1: the RTL's acc -> l3 store
 # Version 6's minor revisions: 1 adds the acc -> l3 DRAIN and the word-addressed L3 (#398).
-MINORS = (0, 1)
+MINORS = (0, 1, 2)
+SLOTTED = ("l2", "acc", "l1")               # the layers 6.2 may address by slot (#402)
 DRAIN_KIND, WRITEBACK_KIND = 5, 3
 ELEMENTS = {"int8": 1, "int32": 4, "fp16": 2, "bf16": 2, "fp32": 4, "fp8_e4m3": 1, "fp8_e5m2": 1}
 INTERLEAVES = ("row-mod-banks",)
@@ -1205,11 +1213,18 @@ def _addressed(g):
     return isinstance(x, dict) and ("words" in x or "word_bytes" in x)
 
 
+def _slotted(x):
+    """Whether a layer's geometry is the slotted form (6.2): slots, not banks and rows."""
+    return isinstance(x, dict) and "slots" in x
+
+
 def _extent(g, layer):
     """How many addresses a modelled layer has: L3 slots (or words, addressed), L2 or accumulator
-    rows, L1 edge lanes; None when any address is valid (DRAM)."""
+    rows, L1 edge lanes, or (6.2) a layer's slots; None when any address is valid (DRAM)."""
     if layer == L3:
         return g["l3"]["words"] if _addressed(g) else g["l3"]["slots"]
+    if layer in (L2, ACC, L1) and _slotted(g[LAYERS[layer]]):
+        return g[LAYERS[layer]]["slots"]
     if layer in (L2, ACC):
         return g[LAYERS[layer]]["rows"]
     if layer == L1:
@@ -1246,6 +1261,19 @@ def check_v6(m, T, bad):
             if "slots" in x or "banks" in x:
                 bad("G1", "geometry.l3 mixes the two L3 forms: words and word_bytes, and slots or banks")
                 geometry_ok = False
+        if name in SLOTTED and _slotted(x):
+            # 6.2: addressed by slot. Not also by rows.
+            if minor < 2:
+                bad("G1", f"geometry.{name} is addressed by slot; that needs version 6.2 (minor 2)")
+            mixed = [k for k in ("banks", "rows", "row_bytes", "interleave", "cols") if k in x]
+            if mixed:
+                bad("G1", f"geometry.{name} mixes the two forms: slots, and {', '.join(mixed)}")
+                geometry_ok = False
+            v = x["slots"]
+            if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                bad("G1", f"geometry.{name}.slots is {v!r}, not an integer >= 0")
+                geometry_ok = False
+            continue
         need = {"l3": ("words", "word_bytes") if addressed else ("slots", "banks"), "l2": ("banks", "rows", "row_bytes"),
                 "acc": ("banks", "rows", "row_bytes"), "l1": ("rows", "cols")}.get(name, ())
         for k in need:
@@ -1291,6 +1319,11 @@ def check_v6(m, T, bad):
             return ()
         f = W["loop_first"][w]
         return tuple((L["var"][f + d], L["value"][f + d]) for d in range(W["loop_count"][w]))
+
+    def line_of(w):
+        # The statement (#402): two statements in loops of one variable name have the same
+        # indices, so the key names the program line too.
+        return W["line"][w] if w != NONE64 and w < W["rows"] else NONE64
 
     good = [False] * ne
     for e in range(ne):
@@ -1346,7 +1379,7 @@ def check_v6(m, T, bad):
         if not good[e]:
             continue
         key = (E["kind"][e], E["process"][e], E["tile"][e], E["src"][e], E["src_addr"][e], E["dst"][e],
-               E["dst_addr"][e], loops_of(E["where"][e]), E["row"][e], E["beat"][e])
+               E["dst_addr"][e], line_of(E["where"][e]), loops_of(E["where"][e]), E["row"][e], E["beat"][e])
         if key in keys:
             bad("E2", f"events {keys[key]} and {e} ({EVENT_KINDS[E['kind'][e]]}) share an identity")
         keys.setdefault(key, e)

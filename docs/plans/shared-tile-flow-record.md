@@ -53,6 +53,7 @@ A u64 index that names nothing is all ones (`0xFFFF…`); a u32 is `0xFFFFFFFF`,
 | 5 | L2 staging: `l2_staging`; the steps' `staging`, `l2_cf`, `l2_slot` |
 | **6** | **the shared record: level, producer, time, geometry, events, element types, domains, expected values, the result** |
 | 6.1 | the RTL's accumulator → L3 store and its flat, word-addressed L3 (§5.1, §6; #398) |
+| 6.2 | L2, the accumulator and the array's edge addressed by slot: kpu-sim's timed levels (§6; #402) |
 
 Readers of version 6 read versions 1 to 5 as before. A version-1 to version-5 record is L-B's,
 fp32 and dense.
@@ -60,7 +61,7 @@ fp32 and dense.
 **Minor revisions.** A version-6 manifest may carry `"minor"`: 0 when absent. A minor revision adds
 a transaction's layer pair or a geometry form; it keeps the `layers` and `event_kinds` lists, whose
 change needs a new version. A reader of 6.*n* reads every 6.*m* with *m* ≤ *n*, and refuses a
-later one. A 6.0 record may use none of 6.1's additions.
+later one. A 6.0 record may use none of 6.1's additions, and a 6.1 record none of 6.2's.
 
 **Optional columns.** A later writer may add a column to an existing table, when a record without
 it still means what it did: a reader keeps the columns it knows and reads a missing optional column
@@ -213,9 +214,13 @@ matches the RTL's credit and tile-ready handshakes once kpugen #16 lands.
 
 An event's **identity** is its key:
 
-> (kind, process, tile, src, src_addr, dst, dst_addr, loop indices, row, beat)
+> (kind, process, tile, src, src_addr, dst, dst_addr, line, loop indices, row, beat)
 
-Here the loop indices are the `(variable, value)` pairs that `where` resolves to, outermost first.
+Here `line` is the program line of the position (`where`), and the loop indices are the
+`(variable, value)` pairs it resolves to, outermost first. The line is there because two
+statements in loops of one variable name have the same indices: LU's `laswp A[k, j]` and
+`trsm_ll(A[k, k], A[k, j])` both move `A[k, k]` at the same `(k, j)` (#402). Both producers run
+the same program text, so the line is the same in both records.
 No two events in a record share a key. Among the events that name an action, no two share
 `(kind, action, row, beat)` either.
 
@@ -257,6 +262,21 @@ through a layer the record declares not modelled.
 | `l1` | `{"modelled": true, "rows", "cols"}`: the array's edge | the edge lane, `< max(rows, cols)`, or none |
 
 Not modelled is `{"modelled": false, "why": "<reason>"}`.
+
+**A layer addressed by slot (6.2, #402).** kpu-sim's timed levels place tiles in L2 slots, a
+staged copy or an L2 accumulator's partial, and have no rows. They declare L2, the accumulator
+and L1 as `{"modelled": true, "slots": N}`, N ≥ 0:
+
+- an event's address in such a layer is a slot, `< N`, or none. An unstaged tile's L2 address is
+  none. A layer of 0 slots has no addresses: kpu-sim's accumulator (the PEs, or an L2 partial at
+  its L2 slot), and its array edge when the deployment declares no PE array. With one, L1 is
+  `{"rows", "cols"}` as above, every address none;
+- a layer declared both ways, `slots` together with `banks`, `rows`, `row_bytes`, `interleave`
+  or `cols`, is refused (G1).
+
+Two records whose L2 forms differ, a slotted kpu-sim record and the RTL's rows, still name the same
+transactions. Their L2 and accumulator addresses differ, so a comparison has to join them on the
+rest of the key (§5.3).
 
 **A word-addressed L3 (6.1, #398).** The RTL's L3 is a flat, word-addressed memory cell per site,
 placed by the host or `plan_gemm`, with no slots and no L3 credits (credits exist for its L2 and
@@ -350,10 +370,10 @@ Version 6 adds these invariants:
 
 | Invariant | Holds when |
 |---|---|
-| G1 geometry | every layer is declared; a modelled L3 is the machine's slots and banks, or (6.1) words and a word width, never both; L2 and the accumulator have banks, rows, a row width and a known interleave; L1 has rows and cols |
+| G1 geometry | every layer is declared; a modelled L3 is the machine's slots and banks, or (6.1) words and a word width, never both; L2 and the accumulator have banks, rows, a row width and a known interleave; L1 has rows and cols; or (6.2) L2, the accumulator or L1 has slots, and nothing of the rows form |
 | T1 time | L-B has no time, no `cycle` or `end` column and no result cycles. A timed level has all three; every event has `cycle <= end`; the latest end is `time.cycles`; and `result.cycles` equals it |
 | E1 references | `id` is the row; every index resolves; layers are modelled; addresses are inside their layer; a transaction moves between its kind's layers (acc → l3 from 6.1) |
-| E2 identities | §5.3: no two events share a key, or a (kind, action, row, beat) |
+| E2 identities | §5.3: no two events share a key (with the position's line), or a (kind, action, row, beat) |
 | E3 progress | §5.4: a row event is a child of its kind's transaction, of the same tile and action, inside the tile, and inside its parent's time |
 | E4 credits and tokens | §5.2: a token goes downstream after its tile arrived; a credit goes upstream after its tile left; no credit frees a word-addressed L3 |
 | E5 the join | §5.1: a transaction's action has the matching kind, tile and L3 slot (word-addressed: its residency keeps one word address); an acc → l3 `DRAIN` also stands for its tile's `DRAIN` step; with full joining, one transaction per data step |
@@ -394,6 +414,7 @@ compared through their expected values (X3), not through each other's digests.
 | Producer | Level | Writes |
 |---|---|---|
 | kpu-sim `kpu-run --dflow` | L-B | version 6: `time` null; DRAM and L3 modelled, the rest declared not modelled; fp32 dense operands; no expected values; an empty `events` table with no time column; `result` with no cycles and values `unchecked` |
+| kpu-sim `kpu-run --dflow-lt1`, `--dflow-lca` | L-T1, L-CA | version 6.2 (#402): L-B's steps, tiles, residencies and positions; the level's events with `cycle` and `end` (§9.2); L2, the accumulator and L1 by slot; the level's own final values, no per-step snapshots; `result` with the level's cycles and values `unchecked`; `not_modelled` naming what the level does not model |
 | kpugen / systars | RTL | version 6, through `dflow_writer.py`: a cycle column, the RTL's geometry, transactions, row events, credits and tokens; its element types and domains; expected values from the golden model |
 | `tools/trace/dflow_rtl_sample.py` | RTL (sample) | a hand-written stand-in for kpugen (§9.1) |
 
@@ -426,6 +447,35 @@ pair is one acc → l3 `DRAIN`, L3 is 64 words of 4 bytes, a residency sits at i
 and no credit frees L3. Its final values, and so its `--result` digests, equal the slotted
 sample's.
 
+### 9.2 kpu-sim's timed levels
+
+A timed level executes the same CSP program as L-B, so its record keeps L-B's steps and adds its
+events. L-T1's events are its legs; L-CA's are its protocol events, matched back to the actions
+(`timing/csp_records.hpp`). Each data step is one transaction, joined to its action, written as the
+RTL sample writes them:
+
+| Action | Transaction | Then |
+|---|---|---|
+| `LOAD` | `DMA` dram → l3, at its slot | a `TOKEN` l3 → l2 |
+| `MOVE` | `BLOCK_MOVE` l3 → l2, slot → its L2 slot or none | a `TOKEN` l2 → l1 |
+| `FEED` | `STREAM` l2 → l1, from its L2 slot or none | unstaged, a `CREDIT` l2 → l3 |
+| `CALL` | `COMPUTE` l1 → acc | |
+| `DRAIN` | `DRAIN` acc → l2, into its L2 slot or none | a `CREDIT` acc → l1 and a `TOKEN` l2 → l3 |
+| `WRITEBACK` | `BLOCK_MOVE` l2 → l3 | a `TOKEN` l3 → dram |
+| `STORE` | `DMA` l3 → dram: its two legs, the ejection and the DRAM write, as one | |
+| `RELEASE` | | a `CREDIT` l3 → dram, at the cycle the level freed the slot |
+| `L2_RELEASE` | | a `CREDIT` l2 → l3 |
+
+Two things the format can't say, which the record's `not_modelled` counts:
+
+- **A store's slot is freed at its ejection,** into the DMA engine's buffer, before the DRAM write
+  ends. The format has no layer for that buffer, so its `RELEASE`'s credit is stamped at the
+  store's end (E4).
+- **A tile the Combiner reads in place** (an init, a bias, a scale's vectors) never leaves L3 in a
+  transaction, so its `RELEASE`'s credit has none to follow (E4) and is left out.
+
+There are no row events: no kpu-sim level models rows yet (the L2 banks, #388; the PE grid, #401).
+
 ## 10. The viewer
 
 The domain-flow viewer (`tools/visualization/domainflow/`) reads versions 1 to 6. On a version-6
@@ -442,11 +492,8 @@ what it reads with `dflow_check`.
 
 ## 11. Not in this version
 
-- **kpu-sim's timed levels writing events.** L-T1 still writes its overlay (`lt1_legs`) into the L-B
-  record and its stations into `.tflow`. An L-T1 or L-CA record at `level: "L-T1"` with events is
-  the next producer. It needs only the event rows; the format is ready for them.
-- **L-CA's slot ids.** Until `l3-placement-at-lb.md` step 6, L-CA's `slot_id` is a per-DMA-engine
-  counter. Its events would carry the walker's slot only after that step.
+- **kpu-sim's row events.** L-T1 and L-CA write their events from 6.2 (§9.2, #402), without row
+  progress. Rows come with a level that models them (the L2 banks, #388; the PE grid, #401).
 - **Golden event traces.** Ruled out by D3, as CI references. Event comparison between two records
   is a debugging tool, joined on the identity key (§5.3).
 

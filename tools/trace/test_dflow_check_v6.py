@@ -4,10 +4,14 @@ Self-test for dflow_check.py's version-6 invariants (docs/plans/shared-tile-flow
 the record kpu-sim and the KPU RTL share. Each invariant must FAIL on a bundle that breaks it, and
 the clean bundles must pass. A checker that passes everything is not a checker.
 
-Usage: python3 test_dflow_check_v6.py <rtl-sample.dflow> <lb.dflow> [<rtl-sample-addressed.dflow>]
+Usage: python3 test_dflow_check_v6.py <rtl-sample.dflow> <lb.dflow> [<rtl-sample-addressed.dflow>
+                                                                        [<timed.dflow>]]
 
 The third bundle is the sample's version-6.1 form (dflow_rtl_sample.py --addressed; #398): the
 accumulator stores straight to L3, and L3 is word-addressed.
+
+The fourth is a timed kpu-sim record, version 6.2 (kpu-run --dflow-lca; #402): L-CA's events with
+their cycles, L2 and the accumulator addressed by slot.
 
 The RTL sample is the hand-written timed record (dflow_rtl_sample.py): L2, accumulator and L1
 geometry, a cycle column, progress events, credits and tokens, int8 and int32 values with expected
@@ -33,6 +37,7 @@ CHECK = HERE / "dflow_check.py"
 RTL = None
 LB = None
 ADDRESSED = None
+TIMED = None
 NONE64 = dc.NONE64
 KIND = {k: i for i, k in enumerate(dc.EVENT_KINDS)}
 LAYER = {k: i for i, k in enumerate(dc.LAYERS)}
@@ -547,7 +552,7 @@ class RtlSixOne(Checks):
         self.assertFails("E1", "needs version 6.1")
 
     def test_unknown_minor_is_unreadable(self):
-        self.b.manifest["minor"] = 2
+        self.b.manifest["minor"] = 3                    # 6.2 is #402's slotted L2
         self.b.save_manifest()
         self.assertUnreadable()
 
@@ -621,6 +626,64 @@ class LbRecord(Checks):
         self.assertTrue(all(v["element"] == "fp32" for v in r["finals"].values()))
 
 
+class TimedKpuSim(Checks):
+    """A kpu-sim timed level's own record (6.2, #402): its events join the program's steps, and
+    its L2 and accumulator are addressed by slot."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.SOURCE = TIMED
+
+    def setUp(self):
+        if TIMED is None:
+            self.skipTest("no timed record given")
+        super().setUp()
+
+    def test_clean_timed_record_passes(self):
+        self.assertPasses()
+
+    def test_it_is_a_timed_six_two_record(self):
+        m = self.b.manifest
+        self.assertEqual((m["version"], m.get("minor"), m["level"]), (6, 2, "L-CA"))
+        self.assertEqual(m["result"]["cycles"], m["time"]["cycles"])
+        for layer in ("l2", "acc"):
+            self.assertIn("slots", m["geometry"][layer], layer)
+        kinds = {self.ev("kind", i) for i in range(self.b.rows("events"))}
+        self.assertEqual(kinds & {KIND["BM_ROW"], KIND["STR_ROW"], KIND["DRAIN_ROW"]}, set(), "no row events")
+        self.assertTrue({KIND[k] for k in ("DMA", "BLOCK_MOVE", "STREAM", "COMPUTE", "DRAIN", "CREDIT", "TOKEN")} <= kinds)
+        # Every event names its action: full joining, so E5 holds one transaction per data step.
+        self.assertTrue(all(self.ev("action", i) != NONE64 for i in range(self.b.rows("events"))))
+        # An L2 accumulator's partials and the staged copies are at their L2 slots.
+        staged = [i for i in range(self.b.rows("events"))
+                  if self.ev("dst", i) == LAYER["l2"] and self.ev("dst_addr", i) != NONE64]
+        self.assertTrue(staged, "no event lands at an L2 slot")
+
+    def test_g1_a_slotted_layer_needs_six_two(self):
+        self.b.manifest["minor"] = 1
+        self.b.save_manifest()
+        self.assertFails("G1", "needs version 6.2")
+
+    def test_g1_a_layer_declared_both_ways(self):
+        self.b.manifest["geometry"]["l2"]["rows"] = 16
+        self.b.save_manifest()
+        self.assertFails("G1", "mixes the two forms")
+
+    def test_g1_negative_slots(self):
+        self.b.manifest["geometry"]["l2"]["slots"] = -1
+        self.b.save_manifest()
+        self.assertFails("G1", "not an integer >= 0")
+
+    def test_e1_an_address_past_the_slots(self):
+        e = self.event("BLOCK_MOVE", lambda i: self.ev("dst", i) == LAYER["l2"] and self.ev("dst_addr", i) != NONE64)
+        self.set_ev("dst_addr", e, self.b.manifest["geometry"]["l2"]["slots"])
+        self.assertFails("E1", "outside l2")
+
+    def test_e1_an_accumulator_of_no_slots_has_no_addresses(self):
+        e = self.event("COMPUTE")
+        self.set_ev("dst_addr", e, 0)
+        self.assertFails("E1", "outside acc")
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print(__doc__)
@@ -629,4 +692,6 @@ if __name__ == "__main__":
     LB = Path(sys.argv.pop(1)).resolve()
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
         ADDRESSED = Path(sys.argv.pop(1)).resolve()
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        TIMED = Path(sys.argv.pop(1)).resolve()
     unittest.main()
