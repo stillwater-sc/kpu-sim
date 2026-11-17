@@ -614,6 +614,33 @@ TEST_CASE("Requant: synthesized inputs keep a per-channel scale's domains, and e
     }
 }
 
+TEST_CASE("Requant: a vector that is a shift anywhere keeps the shift's domain", "[program][csp][requant][inputs]") {
+    // #461's review: `scale(qm[j], qs[j])` on one store and `scale(qs[j], qm[j])` on another makes
+    // each vector a multiplier in one stage and a shift in the other. Shift wins: its domain is
+    // valid in both positions, and the synthesized run would otherwise refuse the first stage.
+    const lang::Program ast = lang::parse(
+        "csp 1.0\nprogram t machine flat(l3 = 12, l2 = 2) {\n"
+        "  tensor A[16,16] int8 tile 16x16 in;\n  tensor B[16,16] int8 tile 16x16 in;\n"
+        "  tensor C[16,16] int8 tile 16x16 out acc int32;\n  tensor E[16,16] int8 tile 16x16 out acc int32;\n"
+        "  vector qm[16] int32 tile 16 in;\n  vector qs[16] int32 tile 16 in;\n"
+        "  resident A[0, 0], B[0, 0], qm[0], qs[0];\n"
+        "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
+        "  store C[0, 0] via scale(qm[0], qs[0]) @ combiner;\n"
+        "  acc E[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> E[0, 0]; }\n"
+        "  store E[0, 0] via scale(qs[0], qm[0]) @ combiner;\n"
+        "  release A[0, 0], B[0, 0], qm[0], qs[0];\n}\n");
+    const auto roles = driver::operand_roles(ast);
+    CHECK(roles.at("qm") == driver::OperandRole::Shift);
+    CHECK(roles.at("qs") == driver::OperandRole::Shift);
+    const TileProgram in = driver::csp_inputs(ast);
+    for (const char* n : {"qm", "qs"})
+        for (Dim r = 0; r < in.operand(n).rows; ++r) {
+            const auto v = static_cast<long long>(in.operand(n).value(r, 0));
+            CHECK((v >= 22 && v <= 28));
+        }
+    CHECK_NOTHROW(driver::csp_reference(ast, in, 1'000'000));
+}
+
 TEST_CASE("Requant: a per-channel scale's trace is opset 1.9, and refuses bad values", "[program][csp][requant]") {
     const lang::Program ast = lang::parse(linear_pc("os"));
     TileProgram in = driver::csp_inputs(ast);

@@ -63,7 +63,8 @@ namespace sw::kpu::program::driver {
 //               [2^14, 2^15) (requantize takes (-2^31, 2^31))
 //   Shift       its shifts, the second vector: words in [22, 28] (requantize takes 0..62)
 // Together they map a typical int8 accumulator (|x| up to about 2^20) across an int8 result, with
-// some saturation, so rounding and clamping are both exercised. Any other operand is Plain.
+// some saturation, so rounding and clamping are both exercised. Any other operand is Plain. A
+// vector that is a shift anywhere is a Shift: [22, 28] is a valid multiplier too.
 enum class OperandRole : std::uint8_t { Plain, Multiplier, Shift };
 
 inline std::map<std::string, OperandRole> operand_roles(const csp::lang::Program& ast) {
@@ -72,7 +73,10 @@ inline std::map<std::string, OperandRole> operand_roles(const csp::lang::Program
         for (const csp::lang::Stmt& s : body) {
             for (const csp::lang::Stage& st : s.context)
                 if (st.op == "scale" && st.args.size() == 2) {          // per channel (#445)
-                    roles[st.args[0].name] = OperandRole::Multiplier;
+                    // Shift wins: one vector may be a shift in one stage and a multiplier in another
+                    // (#461's review), and a shift's domain is valid for a multiplier, not the
+                    // reverse.
+                    roles.emplace(st.args[0].name, OperandRole::Multiplier);
                     roles[st.args[1].name] = OperandRole::Shift;
                 }
             walk(s.body);
