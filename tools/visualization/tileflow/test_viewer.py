@@ -79,7 +79,7 @@ class ViewerSmokeTest(unittest.TestCase):
         'row.kind === "cf_in" ? "operands in [in0, in1)" : "results out [in1, out1)"',
         'mine.length > 12 ? "<br>…" : ""',
         'held.slice(0, 12).map(i => `${tileText(R.l2.tile[i])}: ${fmt(R.l2.t0[i])}–${fmt(R.l2.t1[i])}, ${esc(what(i))}`).join("<br>") || "never held anything"',
-        'mine.slice(0, 12).map(c => `${tileText(R.ch.tile[c])}: ${fmt(R.ch.calls[c])} calls on ${fmt(R.ch.rows_col[c])}x${fmt(R.ch.cols[c])} PEs, in ${fmt(R.ch.in0[c])}–${fmt(R.ch.in1[c])}, out by ${fmt(R.ch.out1[c])}`).join("<br>") || "no chains"',
+        'mine.slice(0, 12).map(c => `${tileText(R.ch.tile[c])}: ${fmt(R.ch.calls[c])} calls on ${fmt(R.ch.rows_col[c])}x${fmt(R.ch.cols[c])} PEs, ${esc(["", "os", "ws", "is"][R.ch.dataflow ? R.ch.dataflow[c] : 1] || "?")}, in ${fmt(R.ch.in0[c])}–${fmt(R.ch.in1[c])}, out by ${fmt(R.ch.out1[c])}`).join("<br>") || "no chains"',
         'pooled || "No events are recorded against this block at " + esc(R.m.level) + "."',
         'r.cap ? " of " + esc(r.cap) : ""',
         'row.capacity ? " of " + fmt(row.capacity) : ""',

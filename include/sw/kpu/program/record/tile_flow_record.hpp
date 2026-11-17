@@ -67,6 +67,7 @@
 //                      optional (#455): partial:u8 merges:u32, an L2 accumulator's partial; absent: 0
 //   chain.bin          (version 6) columns tile:u32 station:u32 rows:u32 cols:u32 calls:u32
 //                      in0:f64 front:f64 in1:f64 last:f64 out1:f64
+//                      optional (#395): dataflow:u8 (1 os, 2 ws, 3 is; absent: os) preload:u32 streamed:u32
 //   op_tiles.bin       CSR of the tiles each op touches: kind:u8 offset:u32 (ops+1), tile:u32 and
 //                      written:u8 (nnz; 1 when the op writes the tile, so a residency's filler
 //                      can be told from a mere reader)
@@ -148,6 +149,10 @@ struct Chain {
     std::uint32_t rows = 0, cols = 0;  // the PEs its C tile occupies
     std::uint32_t calls = 0;
     Cycle in0 = 0, front = 0, in1 = 0, last = 0, out1 = 0;
+    // #395: its dataflow (1 os, 2 ws, 3 is; csp::Dataflow, never 0 here), and for ws and is the
+    // PRELOAD's clocks (R) and the rows streamed (S). Optional columns: absent = os.
+    std::uint8_t dataflow = 1;
+    std::uint32_t preload = 0, streamed = 0;
 };
 
 struct Transit {

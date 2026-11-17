@@ -84,6 +84,24 @@
 // Other calls (getrf, trsm, an in-place gemm whose C is preloaded, a C tile larger than the
 // array, or any call when no fabric is declared) keep one leg at macs / macs_per_cycle.
 //
+// WEIGHT- AND INPUT-STATIONARY (#395): the PEs hold B (ws) or Aᵀ (is), which a PRELOAD shifts down
+// every column, and the other operand streams through; each call's partial sums leave the array
+// SOUTH, merged in L2 by the Combiner (an `acc ... in l2 dataflow ws|is`, so every call is a chain
+// of one). Its dataflow is the accumulator's, else the deployment's (fabric.dataflow). Following
+// the RTL's schedule rules (systars docs/architecture/systolic-tile.md), with R = pe_rows, the
+// stationary tile K x W on the PEs (ws: K x N of B; is: K x M of Aᵀ) and S rows streamed (ws: M
+// rows of A; is: N columns of B):
+//
+//   in0     PRELOAD starts: the stationary tile enters the top of the columns
+//   front   = in0 + R           PRELOAD done: R clocks whatever K is, so K < R pads with zeros
+//   in1     = front + S         the last streamed row has entered the array
+//   last    = in1 + (W - 1)     it has crossed the stationary tile's W columns
+//   out1    = last + R          its partial sum has crossed the R rows, out of the south edge
+//
+// The compute tile is busy for R + max(S, R): the RTL's command interval, and the next PRELOAD
+// waits for the previous stream to leave. Results leave south, so the north-link rule does not
+// apply. A stationary tile larger than the array keeps one leg.
+//
 // The slots are the PROGRAM's L3 (machine flat(l3 = N, banks = B)): the program's declared machine.
 // Values are the behavioral interpreter's, stepped in the same order, so L-T1 is bit-identical
 // to L-B by construction. Timing is per process, per lane, from the device descriptor, and
@@ -100,6 +118,7 @@
 #include <sw/kpu/program/tile_work.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -156,7 +175,9 @@ public:
     struct Chain {
         TileCoord tile;                 // the accumulator
         std::size_t lane = 0;           // the compute tile it owns
-        std::uint32_t rows = 0, cols = 0;               // the PEs its C tile occupies
+        std::uint32_t rows = 0, cols = 0;               // the PEs its C tile occupies (ws/is: the stationary tile)
+        Dataflow dataflow = Dataflow::OS;               // os, ws or is: resolved, never Default (#395)
+        std::uint32_t preload = 0, streamed = 0;        // ws/is: the PRELOAD's R clocks, and S rows streamed
         Cycle in0 = 0, front = 0, in1 = 0, last = 0, out1 = 0, link_delay = 0;
         std::size_t first_action = 0, last_action = 0;
         std::size_t drain_action = kNoAction;           // its Drain (L1 -> L2), when the program ran it
@@ -206,6 +227,7 @@ public:
         std::uint64_t merge_l2_read_bytes = 0;      // the partials those read back from L2
         std::uint64_t merge_l2_write_bytes = 0;     // and what every merge wrote into L2
         std::size_t stream_chains = 0;              // chains timed as systolic streams
+        std::map<std::string, std::size_t> chains_by_dataflow;   // os, ws, is (#395)
         Cycle link_delay_cycles = 0;                // what their results waited for a top link
         std::map<std::string, std::size_t> one_leg; // calls timed as one leg, by why
         std::map<std::string, Cycle> busy;          // per process: lane-cycles occupied
@@ -344,8 +366,22 @@ public:
                     acc_[k] = run(Proc::Cf, ready, d, a);
                     break;
                 }
-                // K = the call's reduction depth: macs over the PEs its C tile occupies.
                 Chain& ch = chains_[c];
+                if (ch.dataflow != Dataflow::OS) {
+                    // PRELOAD R clocks, then S rows streamed; the tile is busy R + max(S, R).
+                    const Cycle R = ch.preload, S = ch.streamed;
+                    const Cycle f = run_on(Proc::Cf, ch.lane, ready, R + std::max(S, R), a);
+                    Record& rec = records_.back();
+                    rec.chain = c;
+                    rec.chain_pos = ++ch.calls;
+                    ch.in0 = rec.start;
+                    ch.front = ch.in0 + R;
+                    ch.in1 = ch.front + S;
+                    ch.first_action = ch.last_action = rec.action;
+                    acc_[k] = f;
+                    break;
+                }
+                // K = the call's reduction depth: macs over the PEs its C tile occupies.
                 const Cycle d = quantize_cycles(w.macs / double(ch.rows * ch.cols), w.macs > 0.0);
                 const Cycle f = run_on(Proc::Cf, ch.lane, ready, d, a);
                 Record& rec = records_.back();
@@ -698,7 +734,22 @@ private:
         const TensorOperand& o = shapes_.operand(a.tile.operand);
         const Dim rows = o.row_end(a.tile.ti) - o.row_begin(a.tile.ti);
         const Dim cols = o.col_end(a.tile.tj) - o.col_begin(a.tile.tj);
-        if (rows > dev_.pe_rows || cols > dev_.pe_cols) return one_leg("C tile larger than the array");
+        // The reduction's dataflow (#395): the accumulator's, else the deployment's.
+        Dataflow df = a.dataflow;
+        if (df == Dataflow::Default && !parse_dataflow(dev_.dataflow, df)) df = Dataflow::OS;
+        // ws holds B's K x N tile and streams M rows of A; is holds Aᵀ's K x M and streams N.
+        Dim srows = rows, scols = cols, streamed = 0;
+        if (df != Dataflow::OS) {
+            const Dim m = std::max<Dim>(1, rows), n = std::max<Dim>(1, cols);
+            const Dim k = std::max<Dim>(1, static_cast<Dim>(std::llround(
+                tile_work_of(shapes_, op, dev_.element_bytes).macs / double(m * n))));
+            srows = k;
+            scols = df == Dataflow::WS ? n : m;
+            streamed = df == Dataflow::WS ? m : n;
+            if (srows > dev_.pe_rows || scols > dev_.pe_cols) return one_leg("stationary tile larger than the array");
+        } else if (rows > dev_.pe_rows || cols > dev_.pe_cols) {
+            return one_leg("C tile larger than the array");
+        }
         // A compute tile with no chain on it; else the one whose chain's calls ended first, which
         // this accumulator's first call closes: C occupies the array only while its calls run.
         std::size_t lane = lane_chain_.size();
@@ -714,8 +765,14 @@ private:
         Chain ch;
         ch.tile = a.tile;
         ch.lane = lane;
-        ch.rows = static_cast<std::uint32_t>(std::max<Dim>(1, rows));
-        ch.cols = static_cast<std::uint32_t>(std::max<Dim>(1, cols));
+        ch.rows = static_cast<std::uint32_t>(std::max<Dim>(1, srows));
+        ch.cols = static_cast<std::uint32_t>(std::max<Dim>(1, scols));
+        ch.dataflow = df;
+        if (df != Dataflow::OS) {
+            ch.preload = static_cast<std::uint32_t>(dev_.pe_rows);
+            ch.streamed = static_cast<std::uint32_t>(streamed);
+        }
+        ++st_.chains_by_dataflow[to_string(df)];
         const auto c = static_cast<std::uint32_t>(chains_.size());
         chains_.push_back(ch);
         open_chain_[k] = c;
@@ -728,6 +785,16 @@ private:
     // previous chain's results allow on each column's top link, and its compute tile is free.
     Cycle close_chain(std::uint32_t c) {
         Chain& ch = chains_[c];
+        if (ch.dataflow != Dataflow::OS) {
+            // The last streamed row crosses W columns, and its partial sum the R rows, out south.
+            ch.last = ch.in1 + (ch.cols - 1);
+            ch.out1 = ch.last + ch.preload;
+            ch.link_delay = 0;
+            ch.closed = true;
+            lane_chain_[ch.lane] = kNoChain;
+            st_.makespan = std::max(st_.makespan, ch.out1);
+            return ch.out1;
+        }
         ch.last = ch.in1 + skew(ch);
         const Cycle out = ch.last + ch.rows;
         const Cycle link = lane_out1_[ch.lane] ? lane_out1_[ch.lane] + ch.rows : 0;

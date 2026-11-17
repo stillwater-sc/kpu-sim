@@ -169,9 +169,21 @@ void print_levels(const std::vector<CspLevelOutcome>& levels, const std::vector<
             std::cout << "   (lane-cycles/lanes)   UNCALIBRATED\n";
             // The fabric pipeline (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2).
             if (o.pe_rows) {
-                std::cout << "        fabric " << o.pe_rows << "x" << o.pe_cols << " PEs, output-stationary: "
-                          << o.chains.size() << " chains as systolic streams, results waited " << o.link_delay_cycles
-                          << " cycles for a top link";
+                // Each dataflow's chains (#395): os holds C and drains north; ws and is hold B or
+                // Aᵀ (PRELOAD R clocks) and each call's partial sums leave south.
+                std::size_t os = 0, ws = 0, is = 0;
+                for (const auto& c : o.chains)
+                    (c.dataflow == csp::Dataflow::WS ? ws : c.dataflow == csp::Dataflow::IS ? is : os)++;
+                std::cout << "        fabric " << o.pe_rows << "x" << o.pe_cols << " PEs:";
+                const char* sep = " ";
+                if (os) {
+                    std::cout << sep << "output-stationary " << os << " chains (C held, results north; waited "
+                              << o.link_delay_cycles << " cycles for a top link)";
+                    sep = ", ";
+                }
+                if (ws) { std::cout << sep << "weight-stationary " << ws << " calls (B held: PRELOAD " << o.pe_rows << ", partials south)"; sep = ", "; }
+                if (is) { std::cout << sep << "input-stationary " << is << " calls (A held: PRELOAD " << o.pe_rows << ", partials south)"; sep = ", "; }
+                if (!os && !ws && !is) std::cout << " no chains";
             } else {
                 std::cout << "        fabric not declared (fabric.pe_rows/pe_cols): every call is one leg";
             }

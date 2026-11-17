@@ -89,6 +89,10 @@ timed as an output-stationary systolic stream, on r x c PEs with skew = (r-1) + 
                               chain's cf lane, the first starting at in0 and the last ending at in1
     P4 one chain per array    on one cf lane, chains' operand streams [in0, in1) never overlap,
                               and a chain's Drain starts no earlier than its out1
+    (#395) a weight- or input-stationary chain (the optional columns dataflow, preload,
+    streamed): one call, front - in0 == R (PRELOAD, the array's rows), in1 - front == S (rows
+    streamed), last - in1 == W - 1, out1 - last == R, no link delay; its call's cf leg is
+    R + max(S, R); it is outside the top link (P5), its results leave south
     P5 the top link           each chain's out1 is at least the previous chain's on its lane plus
                               r, and link_delay is exactly what that cost; the manifest's chain
                               count and link_delay_cycles are the tables'
@@ -407,7 +411,8 @@ def in_domain(domain, r, c):
 
 
 # Optional columns a later writer added (#455): checked when present, absent from older records.
-OPTIONAL = {"l2_staging": {"partial": "u8", "merges": "u64"},
+OPTIONAL = {"lt1_chains": {"dataflow": "u8", "preload": "u32", "streamed": "u32"},
+            "l2_staging": {"partial": "u8", "merges": "u64"},
             "steps": {"merge": "u8", "stages": "u16", "init_tile": "u32", "dataflow": "u8"}}
 
 
@@ -924,6 +929,10 @@ def check_fabric(m, T, bad):
         calls_of.setdefault(c, []).append((a, pos))
     by_lane = {}
     delays = 0
+    # #395: a chain's dataflow (1 os, 2 ws, 3 is) and a stationary one's PRELOAD and rows streamed.
+    dfs = C.get("dataflow") or [1] * C["rows"]
+    pre = C.get("preload") or [0] * C["rows"]
+    strm = C.get("streamed") or [0] * C["rows"]
     for c in range(C["rows"]):
         rows, cols, lane = C["used_rows"][c], C["used_cols"][c], C["lane"][c]
         in0, front, in1, last, out1, delay = (C[k][c] for k in ("in0", "front", "in1", "last", "out1", "link_delay"))
@@ -934,14 +943,32 @@ def check_fabric(m, T, bad):
             continue
         if not (1 <= rows <= f["pe_rows"] and 1 <= cols <= f["pe_cols"]):
             bad("P1", f"chain {c} occupies {rows} x {cols} PEs; the array is {f['pe_rows']} x {f['pe_cols']}")
+        if dfs[c] not in (1, 2, 3):
+            bad("P2", f"chain {c}: dataflow {dfs[c]} is not os, ws or is")
+            continue
+        # A weight- or input-stationary chain (#395): PRELOAD R clocks (the array's rows, at least the
+        # held tile's K), S rows streamed, the last crossing W columns and then R rows, out south;
+        # one call, its cf leg holding the compute tile R + max(S, R). Every other rule is shared.
+        stationary = dfs[c] != 1
+        R, Sr = pre[c], strm[c]
         skew = (rows - 1) + (cols - 1)
-        if front - in0 != skew:
+        if stationary:
+            if R != f["pe_rows"] or rows > R or Sr < 1:
+                bad("P2", f"chain {c}: PRELOAD {R} for {rows} stationary rows on a {f['pe_rows']}-row array, {Sr} rows streamed")
+            elif front - in0 != R or in1 - front != Sr:
+                bad("P2", f"chain {c}: front - in0 is {front - in0} (PRELOAD {R}) and in1 - front is {in1 - front} "
+                          f"({Sr} rows streamed)")
+        elif front - in0 != skew:
             bad("P2", f"chain {c}: front - in0 is {front - in0}; the skew is {skew}")
         if in1 < in0:
             bad("P2", f"chain {c}: in1 {in1} is before in0 {in0}")
         over = out1 != NONE64                  # its calls are over: last and out1 are known
         if (last == NONE64) != (out1 == NONE64):
             bad("P2", f"chain {c} records last {last} and out1 {out1}: both are known or neither is")
+        elif over and stationary:
+            if last - in1 != cols - 1 or out1 - last != R or delay != 0:
+                bad("P2", f"chain {c}: last - in1 is {last - in1} (W - 1 = {cols - 1}), out1 - last is {out1 - last} "
+                          f"(R = {R}) and link_delay {delay} (none: out south)")
         elif over:
             if last - in1 != skew:
                 bad("P2", f"chain {c}: last - in1 is {last - in1}; the skew is {skew}")
@@ -951,6 +978,8 @@ def check_fabric(m, T, bad):
         elif drain != NONE64:
             bad("P2", f"chain {c} was drained at action {drain}, yet its calls are not over")
         got = sorted(calls_of.get(c, []))
+        if stationary and ncalls != 1:
+            bad("P3", f"chain {c} is stationary with {ncalls} calls; each call is a chain of one")
         if [p for _, p in got] != list(range(1, len(got) + 1)) or len(got) != ncalls:
             bad("P3", f"chain {c}'s calls are numbered {[p for _, p in got]}; it records {ncalls}")
         elif got:
@@ -967,7 +996,11 @@ def check_fabric(m, T, bad):
                     bad("P3", f"chain {c} call {p} runs on cf lane {G['lane'][g]}; the chain owns lane {lane}")
                 if p == 1 and G["start"][g] != in0:
                     bad("P3", f"chain {c}: its first call starts at {G['start'][g]}; in0 is {in0}")
-                if p == ncalls and G["finish"][g] != in1:
+                if stationary:
+                    if G["finish"][g] != in0 + R + max(Sr, R):
+                        bad("P3", f"chain {c}: its call runs [{G['start'][g]}, {G['finish'][g]}); PRELOAD and the "
+                                  f"stream give [{in0}, {in0 + R + max(Sr, R)})")
+                elif p == ncalls and G["finish"][g] != in1:
                     bad("P3", f"chain {c}: its last call ends at {G['finish'][g]}; in1 is {in1}")
                 if prev_end is not None and G["start"][g] < prev_end:
                     bad("P3", f"chain {c} call {p} starts at {G['start'][g]}, before call {p - 1} ends at {prev_end}")
@@ -984,7 +1017,7 @@ def check_fabric(m, T, bad):
                 bad("P4", f"cf lane {lane}: chains {c0} [{a0}, {a1}) and {c1} [{b0}, {b1}) stream operands at once")
         prev = None
         for _, _, c in iv:
-            if C["out1"][c] == NONE64:
+            if C["out1"][c] == NONE64 or dfs[c] != 1:     # a stationary chain's results leave south
                 continue
             out, rows = C["out1"][c], C["used_rows"][c]
             natural = C["last"][c] + rows

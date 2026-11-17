@@ -50,6 +50,10 @@ Invariants:
                         (#455; the optional columns partial and merges) shares the slots, and is
                         merged into at least once and never fed instead
     TF14 the fabric's phases (version 6) each chain runs on a compute tile with PEs and calls;
+                        a weight- or input-stationary chain (#395; the optional columns dataflow,
+                        preload, streamed) follows PRELOAD R, S rows streamed and its W columns:
+                        front = in0 + R, in1 = front + S, last = in1 + W - 1, out1 = last + R, and
+                        stands outside the top-link sequence (its results leave south); otherwise
                         front = in0 + skew and last = in1 + skew, with skew = (rows-1) + (cols-1);
                         on one compute tile the chains' operand streams [in0, in1) never overlap; and
                         out1 = max(last + rows, the previous chain's out1 + rows) on its compute tile
@@ -138,7 +142,8 @@ def _named(rows, what):
 
 
 # Optional columns a later writer added (#455): checked when present, absent from older records.
-OPTIONAL = {"l2_residency": {"partial": "u8", "merges": "u32"}}
+OPTIONAL = {"l2_residency": {"partial": "u8", "merges": "u32"},
+            "chain": {"dataflow": "u8", "preload": "u32", "streamed": "u32"}}
 
 
 def load(path):
@@ -547,7 +552,12 @@ def check(rec):
     if m.get("version") == 6:
         r.ran("TF14")
         ch, nch = rec["chain"], rec["chain_rows"]
-        lanes_ch = {}
+        # #395: each chain's dataflow (1 os, 2 ws, 3 is), and a stationary one's PRELOAD and rows
+        # streamed. Optional columns: absent, every chain is os.
+        dfs = ch.get("dataflow") or [1] * nch
+        pre = ch.get("preload") or [0] * nch
+        strm = ch.get("streamed") or [0] * nch
+        lanes_ch, all_ch = {}, {}
         for i in range(nch):
             s_i, rows, cols = ch["station"][i], ch["rows"][i], ch["cols"][i]
             if s_i >= len(st) or st[s_i].get("kind") != "cf":
@@ -556,8 +566,27 @@ def check(rec):
             if rows < 1 or cols < 1 or ch["calls"][i] < 1:
                 r.fail("TF14", f"chain {i} has {rows}x{cols} PEs and {ch['calls'][i]} calls")
                 continue
-            skew = (rows - 1) + (cols - 1)
             in0, front, in1, last, out1 = (ch[k][i] for k in ("in0", "front", "in1", "last", "out1"))
+            if dfs[i] not in (1, 2, 3):
+                r.fail("TF14", f"chain {i}: dataflow {dfs[i]} is not os, ws or is")
+                continue
+            if dfs[i] != 1:
+                # Weight- or input-stationary: PRELOAD R clocks (R >= the stationary tile's K rows),
+                # S rows streamed, the last crossing the W columns and then the R rows, out south.
+                R, S = pre[i], strm[i]
+                if ch["calls"][i] != 1:
+                    r.fail("TF14", f"chain {i} is stationary with {ch['calls'][i]} calls; each call is a chain of one")
+                if R < rows or S < 1:
+                    r.fail("TF14", f"chain {i}: a stationary chain with PRELOAD {R} for {rows} rows and {S} rows streamed")
+                elif front != in0 + R or in1 != front + S or last != in1 + (cols - 1) or out1 != last + R:
+                    r.fail("TF14", f"chain {i} ({'ws' if dfs[i] == 2 else 'is'}): in0 {int(in0)}, front {int(front)}, "
+                                   f"in1 {int(in1)}, last {int(last)}, out1 {int(out1)} do not follow PRELOAD {R}, "
+                                   f"{S} rows streamed and {cols} columns")
+                if out1 > makespan:
+                    r.fail("TF14", f"chain {i}: its results leave at {int(out1)}, after the run's {int(makespan)}")
+                all_ch.setdefault(s_i, []).append((in0, in1, i))
+                continue
+            skew = (rows - 1) + (cols - 1)
             if front != in0 + skew or last != in1 + skew:
                 r.fail("TF14", f"chain {i}: front {int(front)} and last {int(last)} are not in0 {int(in0)} and "
                                f"in1 {int(in1)} plus the skew {skew}")
@@ -565,11 +594,16 @@ def check(rec):
                 r.fail("TF14", f"chain {i}: [in0 {int(in0)}, in1 {int(in1)}] and out1 {int(out1)} are out of order "
                                f"(out1 must be at least last + rows = {int(last + rows)}, within the run)")
             lanes_ch.setdefault(s_i, []).append((in0, in1, out1, rows, last, i))
-        for s_i, cs in lanes_ch.items():
+            all_ch.setdefault(s_i, []).append((in0, in1, i))
+        # One compute tile streams one chain's operands at a time, whatever its dataflow.
+        for s_i, cs in all_ch.items():
             cs.sort()
-            for (a0, a1, ao, _ar, _al, a), (b0, _b1, _bo, _br, _bl, b) in zip(cs, cs[1:]):
+            for (a0, a1, a), (b0, _b1, b) in zip(cs, cs[1:]):
                 if b0 < a1:
                     r.fail("TF14", f"{st[s_i]['name']}: chains {a} and {b} stream operands at once from cycle {int(b0)}")
+        # The top link is output-stationary's: only its chains are in this sequence.
+        for s_i, cs in lanes_ch.items():
+            cs.sort()
             # The top link (P5, exactly): a chain's results leave when its far PE's result has travelled
             # its rows north, or rows after the previous chain's results on this compute tile, whichever
             # is later -- out1 = max(last + rows, previous out1 + rows), and last + rows for the first.

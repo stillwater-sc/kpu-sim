@@ -614,6 +614,7 @@ inline DeviceDescriptor DeploymentSpec::device_view(Dim i) const {
     d.fabric_macs_per_cycle = s.macs_per_cycle;
     d.pe_rows = s.fabric.pe_rows.value_or(0);
     d.pe_cols = s.fabric.pe_cols.value_or(0);
+    d.dataflow = s.fabric.dataflow.value_or("os");
     d.element_bytes = static_cast<double>(s.element_bytes);
     d.l3_tiles = s.l3.capacity_tiles;            // CAPACITY, not the module count
 

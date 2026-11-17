@@ -57,6 +57,7 @@ struct DeviceDescriptor {
     // Throughput ---------------------------------------------------------------
     double fabric_macs_per_cycle = 256.0;   // MAC throughput of ONE CF tile
     Dim    pe_rows = 0, pe_cols = 0;        // ONE CF tile's systolic array; 0 = not declared
+    std::string dataflow = "os";            // fabric.dataflow: a reduction's when its program states none (#395)
     double bytes_per_cycle       = 64.0;    // analytical harness only (see move_lanes)
     double element_bytes         = 4.0;     // fp32
 

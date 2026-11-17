@@ -9,6 +9,7 @@ Both bundles are what kpu-run writes for a program with `acc C[:, j] in l2 init 
 (kpu-csp-gen --dataflow ws --init bias). They must check clean, and each rule, broken on purpose in
 a copy, must fail under its own id. A copy without the optional columns (partial, merges, merge)
 must fail as records did before them: the columns are what tell a partial from a staged copy.
+The fixture's chains are ws (#395 step 2): TF14 and P2/P3 check their stationary timing.
 
 SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -202,6 +203,112 @@ class TflowPartials(unittest.TestCase):
     def test_without_the_columns_it_fails_as_before(self):
         drop_columns(self.b, "l2_residency", {"partial", "merges"})
         self.fails("never fed")
+
+
+class TflowStationary(unittest.TestCase):
+    """#395 step 2: the fixture's ws chains, timed PRELOAD R, the stream, out south (TF14)."""
+
+    def setUp(self):
+        self.b = Bundle(TFLOW)
+        n = self.b.rows("chain")
+        self.ws = [i for i in range(n) if self.b.get("chain", "dataflow", i) == 2]
+        self.assertTrue(self.ws, "the fixture has no ws chain")
+        self.c = self.ws[0]
+
+    def tearDown(self):
+        self.b.close()
+
+    def fails(self, needle):
+        code, report = run("tflow_check.py", self.b.dir)
+        self.assertEqual(code, 1, f"expected TF14 to fail; the checker exited {code}")
+        hits = [v["message"] for v in report["violations"] if v["invariant"] == "TF14"]
+        self.assertTrue(any(needle in h for h in hits), f"TF14: {hits[:3]} (all: {ids(report)})")
+
+    def test_the_formulas_hold(self):
+        b, c = self.b, self.c
+        R, S = b.get("chain", "preload", c), b.get("chain", "streamed", c)
+        self.assertGreater(R, 0)
+        self.assertEqual(b.get("chain", "front", c), b.get("chain", "in0", c) + R)
+        self.assertEqual(b.get("chain", "in1", c), b.get("chain", "front", c) + S)
+        self.assertEqual(b.get("chain", "out1", c), b.get("chain", "last", c) + R)
+
+    def test_a_short_preload_fails(self):
+        self.b.set("chain", "front", self.c, self.b.get("chain", "front", self.c) - 1)
+        self.fails("do not follow PRELOAD")
+
+    def test_a_dataflow_is_in_range(self):
+        self.b.set("chain", "dataflow", self.c, 7)
+        self.fails("dataflow 7 is not os, ws or is")
+
+    def test_a_stationary_chain_has_one_call(self):
+        self.b.set("chain", "calls", self.c, 2)
+        self.fails("is stationary with 2 calls")
+
+    def test_without_the_columns_it_is_os_and_fails(self):
+        # An older record had no stationary chains: read as os, these break the OS wavefront.
+        drop_columns(self.b, "chain", {"dataflow", "preload", "streamed"})
+        self.fails("plus the skew")
+
+
+class DflowStationary(unittest.TestCase):
+    """#395 step 2: the same chains in the .dflow overlay (P2, P3)."""
+
+    def setUp(self):
+        self.b = Bundle(DFLOW)
+        n = self.b.rows("lt1_chains")
+        self.ws = [i for i in range(n) if self.b.get("lt1_chains", "dataflow", i) == 2]
+        self.assertTrue(self.ws, "the fixture has no ws chain")
+        self.c = self.ws[0]
+
+    def tearDown(self):
+        self.b.close()
+
+    def fails(self, inv, needle):
+        code, report = run("dflow_check.py", self.b.dir)
+        self.assertEqual(code, 1, f"expected {inv} to fail; the checker exited {code}")
+        hits = [v["message"] for v in report["violations"] if v["invariant"] == inv]
+        self.assertTrue(any(needle in h for h in hits), f"{inv}: {hits[:3]} (all: {ids(report)})")
+
+    def test_a_short_stream_fails(self):
+        self.b.set("lt1_chains", "in1", self.c, self.b.get("lt1_chains", "in1", self.c) - 1)
+        self.fails("P2", "rows streamed")
+
+    def test_a_late_exit_fails(self):
+        self.b.set("lt1_chains", "out1", self.c, self.b.get("lt1_chains", "out1", self.c) + 1)
+        self.fails("P2", "out1 - last")
+
+    def test_a_wrong_preload_fails(self):
+        self.b.set("lt1_chains", "preload", self.c, 3)
+        self.fails("P2", "PRELOAD 3")
+
+    # The shared rules hold for a stationary chain too (#466's review).
+    def test_a_drained_chain_is_closed(self):
+        self.b.set("lt1_chains", "out1", self.c, dc.NONE64)
+        self.fails("P2", "both are known or neither is")
+
+    def test_its_call_runs_on_its_lane(self):
+        call = next(self.b.get("lt1_calls", "action", r) for r in range(self.b.rows("lt1_calls"))
+                    if self.b.get("lt1_calls", "chain", r) == self.c)
+        cf = self.b.manifest["processes"].index("cf")
+        g = next(g for g in range(self.b.rows("lt1_legs"))
+                 if self.b.get("lt1_legs", "action", g) == call and self.b.get("lt1_legs", "proc", g) == cf)
+        self.b.set("lt1_legs", "lane", g, self.b.get("lt1_chains", "lane", self.c) + 1)
+        self.fails("P3", "the chain owns lane")
+
+    def test_a_stationary_chain_has_one_call(self):
+        self.b.set("lt1_chains", "calls", self.c, 2)
+        self.fails("P3", "is stationary with 2 calls")
+
+    def test_its_drain_waits_for_its_results(self):
+        drain = self.b.get("lt1_chains", "drain_action", self.c)
+        self.assertNotEqual(drain, dc.NONE64)
+        g = next(g for g in range(self.b.rows("lt1_legs")) if self.b.get("lt1_legs", "action", g) == drain)
+        self.b.set("lt1_chains", "out1", self.c, self.b.get("lt1_legs", "start", g) + 1)
+        self.fails("P4", "starts before its last result is out")
+
+    def test_the_manifest_names_the_dataflow(self):
+        f = self.b.manifest["lt1"]["fabric"]
+        self.assertEqual((f["mapping"], f["drain_edge"]), ("weight-stationary", "south"))
 
 
 if __name__ == "__main__":

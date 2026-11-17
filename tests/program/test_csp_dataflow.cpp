@@ -855,6 +855,84 @@ TEST_CASE("Dataflow: the deployment's default, fabric.dataflow", "[program][csp]
     CHECK_THAT(bad.validate(), ContainsSubstring("fabric.dataflow 'diagonal' must be os, ws or is"));
 }
 
+TEST_CASE("Dataflow: L-T1 times WS and IS by the RTL's rules: PRELOAD R, then the stream, out south",
+          "[program][csp][run][dataflow][lt1]") {
+    // S1's array is 128 x 64, so R = 128. A 16 x 16 x 16 call holds a 16 x 16 tile (ws: B's K x N;
+    // is: Aᵀ's K x M) and streams 16 rows; the PRELOAD is R clocks whatever K is, and the compute
+    // tile is busy R + max(S, R) (systars docs/architecture/systolic-tile.md).
+    const auto d = s1_with_combiner();
+    for (const char* df : {"ws", "is"}) {
+        CAPTURE(df);
+        const Dataflow want = std::string(df) == "ws" ? Dataflow::WS : Dataflow::IS;
+        // Stated on the accumulator, and left to the deployment's fabric.dataflow: the same timing.
+        std::string stated = program(df), inherited = stated;
+        const std::string decl = std::string(" dataflow ") + df;
+        REQUIRE(inherited.find(decl) != std::string::npos);
+        inherited.erase(inherited.find(decl), decl.size());
+        auto dd = d;
+        dd.fabric.dataflow = df;
+        std::vector<std::uint64_t> makespans;
+        for (const auto& [text, dev] : {std::pair{stated, d}, std::pair{inherited, dd}}) {
+            const lang::Program ast = lang::parse(text);
+            driver::CspRunRequest req{ast, &dev, driver::csp_inputs(ast),
+                                      {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential}};
+            const auto r = driver::run_csp(req);
+            REQUIRE(r.levels.size() == 2);
+            const auto& lt = r.levels[1];
+            CHECK(lt.values.operand("C").values == r.reference->operand("C").values);
+            REQUIRE(lt.chains.size() == 64);                    // every call is a chain of one
+            std::map<std::size_t, std::vector<const TransactionalInterpreter::Chain*>> by_lane;
+            for (const auto& ch : lt.chains) {
+                CHECK(ch.dataflow == want);
+                CHECK(ch.calls == 1);
+                CHECK(ch.rows == 16);
+                CHECK(ch.cols == 16);
+                CHECK(ch.preload == 128);
+                CHECK(ch.streamed == 16);
+                CHECK(ch.front == ch.in0 + 128);
+                CHECK(ch.in1 == ch.front + 16);
+                CHECK(ch.last == ch.in1 + 15);
+                CHECK(ch.out1 == ch.last + 128);
+                CHECK(ch.link_delay == 0);
+                by_lane[ch.lane].push_back(&ch);
+            }
+            // The next PRELOAD waits for the previous stream to leave: R + max(S, R) apart.
+            for (auto& [lane, v] : by_lane) {
+                std::sort(v.begin(), v.end(), [](auto* a, auto* b) { return a->in0 < b->in0; });
+                for (std::size_t i = 1; i < v.size(); ++i) CHECK(v[i]->in0 >= v[i - 1]->in0 + 256);
+            }
+            makespans.push_back(lt.makespan);
+        }
+        CHECK(makespans[0] == makespans[1]);
+    }
+}
+
+TEST_CASE("Dataflow: an OS program keeps its chains, whatever the deployment's default",
+          "[program][csp][run][dataflow][lt1]") {
+    // fabric.dataflow is the default for an L2 accumulator that states none; a fabric accumulator
+    // is output-stationary, so a ws default leaves an OS program's timing as it was.
+    const auto d = s1_with_combiner();
+    auto dd = d;
+    dd.fabric.dataflow = "ws";
+    const lang::Program ast = lang::parse(program("os"));
+    std::vector<std::vector<TransactionalInterpreter::Chain>> chains;
+    for (const platform::DeviceSpecification* dev : {&d, static_cast<const platform::DeviceSpecification*>(&dd)}) {
+        driver::CspRunRequest req{ast, dev, driver::csp_inputs(ast),
+                                  {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential}};
+        const auto r = driver::run_csp(req);
+        REQUIRE(r.levels.size() == 2);
+        chains.push_back(r.levels[1].chains);
+    }
+    REQUIRE(chains[0].size() == 16);
+    REQUIRE(chains[1].size() == chains[0].size());
+    for (std::size_t i = 0; i < chains[0].size(); ++i) {
+        CHECK(chains[0][i].dataflow == Dataflow::OS);
+        CHECK(chains[1][i].dataflow == Dataflow::OS);
+        CHECK(chains[0][i].out1 == chains[1][i].out1);
+        CHECK(chains[0][i].calls == 4);
+    }
+}
+
 TEST_CASE("Dataflow: an accumulator's dataflow ends with it; a later Call on its tile carries none",
           "[program][csp][dataflow][decl]") {
     // C[0, 0] is reduced (in L2 as ws, or in the fabric), stored, then read back and written in

@@ -1023,8 +1023,18 @@ globalThis.DflowCore = (() => {
     $("overlap").hidden = !o;
     $("overlap").disabled = !(R.fabric && R.overlaps.length);
     $("pipe").hidden = !o;
+    // Which dataflows L-T1's chains used (#395; the optional column, absent = all os).
+    function dataflowNote() {
+      const C = R.lt1_chains, n = { 1: 0, 2: 0, 3: 0 };
+      for (let c = 0; c < C.rows; c++) n[C.dataflow ? C.dataflow[c] : 1] = (n[C.dataflow ? C.dataflow[c] : 1] || 0) + 1;
+      const parts = [];
+      if (n[1]) parts.push(`output-stationary (${n[1]} chains): C stays in the PEs and its results drain north on their own links`);
+      if (n[2]) parts.push(`weight-stationary (${n[2]} calls): a PRELOAD of ${R.fabric.pe_rows} clocks holds B, A streams through, and each call's partial sums leave south`);
+      if (n[3]) parts.push(`input-stationary (${n[3]} calls): a PRELOAD of ${R.fabric.pe_rows} clocks holds Aᵀ, B streams through, and each call's partial sums leave south`);
+      return (parts.join("; ") || "no chains") + ". ";
+    }
     $("pipe-note").textContent = !o ? "" : R.fabric
-      ? `${R.fabric.pe_rows} x ${R.fabric.pe_cols} PEs per compute tile, output-stationary; results drain north on their own links. ` +
+      ? `${R.fabric.pe_rows} x ${R.fabric.pe_cols} PEs per compute tile. ` + dataflowNote() +
         `The bars are linear in each recorded interval (the model's dense stream), at PE(0,0) for the operands.` + oneLegText()
       : `The deployment declares no fabric (fabric.pe_rows / pe_cols), so L-T1 timed every call as one leg: there is no pipeline to show.`;
     if (o) {

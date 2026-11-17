@@ -159,7 +159,8 @@ TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::Csp
         if (ch.lane >= n_cf)
             throw RecordError("record: a chain ran on compute tile " + std::to_string(ch.lane) + " of " + std::to_string(n_cf));
         rec.chains.push_back({tile_id(ch.tile), CF0 + static_cast<std::uint32_t>(ch.lane), ch.rows, ch.cols, ch.calls,
-                              ch.in0, ch.front, ch.in1, ch.last, ch.out1});
+                              ch.in0, ch.front, ch.in1, ch.last, ch.out1, static_cast<std::uint8_t>(ch.dataflow),
+                              ch.preload, ch.streamed});
     }
 
     // ---- transits (each movement leg) and computes (each Call)
@@ -379,17 +380,20 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     }
     if (phases) {
         Table t{"chain", "chain.bin", rec.chains.size(), {}};
-        std::vector<std::uint32_t> tile, station, rows, cols, calls;
+        std::vector<std::uint32_t> tile, station, rows, cols, calls, preload, streamed;
+        std::vector<std::uint8_t> dataflow;
         std::vector<Cycle> in0, front, in1, last, out1;
         for (const Chain& c : rec.chains) {
             tile.push_back(c.tile); station.push_back(c.station); rows.push_back(c.rows); cols.push_back(c.cols);
             calls.push_back(c.calls); in0.push_back(c.in0); front.push_back(c.front); in1.push_back(c.in1);
             last.push_back(c.last); out1.push_back(c.out1);
+            dataflow.push_back(c.dataflow); preload.push_back(c.preload); streamed.push_back(c.streamed);
         }
         t.put("tile", "u32", tile); t.put("station", "u32", station); t.put("rows", "u32", rows);
         t.put("cols", "u32", cols); t.put("calls", "u32", calls); t.put("in0", "f64", times(in0));
         t.put("front", "f64", times(front)); t.put("in1", "f64", times(in1)); t.put("last", "f64", times(last));
         t.put("out1", "f64", times(out1));
+        t.put("dataflow", "u8", dataflow); t.put("preload", "u32", preload); t.put("streamed", "u32", streamed);   // #395
         tables["chain"] = write_table(t, dir);
     }
     m["tables"] = tables;
@@ -572,8 +576,12 @@ TileFlowRecord read_tflow(const std::string& dir) {
         const auto in1 = cycles(read_col<double>(t, b, "in1", "f64", n));
         const auto last = cycles(read_col<double>(t, b, "last", "f64", n));
         const auto out1 = cycles(read_col<double>(t, b, "out1", "f64", n));
+        const auto dataflow = read_col_or<std::uint8_t>(t, b, "dataflow", "u8", n, 1);   // #395; older: os
+        const auto preload = read_col_or<std::uint32_t>(t, b, "preload", "u32", n, 0);
+        const auto streamed = read_col_or<std::uint32_t>(t, b, "streamed", "u32", n, 0);
         for (std::size_t i = 0; i < n; ++i)
-            rec.chains.push_back({tile[i], station[i], rows[i], cols[i], calls[i], in0[i], front[i], in1[i], last[i], out1[i]});
+            rec.chains.push_back({tile[i], station[i], rows[i], cols[i], calls[i], in0[i], front[i], in1[i], last[i], out1[i],
+                                  dataflow[i], preload[i], streamed[i]});
     }
     // Every index points into its table, so a consumer (the occupancy sweep, the viewer) can
     // index without checking -- the checks are here, once, at the trust boundary.
