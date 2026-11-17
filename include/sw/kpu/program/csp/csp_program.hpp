@@ -193,8 +193,9 @@ struct Stage {
 // store's Writeback reads the slot (carrying its address), and its L2Release frees it.
 enum class Merge : std::uint8_t { None, Overwrite, Accumulate };
 
-// A reduction's dataflow on the systolic array (#395): which operand the PEs hold. Default: the
-// deployment's `fabric.dataflow` (os when it declares none). Output-stationary holds C and drains
+// A reduction's dataflow on the systolic array (#395): which operand the PEs hold. Default: an L2
+// accumulator that states none, which takes the deployment's `fabric.dataflow` (os when it
+// declares none); a fabric accumulator is always OS. Output-stationary holds C and drains
 // it north when the reduction ends; weight- and input-stationary hold B or A (PRELOAD), stream the
 // other, and each call's partial sums leave south, merged in L2 by the Combiner.
 enum class Dataflow : std::uint8_t { Default, OS, WS, IS };

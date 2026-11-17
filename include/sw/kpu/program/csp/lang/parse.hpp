@@ -122,8 +122,9 @@ struct Stmt {
     // Acc: `in l2` -- an L2 accumulator (#429, #430): each tile's partial in an L2 slot, every
     // call's result merged into it by the Combiner. Its tile may be a slice. Else `in fabric`.
     bool in_l2 = false;
-    // Acc: `dataflow os|ws|is` (#395) -- the reduction's dataflow on the array; empty: the
-    // deployment's (`fabric.dataflow`, os when undeclared). ws and is need `in l2`.
+    // Acc: `dataflow os|ws|is` (#395) -- the reduction's dataflow on the array; empty on an L2
+    // accumulator: the deployment's (`fabric.dataflow`, os when undeclared); a fabric one is os.
+    // ws and is need `in l2`.
     std::string dataflow;
 };
 

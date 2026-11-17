@@ -804,8 +804,12 @@ TEST_CASE("Dataflow: the program states it on the accumulator, and every Call an
         CHECK(calls == 64);
         CHECK(drains == 64);
     }
-    // os: the generator's fabric accumulators state none, so the deployment's applies.
-    for (const Action& a : lang::compile(program("os")).actions) CHECK(a.dataflow == Dataflow::Default);
+    // os: a fabric accumulator is output-stationary, stated or not; the deployment's default is
+    // for an L2 accumulator only.
+    for (const Action& a : lang::compile(program("os")).actions) {
+        const bool c = a.kind == Action::Kind::Call || (a.kind == Action::Kind::Drain && a.tile.operand == "C");
+        CHECK(a.dataflow == (c ? Dataflow::OS : Dataflow::Default));
+    }
 }
 
 TEST_CASE("Dataflow: ws and is need an L2 accumulator, in the walker and the validator", "[program][csp][dataflow][decl]") {

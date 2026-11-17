@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A reduction's dataflow, stated in the program** (#395, step 1 of 2).
   - `acc C[:, j] in l2 dataflow ws { ... }` (or `is`, `os`) says which operand the array holds.
-    Unstated, the deployment's new `fabric.dataflow` applies (os when undeclared, and written
-    only when declared, so existing specs keep their digests).
+    Unstated on an L2 accumulator, the deployment's new `fabric.dataflow` applies (os when
+    undeclared, and written only when declared, so existing specs keep their digests). A fabric
+    accumulator holds C in the PEs, so it is always os.
   - `ws` and `is` need `in l2`, because each call's partial sums leave the array. The walker and
     the validator both refuse them on an in-fabric accumulator.
   - The walker stamps the dataflow on the accumulator's Calls and their Drains (`Action::dataflow`).
