@@ -217,6 +217,37 @@ inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& ha
         if (!l.started) l.rec.start = l.rec.finish = l.at;
         else if (!l.finished) l.rec.finish = l.rec.start;
     }
+    // A Release or an L2Release (#402): at the cycle its credit returned, not its handover. Each
+    // residency frees its slot once, logged as a CREDIT_RELEASED of its tile and pool -- an L3
+    // slot when the BlockMover retires the entry after its Moves, or when a Store ejects the
+    // result; an L2 slot when the executor releases a staged copy or a partial -- so a tile's
+    // Releases take its L3 credits, and its L2Releases its "L2:release" credits, in program order.
+    // One with no credit left keeps its handover (a retained or never-filled slot frees nothing).
+    {
+        std::map<std::string, std::vector<std::uint64_t>> l3_free, l2_free;   // tile -> cycles, in order
+        for (const auto& e : events)
+            if (e.type == EventType::CREDIT_RELEASED && e.tile) {
+                if (e.detail == "l3") l3_free[e.tile->to_string()].push_back(e.cycle);
+                else if (e.detail == "l2" && e.component == "L2:release") l2_free[e.tile->to_string()].push_back(e.cycle);
+            }
+        std::map<std::string, std::size_t> l3_next, l2_next;
+        std::vector<std::size_t> by_action(legs.size());
+        for (std::size_t i = 0; i < legs.size(); ++i) by_action[i] = i;
+        std::stable_sort(by_action.begin(), by_action.end(),
+                         [&](std::size_t x, std::size_t y) { return legs[x].rec.action < legs[y].rec.action; });
+        for (std::size_t i : by_action) {
+            Leg& l = legs[i];
+            const bool l3 = l.rec.kind == Action::Kind::Release, l2 = l.rec.kind == Action::Kind::L2Release;
+            if (!l3 && !l2) continue;
+            const std::string tk = l.rec.tile.to_string();
+            auto& free = l3 ? l3_free[tk] : l2_free[tk];
+            std::size_t& next = l3 ? l3_next[tk] : l2_next[tk];
+            if (next < free.size()) {
+                l.rec.start = l.rec.finish = l.rec.ready = std::max<std::uint64_t>(free[next], l.at);
+                ++next;
+            }
+        }
+    }
     std::vector<std::size_t> order(legs.size());
     for (std::size_t i = 0; i < legs.size(); ++i) order[i] = i;
     std::stable_sort(order.begin(), order.end(),

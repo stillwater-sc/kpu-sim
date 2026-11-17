@@ -44,7 +44,9 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     json m = json::object();
     m["format"] = "kpu-dflow";
     m["version"] = kDflowVersion;
-    m["level"] = "L-B";
+    m["level"] = rec.level;
+    // 6.2 (#402): a timed level's L2, accumulator and array edge, addressed by slot.
+    if (rec.timed()) m["minor"] = 2;
     m["producer"] = "kpu-sim " + std::string(sw::kpu::VERSION_FULL);
     m["run_id"] = rec.run_id;
     m["program"] = json{{"name", rec.program_name}, {"text", rec.program_text}};
@@ -71,6 +73,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     m["event_kinds"] = json::array({"DMA", "BLOCK_MOVE", "STREAM", "COMPUTE", "DRAIN", "CREDIT", "TOKEN", "BM_ROW",
                                     "STR_ROW", "DRAIN_ROW"});
     m["time"] = nullptr;                                // L-B has no time (§3.7 of the domain-flow plan)
+    if (rec.timed()) m["time"] = json{{"unit", "cycle"}, {"clock", nullptr}, {"cycles", rec.cycles}};
     m["geometry"] = json{
         {"dram", json{{"modelled", true}}},
         {"l3", json{{"modelled", true}, {"slots", rec.l3}, {"banks", rec.banks}}},
@@ -79,7 +82,17 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         {"acc", json{{"modelled", false},
                      {"why", "L-B holds an accumulator as a whole tile in the fabric; its banks and rows are not modelled"}}},
         {"l1", json{{"modelled", false}, {"why", "L-B feeds whole tiles to the fabric; the array's edge is not modelled"}}}};
-    m["result"] = json{{"cycles", nullptr}, {"values", "unchecked"}, {"bound", nullptr}};
+    if (rec.timed())
+        m["geometry"] = json{
+            {"dram", json{{"modelled", true}}},
+            {"l3", json{{"modelled", true}, {"slots", rec.l3}, {"banks", rec.banks}}},
+            // By slot (6.2): the program's L2 slots, where a staged copy or a partial is; an
+            // unstaged tile's L2 address is none. The accumulator and the edge have none.
+            {"l2", json{{"modelled", true}, {"slots", rec.l2}}},
+            {"acc", json{{"modelled", true}, {"slots", 0}}},
+            {"l1", rec.pe_rows ? json{{"modelled", true}, {"rows", rec.pe_rows}, {"cols", rec.pe_cols}}
+                               : json{{"modelled", true}, {"slots", 0}}}};
+    m["result"] = json{{"cycles", rec.timed() ? json(rec.cycles) : json(nullptr)}, {"values", "unchecked"}, {"bound", nullptr}};
     m["vars"] = rec.vars;
     m["totals"] = json{{"actions", rec.actions}, {"loads", rec.loads}, {"stores", rec.stores}};
     m["step_limit"] = rec.step_limit;
@@ -88,6 +101,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     m["not_modelled"] = json::array({"time: L-B has no time; the axis is the step (action)",
                                      "L2 and fabric capacity for tiles in transit: unbounded at L-B (a program declares L3, and the L2 slots it stages into)",
                                      "tile values between the recorded actions: a snapshot is taken only where an action leaves a selected tile"});
+    if (rec.timed()) m["not_modelled"] = rec.level_notes;
     {
         json v = json::object();
         v["format"] = "per-operand";                // each operand's element type (fp32: tile_check's ElementFormat)
@@ -231,10 +245,30 @@ void write_dflow(const DFR& rec, const std::string& dir) {
     {
         // Events (version 6): a timed level's DMAs, moves, streams, credits, tokens and row progress.
         // L-B's steps are its events, so it writes none, and no cycle column (L-B has no time).
-        Table t{"events", "events.bin", 0, {}};
-        for (const char* c : {"id", "parent", "action", "where", "src_addr", "dst_addr"}) t.put(c, "u64", std::vector<std::uint64_t>{});
-        for (const char* c : {"tile", "lane", "row", "beat"}) t.put(c, "u32", std::vector<std::uint32_t>{});
-        for (const char* c : {"kind", "process", "src", "dst"}) t.put(c, "u8", std::vector<std::uint8_t>{});
+        // A timed level (#402) writes its events, with cycle and end.
+        using Ev = DFR::Event;
+        const auto& E = rec.events;
+        Table t{"events", "events.bin", E.size(), {}};
+        std::vector<std::uint64_t> ids(E.size());
+        for (std::size_t i = 0; i < E.size(); ++i) ids[i] = i;
+        t.put("id", "u64", ids);
+        t.put("parent", "u64", col<std::uint64_t>(E, [](const Ev& x) { return x.parent; }));
+        t.put("action", "u64", col<std::uint64_t>(E, [](const Ev& x) { return x.action; }));
+        t.put("where", "u64", col<std::uint64_t>(E, [](const Ev& x) { return x.where; }));
+        t.put("src_addr", "u64", col<std::uint64_t>(E, [](const Ev& x) { return x.src_addr; }));
+        t.put("dst_addr", "u64", col<std::uint64_t>(E, [](const Ev& x) { return x.dst_addr; }));
+        t.put("tile", "u32", col<std::uint32_t>(E, [](const Ev& x) { return x.tile; }));
+        t.put("lane", "u32", col<std::uint32_t>(E, [](const Ev& x) { return x.lane; }));
+        t.put("row", "u32", col<std::uint32_t>(E, [](const Ev& x) { return x.row; }));
+        t.put("beat", "u32", col<std::uint32_t>(E, [](const Ev& x) { return x.beat; }));
+        t.put("kind", "u8", col<std::uint8_t>(E, [](const Ev& x) { return x.kind; }));
+        t.put("process", "u8", col<std::uint8_t>(E, [](const Ev& x) { return x.process; }));
+        t.put("src", "u8", col<std::uint8_t>(E, [](const Ev& x) { return x.src; }));
+        t.put("dst", "u8", col<std::uint8_t>(E, [](const Ev& x) { return x.dst; }));
+        if (rec.timed()) {
+            t.put("cycle", "u64", col<std::uint64_t>(E, [](const Ev& x) { return x.cycle; }));
+            t.put("end", "u64", col<std::uint64_t>(E, [](const Ev& x) { return x.end; }));
+        }
         tables["events"] = write_table(t, dir);
     }
     {
@@ -377,6 +411,20 @@ DFR read_dflow(const std::string& dir) {
                                     o.at("cols").get<std::uint64_t>(), o.at("tile_rows").get<std::uint64_t>(),
                                     o.at("tile_cols").get<std::uint64_t>(),
                                     version >= 6 ? o.at("element").get<std::string>() : std::string(numeric::kFp32)});
+        if (version >= 6) {
+            rec.level = m.at("level").get<std::string>();
+            if (!m.at("time").is_null()) rec.cycles = m.at("time").at("cycles").get<std::uint64_t>();
+            if (rec.timed()) {
+                for (const json& s : m.at("not_modelled")) rec.level_notes.push_back(s.get<std::string>());
+                // A timed record's array edge is its geometry's (it has no L-T1 overlay to carry it).
+                const json& l1 = m.at("geometry").at("l1");
+                if (l1.contains("rows")) {
+                    rec.fabric = true;
+                    rec.pe_rows = l1.at("rows").get<std::uint32_t>();
+                    rec.pe_cols = l1.at("cols").get<std::uint32_t>();
+                }
+            }
+        }
         rec.vars = m.at("vars").get<std::vector<std::string>>();
         rec.actions = m.at("totals").at("actions").get<std::uint64_t>();
         rec.loads = m.at("totals").at("loads").get<std::uint64_t>();
@@ -653,6 +701,27 @@ DFR read_dflow(const std::string& dir) {
                 auto pos = read_col<std::uint32_t>(t, blob, "pos", "u32", n);
                 for (std::size_t i = 0; i < n; ++i) rec.calls.push_back({action[i], chain[i], pos[i]});
             }
+        }
+        if (version >= 6 && tables.contains("events")) {
+            auto [t, blob] = table("events", n);
+            const auto parent = read_col<std::uint64_t>(t, blob, "parent", "u64", n);
+            const auto action = read_col<std::uint64_t>(t, blob, "action", "u64", n);
+            const auto where = read_col<std::uint64_t>(t, blob, "where", "u64", n);
+            const auto src_addr = read_col<std::uint64_t>(t, blob, "src_addr", "u64", n);
+            const auto dst_addr = read_col<std::uint64_t>(t, blob, "dst_addr", "u64", n);
+            const auto tile = read_col<std::uint32_t>(t, blob, "tile", "u32", n);
+            const auto lane = read_col<std::uint32_t>(t, blob, "lane", "u32", n);
+            const auto row = read_col<std::uint32_t>(t, blob, "row", "u32", n);
+            const auto beat = read_col<std::uint32_t>(t, blob, "beat", "u32", n);
+            const auto kind = read_col<std::uint8_t>(t, blob, "kind", "u8", n);
+            const auto process = read_col<std::uint8_t>(t, blob, "process", "u8", n);
+            const auto src = read_col<std::uint8_t>(t, blob, "src", "u8", n);
+            const auto dst = read_col<std::uint8_t>(t, blob, "dst", "u8", n);
+            const auto cycle = rec.timed() ? read_col<std::uint64_t>(t, blob, "cycle", "u64", n) : std::vector<std::uint64_t>(n);
+            const auto end = rec.timed() ? read_col<std::uint64_t>(t, blob, "end", "u64", n) : std::vector<std::uint64_t>(n);
+            for (std::size_t i = 0; i < n; ++i)
+                rec.events.push_back({parent[i], action[i], where[i], src_addr[i], dst_addr[i], tile[i], lane[i], row[i],
+                                      beat[i], kind[i], process[i], src[i], dst[i], cycle[i], end[i]});
         }
         return rec;
     } catch (const json::exception& e) {

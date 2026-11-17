@@ -257,6 +257,22 @@ struct DomainFlowRecord {
     std::vector<Chain> chains;
     std::vector<Call> calls;
 
+    // A timed level's record (#402; docs/plans/shared-tile-flow-record.md, version 6.2): level
+    // "L-T1" or "L-CA", the events it emitted with their cycles, and its own final values. The
+    // steps, tiles, residencies and positions are the program's, the same at every level (ADR 0002).
+    // "L-B": no time and no events (its steps are its events).
+    struct Event {
+        std::uint64_t parent = kNone64, action = kNone64, where = kNone64, src_addr = kNone64, dst_addr = kNone64;
+        std::uint32_t tile = kNone32, lane = 0, row = kNone32, beat = kNone32;
+        std::uint8_t kind = 0, process = kNone8, src = kNone8, dst = kNone8;   // into event_kinds, processes, layers
+        std::uint64_t cycle = 0, end = 0;
+    };
+    std::string level = "L-B";
+    std::vector<Event> events;
+    std::uint64_t cycles = 0;                       // a timed record's cycles to result: its latest end
+    std::vector<std::string> level_notes;           // what a timed level does not model (not_modelled)
+    bool timed() const { return level != "L-B"; }
+
     std::string tile_name(std::uint32_t t) const {
         const Tile& x = tiles.at(t);
         return operands.at(x.operand).name + "[" + std::to_string(x.ti) + "," + std::to_string(x.tj) + "]";

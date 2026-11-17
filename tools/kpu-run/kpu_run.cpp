@@ -24,6 +24,7 @@
 #include <sw/kpu/program/serialize/l0_format.hpp>
 #include <sw/kpu/program/record/domain_flow_record.hpp>
 #include <sw/kpu/program/record/tile_flow_record.hpp>
+#include <sw/kpu/program/record/timed_record.hpp>
 #include <sw/kpu/program/csp/bubbles.hpp>
 #include <sw/kpu/program/csp/tile_commands.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
@@ -88,6 +89,11 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             carries its overlay: every action's legs in L-T1 cycles, each
                             final tile's proximity to L-B, and (with a declared fabric) each
                             accumulator's gemm chain as a systolic stream
+  --dflow-lt1 <dir>         L-T1's own domain-flow record (.dflow 6.2, #402): L-B's steps, and
+                            L-T1's events -- every DMA, block move, stream, compute and drain,
+                            with its tokens and credits -- in its cycles, and its final values.
+                            L2 and the accumulator are addressed by slot; no row events
+  --dflow-lca <dir>         the same, from L-CA's run (its protocol events, matched to the actions)
   --tile-commands <file.json>  the program as the KPU RTL's tile command stream (kpu-tile-cmds
                             version 1, #397): LOAD / STORE / EXEC with their sync and chain bits,
                             for one output-stationary int8 tile, with the inputs and L-B's results
@@ -441,6 +447,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                                                    "--emit-l0", "--emit-l0-kernel",
                                                    "--tflow", "--step", "--step-limit", "--timeline",
                                                    "--dflow", "--dflow-limit", "--dflow-values", "--dflow-values-cap",
+                                                   "--dflow-lt1", "--dflow-lca",
                                                    "--tile-commands", "--bubbles"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
@@ -452,14 +459,15 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             return 2;
         }
     std::string err, deploy_path, inputs_path, emit_path, tflow_path, timeline_path, trace_path, kernel_path, dflow_path,
-        dflow_values, tile_cmds_path;
+        dflow_values, tile_cmds_path, dflow_lt1_path, dflow_lca_path;
     std::vector<std::string> deploy_paths;
     if (!arg_all(a, "--deploy", deploy_paths, err) || !arg_required(a, "--inputs", inputs_path, err) ||
         !arg_required(a, "--emit-l0-result", emit_path, err) || !arg_required(a, "--tflow", tflow_path, err) ||
         !arg_required(a, "--timeline", timeline_path, err) || !arg_required(a, "--emit-l0", trace_path, err) ||
         !arg_required(a, "--emit-l0-kernel", kernel_path, err) || !arg_required(a, "--dflow", dflow_path, err) ||
         !arg_required(a, "--dflow-values", dflow_values, err) ||
-        !arg_required(a, "--tile-commands", tile_cmds_path, err)) {
+        !arg_required(a, "--tile-commands", tile_cmds_path, err) || !arg_required(a, "--dflow-lt1", dflow_lt1_path, err) ||
+        !arg_required(a, "--dflow-lca", dflow_lca_path, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
@@ -487,7 +495,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     const bool sweep = deploy_paths.size() > 1;
     if (deploy_paths.size() == 1) deploy_path = deploy_paths.front();
     if (sweep) {
-        for (const char* k : {"--tflow", "--dflow", "--dflow-values", "--timeline", "--tile-commands", "--emit-l0",
+        for (const char* k : {"--tflow", "--dflow", "--dflow-lt1", "--dflow-lca", "--dflow-values", "--timeline",
+                              "--tile-commands", "--emit-l0",
                               "--emit-l0-kernel", "--emit-l0-result", "--step"})
             if (arg_present(a, k)) {
                 std::cerr << "kpu-run: " << k << " records one run, and " << deploy_paths.size()
@@ -601,10 +610,13 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     csp::lang::Validation validation;
     driver::CspReference reference;
     std::optional<record::DomainFlowRecorder> dflow;
+    std::optional<record::DomainFlowRecord> lb_record;     // L-B's, finished once: --dflow and the timed records
     auto write_dflow_bundle = [&](const std::string& run_id, const TileProgram* finals,
                                   const CspLevelOutcome* lt1 = nullptr, const std::string& lt1_id = "") {
         try {
-            record::DomainFlowRecord rec = dflow->finish(finals);
+            if (!lb_record) lb_record = dflow->finish(finals);
+            if (dflow_path.empty()) return true;
+            record::DomainFlowRecord rec = *lb_record;
             rec.run_id = run_id;
             // The L-T1 overlay, when L-T1 ran too: its legs joined on the action, and its values
             // checked per tile against L-B's (domain-flow step 5).
@@ -635,7 +647,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         const csp::lang::Target target = csp::lang::target_from(spec.device(0));
         validation = csp::lang::validate(*ast, deployment ? &target : nullptr);
         handle = vp->load_csp(*ast, inputs, deployment.has_value());
-        if (!dflow_path.empty()) {
+        if (!dflow_path.empty() || !dflow_lt1_path.empty() || !dflow_lca_path.empty()) {
             record::ValueSelection sel;
             if (!dflow_values.empty()) sel = record::parse_value_selection(dflow_values);
             sel.cap_bytes = static_cast<std::uint64_t>(dflow_cap_mib) << 20;
@@ -651,7 +663,9 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                 run_ids.emplace_back();
                 continue;
             }
-            auto r = vp->run_csp(handle, l, window, has_flag(a, "--bubbles") && l == ExecutionLevel::CycleAccurate);
+            // L-CA's protocol events, matched to its actions: the bubble report's, and its record's (#402).
+            const bool keep = (has_flag(a, "--bubbles") || !dflow_lca_path.empty()) && l == ExecutionLevel::CycleAccurate;
+            auto r = vp->run_csp(handle, l, window, keep);
             run_ids.push_back(r.outcome.skipped ? std::string() : r.identity.str());
             outcomes.push_back(std::move(r.outcome));
         }
@@ -676,6 +690,36 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             }
         }
         if (!write_dflow_bundle(run_id, reference.values ? &*reference.values : nullptr, lt1, lt1_id)) return 2;
+        // --dflow-lt1, --dflow-lca: a timed level's own record (#402): L-B's steps, the level's
+        // events with their cycles, and its final values.
+        for (const auto& [path_, lvl, name] : {std::tuple{dflow_lt1_path, ExecutionLevel::BlockSequential, "L-T1"},
+                                               std::tuple{dflow_lca_path, ExecutionLevel::CycleAccurate, "L-CA"}}) {
+            if (path_.empty()) continue;
+            const std::string flag = std::string("--dflow-") + (lvl == ExecutionLevel::CycleAccurate ? "lca" : "lt1");
+            std::size_t li = 0;
+            while (li < outcomes.size() && outcomes[li].level != lvl) ++li;
+            if (li == outcomes.size() || outcomes[li].skipped) {
+                std::cerr << "kpu-run: " << flag << ": " << name << " did not run"
+                          << (li < outcomes.size() ? " (" + *outcomes[li].skipped + ")" : " (add it to --level)") << "\n";
+                return 2;
+            }
+            const CspLevelOutcome& o = outcomes[li];
+            try {
+                // The array's edge is the deployment's, the same at both levels.
+                const auto dv = spec.device_view(0);
+                record::DomainFlowRecord rec = record::timed_record(
+                    *lb_record, name, o.records, o.values, static_cast<std::uint32_t>(dv.pe_rows),
+                    static_cast<std::uint32_t>(dv.pe_cols));
+                rec.run_id = run_ids[li];
+                record::write_dflow(rec, path_);
+                std::cout << "wrote  " << path_ << "  (" << rec.events.size() << " events in " << rec.cycles << " "
+                          << name << " cycles, " << rec.steps.size() << " steps, " << rec.snapshots.size()
+                          << " final tiles, from " << name << ")\n";
+            } catch (const std::exception& e) {
+                std::cerr << "kpu-run: " << flag << ": " << e.what() << "\n";
+                return 2;
+            }
+        }
     }
     // --tile-commands: the program as the RTL's tile command stream (#397), with the inputs and
     // L-B's results in it, for the RTL's runtime to execute.
