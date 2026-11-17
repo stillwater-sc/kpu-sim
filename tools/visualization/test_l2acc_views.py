@@ -159,8 +159,11 @@ class L2AccViews(unittest.TestCase):
         cap, tiles, kv = at(first)
         self.assertRegex(cap, r"partials [1-9]")
         self.assertRegex(tiles, r"p\d+ 1/\d+")
-        self.assertIn("overwrite", kv)
         self.assertIn("(opens it)", kv)
+        # The fixture's accumulator has an init (--init bias): its first merge names it, and the
+        # Combiner's stages list it (#460's review).
+        self.assertIn("MERGE_INIT", kv)
+        self.assertRegex(kv, r"init\(D\[\d+,\d+\]\)")
         cap, tiles, kv = at(later)
         self.assertIn("accumulate", kv)
         self.assertIn("(merged into)", kv)

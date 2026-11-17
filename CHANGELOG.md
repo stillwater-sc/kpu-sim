@@ -15,11 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     apart. The step panel names a Drain's merge (overwrite opens the partial and adds its init;
     accumulate adds a call's result) and says whether its L2 address is a partial or a staging.
     An accumulate Drain no longer resets the partial's arrival.
+  - **Each step's stages** are now recorded: `.dflow` gains the optional step columns `stages` (a
+    bit per vector op) and `init_tile`. The domain-flow step panel lists a merge's Combiner stages,
+    `init(D[0,0]) → scale → relu`, and names the init on the first merge (MERGE_INIT), so a
+    bias program and a plain one no longer read alike.
   - **Tile-flow:**
     - The header and the diagnostics count staged copies and accumulator partials apart, with an
       "L2 accumulator" line (partials, merges, cycles held).
     - An L2 slot holding a partial is drawn on its own teal ramp, with its own tooltip and
-      inspector line.
+      inspector line. A bin is teal when a partial overlaps any part of it, found by binary
+      search over each slot's sorted partials.
   - **Fixed:** the tile-flow viewer's chain table has a column called `rows`, which overwrote the
     row count. The header read "fabric chains NaN", the compute tiles' swimlane inspector said
     "no chains", and its chain overlay loop never ran.

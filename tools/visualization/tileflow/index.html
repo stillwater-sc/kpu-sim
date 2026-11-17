@@ -216,6 +216,16 @@ function parse(files) {
   R.l2.isPartial = i => !!(R.l2.partial && R.l2.partial[i]);
   R.l2.staged = 0; R.l2.partials = 0;
   for (let i = 0; i < R.l2.rows; i++) R.l2.isPartial(i) ? R.l2.partials++ : R.l2.staged++;
+  // Each slot's partials as sorted intervals, so a swimlane bin asks "does a partial overlap
+  // [a, b)?" by binary search, not by scanning every copy (#460's review).
+  R.l2.partialIv = new Map();
+  for (let i = 0; i < R.l2.rows; i++) {
+    if (!R.l2.isPartial(i) || !(R.l2.t1[i] > R.l2.t0[i])) continue;
+    const s = R.l2.slot[i];
+    if (!R.l2.partialIv.has(s)) R.l2.partialIv.set(s, []);
+    R.l2.partialIv.get(s).push([R.l2.t0[i], R.l2.t1[i]]);
+  }
+  for (const v of R.l2.partialIv.values()) v.sort((x, y) => x[0] - y[0]);
   R.ch = m.version === 6 ? tb("chain") : { rows: 0, n: 0 };
   {
     const t = m.tables.op_tiles, buf = files[t.file];
@@ -677,9 +687,10 @@ function drawLanes() {
       if (!occ && !peak) continue;
       if (cap && peak > cap) ctx.fillStyle = tok("--crit");
       else {
-        // An L2 slot holding an accumulator's partial in this bin is drawn on its own ramp (#456).
-        const k = slot >= 0 ? l2CopyAt(slot, (b + 0.5) * width) : -1;
-        ctx.fillStyle = ramp(cap ? occ / (width * cap) : Math.min(1, occ / width), k >= 0 && R.l2.isPartial(k));
+        // An L2 slot holding an accumulator's partial anywhere in this bin is drawn on its own
+        // ramp (#456): an overlap test over the whole bin, by binary search.
+        const acc = slot >= 0 && partialOverlaps(slot, b * width, (b + 1) * width);
+        ctx.fillStyle = ramp(cap ? occ / (width * cap) : Math.min(1, occ / width), acc);
       }
       ctx.fillRect(x0, y + 1, Math.max(1, x1 - x0), rh - 3);
     }
@@ -930,6 +941,15 @@ function slotResidencyAt(station, slot, t) {
 }
 // Version 6: the staged copy an L2 slot row holds at cycle t, the chain a compute tile's in or out row
 // carries at t (-1: none), and which of L-T1's phases t falls in. The phases are the record's.
+// Whether a partial in L2 slot `slot` overlaps [a, b). The copies in one slot never overlap
+// (tflow_check TF13), so sorted by start they are sorted by end too.
+function partialOverlaps(slot, a, b) {
+  const v = R.l2.partialIv.get(slot);
+  if (!v) return false;
+  let lo = 0, hi = v.length;                       // the first interval that ends after a
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (v[mid][1] > a) hi = mid; else lo = mid + 1; }
+  return lo < v.length && v[lo][0] < b;
+}
 function l2CopyAt(slot, t) {
   for (let i = 0; i < R.l2.rows; i++) if (R.l2.slot[i] === slot && R.l2.t0[i] <= t && t < R.l2.t1[i]) return i;
   return -1;
