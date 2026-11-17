@@ -110,6 +110,18 @@ class DflowPartials(unittest.TestCase):
         self.b.set("steps", "merge", o, 0)
         self.fails("S5", f"partial {self.p} opens at step {o}, which is not an overwrite Drain")
 
+    def test_a_cut_record_still_has_one_writeback(self):
+        # #459's review: in a cut record (not every step recorded) the exactly-once count is not
+        # checked, and a second Writeback went unseen. The last accumulate Drain (before the
+        # Writeback) becomes a second Writeback.
+        d = max(i for i in self.on_p if self.b.get("steps", "kind", i) == dc.DRAIN_KIND)
+        self.assertLess(d, self.step(dc.WRITEBACK_KIND))
+        self.b.set("steps", "kind", d, dc.WRITEBACK_KIND)
+        self.b.set("steps", "merge", d, 0)
+        self.b.manifest["cut"] = True
+        self.b.save_manifest()
+        self.fails("S5", "written back 2 times, more than once")
+
     def test_the_writeback_follows_the_last_drain(self):
         # #459's review: a merge after the Writeback is not in what was written back. Swap the last
         # accumulate Drain with the Writeback: the counts stay, the order is wrong.

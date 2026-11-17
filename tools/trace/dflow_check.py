@@ -872,9 +872,12 @@ def check_partials(m, T, bad, partial, merges, merge, complete):
                           f"{S['staging'][o]}, flags {f:#x})")
         if G["feeds"][g]:
             bad("S5", f"partial {g} records {G['feeds'][g]} feeds; a partial is never fed")
+        # At most one Writeback in any record, a cut one included; exactly one in a complete life.
+        if writebacks[g] > 1:
+            bad("S5", f"partial {g} is written back {writebacks[g]} times, more than once")
         if complete and G["close"][g] != NONE64:
-            if writebacks[g] != 1:
-                bad("S5", f"partial {g} is written back {writebacks[g]} times before its L2Release, not once")
+            if writebacks[g] == 0:
+                bad("S5", f"partial {g} is never written back before its L2Release")
             if merges is not None and merges[g] != drains[g]:
                 bad("S5", f"partial {g} records {merges[g]} merges; its Drains give {drains[g]}")
 
