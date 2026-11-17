@@ -196,7 +196,7 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
     const std::string text = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
                              "  tensor A[16,32] tile 16x16 in;\n  tensor B[32,16] tile 16x16 in;\n"
                              "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
-                             "  resident D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                             "  resident D[0, 0];\n  acc C[0, 0] in l2 dataflow ws init D[0, 0] {\n"
                              "    for k in 0..2 {\n      resident A[0, k], B[k, 0];\n"
                              "      call gemm(A[0, k], B[k, 0]) +-> C[0, 0];\n      release A[0, k], B[k, 0];\n    }\n  }\n"
                              "  release D[0, 0];\n  store C[0, 0];\n}\n";
@@ -219,6 +219,12 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
     REQUIRE(inits[0] < a.tiles.size());
     CHECK(a.operands[a.tiles[inits[0]].operand].name == "D");
     CHECK(inits[1] == record::kNone32);
+    // #395: the accumulator's dataflow, on its Calls and Drains, and on nothing else.
+    for (const auto& st : a.steps) {
+        const bool call_or_drain = st.kind == static_cast<std::uint8_t>(csp::Action::Kind::Call) ||
+                                   (st.kind == static_cast<std::uint8_t>(csp::Action::Kind::Drain) && st.merge);
+        CHECK(st.dataflow == (call_or_drain ? static_cast<std::uint8_t>(csp::Dataflow::WS) : 0));
+    }
 
     const auto dir = scratch("l2acc");
     record::write_dflow(a, dir.string());
@@ -228,7 +234,7 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
     REQUIRE(b.steps.size() == a.steps.size());
     for (std::size_t i = 0; i < a.steps.size(); ++i)
         CHECK((b.steps[i].merge == a.steps[i].merge && b.steps[i].stages == a.steps[i].stages &&
-               b.steps[i].init_tile == a.steps[i].init_tile));
+               b.steps[i].init_tile == a.steps[i].init_tile && b.steps[i].dataflow == a.steps[i].dataflow));
 
     // A record written before the columns: read with none.
     nlohmann::json m = nlohmann::json::parse(slurp((dir / "manifest.json").string()));

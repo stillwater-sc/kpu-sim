@@ -105,6 +105,8 @@ tile into an L2 slot, the calls inside it feed the copy, and its L2_RELEASE free
     S3 reuse counts           with every step recorded, a staging's feeds are its staged Feeds
     S4 all free at the end    every staging closes after it opens (only a refused run leaves one
                               open)
+    S6 a dataflow             (#395; the optional column steps.dataflow) each value is default, os,
+                              ws or is, and only a Call and its Drain carry one
     S5 an L2 accumulator      (#455; the optional columns l2_staging.partial and .merges, and
                               steps.merge) a partial's slot is opened by its overwrite Drain (its
                               open step, checked from the partial's side: a Drain that names it,
@@ -406,7 +408,7 @@ def in_domain(domain, r, c):
 
 # Optional columns a later writer added (#455): checked when present, absent from older records.
 OPTIONAL = {"l2_staging": {"partial": "u8", "merges": "u64"},
-            "steps": {"merge": "u8", "stages": "u16", "init_tile": "u32"}}
+            "steps": {"merge": "u8", "stages": "u16", "init_tile": "u32", "dataflow": "u8"}}
 
 
 def load(path):
@@ -810,9 +812,24 @@ def check_staging(m, T, bad):
             if feeds[g] != G["feeds"][g]:
                 bad("S3", f"staging {g} records {G['feeds'][g]} feeds; its steps give {feeds[g]}")
     check_partials(m, T, bad, partial, merges, merge, complete)
+    check_dataflow(m, T, bad)
 
 
 OVERWRITE, ACCUMULATE = 1, 2
+
+
+def check_dataflow(m, T, bad):
+    """S6: a step's dataflow (#395) is 0..3, and only a Call or a Drain carries one."""
+    S = T["steps"]
+    df = S.get("dataflow")
+    if not df:
+        return
+    for i in range(S["rows"]):
+        if df[i] > 3:
+            bad("S6", f"step {i}: dataflow {df[i]} is not default, os, ws or is")
+        elif df[i] and S["kind"][i] not in (CALL_KIND, DRAIN_KIND):
+            bad("S6", f"step {i}: a {m['kinds'][S['kind'][i]] if S['kind'][i] < len(m['kinds']) else S['kind'][i]} "
+                      f"carries a dataflow; only a Call and its Drain do")
 
 
 def check_partials(m, T, bad, partial, merges, merge, complete):

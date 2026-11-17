@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A reduction's dataflow, stated in the program** (#395, step 1 of 2).
+  - `acc C[:, j] in l2 dataflow ws { ... }` (or `is`, `os`) says which operand the array holds.
+    Unstated on an L2 accumulator, the deployment's new `fabric.dataflow` applies (os when
+    undeclared, and written only when declared, so existing specs keep their digests). A fabric
+    accumulator holds C in the PEs, so it is always os.
+  - `ws` and `is` need `in l2`, because each call's partial sums leave the array. The walker and
+    the validator both refuse them on an in-fabric accumulator.
+  - The walker stamps the dataflow on the accumulator's Calls and their Drains (`Action::dataflow`).
+  - `kpu-csp-gen --dataflow ws|is` writes it. The `.dflow` record gains the optional step column
+    `dataflow`, checked by `dflow_check` S6. The domain-flow viewer shows each Call's and Drain's
+    dataflow.
+  - L-B's values do not depend on it (the existing per-tile test).
+  - Next, step 2: L-T1 times each dataflow by the RTL's rules, and the `.tflow` record says which
+    it used. L-CA follows the cycle-accurate tile (#401).
+
 - **The domain-flow viewer plays at one step per second**, a new slowest speed, for following
   each event as it happens. The speed control was 4, 15, 60 and 240 steps per second. Tested in a
   headless browser (`test_playback.py`, CTest `domainflow_playback`).

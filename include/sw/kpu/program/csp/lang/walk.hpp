@@ -399,6 +399,11 @@ private:
         }
         e.action.merge = merge_;
         merge_ = Merge::None;
+        // A Call and its result's Drain carry their accumulator's dataflow (#395).
+        if (kind == Action::Kind::Call || kind == Action::Kind::Drain) {
+            const auto df = dataflow_.find(t.to_string());
+            if (df != dataflow_.end()) e.action.dataflow = df->second;
+        }
         if (l2) {
             e.action.l2 = l2;
             e.action.staging = staging;
@@ -455,6 +460,12 @@ private:
     std::set<std::size_t> pinned_;                          // residencies the program placed itself
     std::optional<TileCoord> seed_;                         // the accumulator the next Feed starts
     Merge merge_ = Merge::None;                             // the next Drain's merge (an L2 accumulator's)
+    std::map<std::string, Dataflow> dataflow_;              // an accumulator's tile -> its dataflow (#395)
+    static Dataflow dataflow_of(const Stmt& s) {
+        Dataflow d = Dataflow::Default;
+        if (!s.dataflow.empty()) parse_dataflow(s.dataflow, d);
+        return d;
+    }
     int line_ = 0;                                          // the statement being executed
 
     // Place residency `id` for tile `t`: by the policy, or in `slot` when the program names one.
@@ -620,6 +631,11 @@ private:
                     acc_l2(s);
                     break;
                 }
+                if (s.dataflow == "ws" || s.dataflow == "is")
+                    throw CompileError(s.line, "acc ... in fabric dataflow " + s.dataflow + ": a " +
+                                               (s.dataflow == "ws" ? "weight" : "input") + "-stationary reduction's "
+                                               "partial sums leave the array after every call; merge them in L2 "
+                                               "(`acc ... in l2 dataflow " + s.dataflow + "`)");
                 const TileCoord y = one(s.out);
                 const std::string k = y.to_string();
                 flush_late_until(k);
@@ -633,6 +649,9 @@ private:
                 if (x) init_acc(s, y, *x, self);
                 acc_[k] = AccState::Open;
                 acc_calls_[k] = 0;
+                // A fabric accumulator holds C in the PEs: output-stationary, stated or not, so the
+                // deployment's default (fabric.dataflow) is for an L2 accumulator only.
+                dataflow_[k] = Dataflow::OS;
                 frames_.push_back(Frame{&s.body, 0, Frame::Kind::Acc, {}, 0, 0, k, s.line, late_seq_});
                 break;
             }
@@ -870,6 +889,7 @@ private:
             }
             acc_[k] = AccState::Open;
             acc_calls_[k] = 0;
+            dataflow_[k] = dataflow_of(s);
             keys.push_back(k);
         }
         Frame f{&s.body, 0, Frame::Kind::Acc, {}, 0, 0, {}, s.line, late_seq_};
@@ -984,6 +1004,7 @@ private:
         partial_.erase(k);
         acc_.erase(k);
         acc_calls_.erase(k);
+        dataflow_.erase(k);             // its last Drain is out: a later Call on the tile is not its
     }
 
     // `stage T in l2 { ... }`: each tile of T, resident in L3, copied into an L2 slot for the block.
@@ -1199,6 +1220,7 @@ private:
         emit(Action::Kind::Release, y, id, d);
         acc_.erase(k);
         acc_calls_.erase(k);
+        dataflow_.erase(k);
     }
 
     // `retain y`: the residency ends without a Release -- its slot and the tile outlive the
@@ -1234,6 +1256,7 @@ private:
             emit(Action::Kind::Retain, y, id, d);
             acc_.erase(acc);
             acc_calls_.erase(k);
+            dataflow_.erase(k);
             retained_.insert(k);
             return;
         }

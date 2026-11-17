@@ -91,12 +91,18 @@ stmt       := for | resident | release | acc | stage | call | store | inherit | 
 for        := 'for' VAR 'in' expr '..' expr '{' stmt* '}'
 resident   := 'resident' tiles ';'         -- into L3; an error if already resident
 release    := 'release' tiles ';'          -- the program's last use: the credit returns
-acc        := 'acc' tile 'in' 'fabric' [ 'init' tile ] '{' stmt* '}'
+acc        := 'acc' tile 'in' 'fabric' [ 'dataflow' 'os' ] [ 'init' tile ] '{' stmt* '}'
                                            -- an output-stationary accumulator; init: its start
                                            -- (accumulator-init-stream.md), else zero
-            | 'acc' tile 'in' 'l2' '{' stmt* '}'     -- the tile may be a slice: C[:, j]
+            | 'acc' tile 'in' 'l2' [ 'dataflow' df ] [ 'init' tile ] '{' stmt* '}'
+                                           -- the tile may be a slice: C[:, j]
                                            -- an L2 accumulator (#429, #430): each tile's partial in
                                            -- an L2 slot, every call merged into it by the Combiner
+df         := 'os' | 'ws' | 'is'           -- the reduction's dataflow on the array (#395): which
+                                           -- operand the PEs hold. Unstated on an l2 acc: the
+                                           -- deployment's fabric.dataflow, os when undeclared; a
+                                           -- fabric acc is always os. ws and is leave
+                                           -- each call's partial sums south, so they need 'in l2'.
 stage      := 'stage' tiles 'in' 'l2' '{' stmt* '}'           -- resident tiles copied into L2 for the block
 call       := 'call' FN '(' tiles ')' ( '->' | '+->' ) tile [ context ] ';'
                                            -- '->' writes, '+->' accumulates

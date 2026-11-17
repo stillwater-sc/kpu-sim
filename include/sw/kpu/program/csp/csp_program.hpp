@@ -193,6 +193,28 @@ struct Stage {
 // store's Writeback reads the slot (carrying its address), and its L2Release frees it.
 enum class Merge : std::uint8_t { None, Overwrite, Accumulate };
 
+// A reduction's dataflow on the systolic array (#395): which operand the PEs hold. Default: an L2
+// accumulator that states none, which takes the deployment's `fabric.dataflow` (os when it
+// declares none); a fabric accumulator is always OS. Output-stationary holds C and drains
+// it north when the reduction ends; weight- and input-stationary hold B or A (PRELOAD), stream the
+// other, and each call's partial sums leave south, merged in L2 by the Combiner.
+enum class Dataflow : std::uint8_t { Default, OS, WS, IS };
+
+inline const char* to_string(Dataflow d) {
+    switch (d) {
+        case Dataflow::Default: return "default";
+        case Dataflow::OS:      return "os";
+        case Dataflow::WS:      return "ws";
+        case Dataflow::IS:      return "is";
+    }
+    return "?";
+}
+inline bool parse_dataflow(const std::string& s, Dataflow& out) {
+    for (Dataflow d : {Dataflow::OS, Dataflow::WS, Dataflow::IS})
+        if (s == to_string(d)) { out = d; return true; }
+    return false;
+}
+
 inline const char* to_string(Merge m) {
     switch (m) {
         case Merge::None:       return "none";
@@ -223,6 +245,8 @@ struct Action {
     std::size_t staging = kNone;
     // Drain into an L2 accumulator: how the Combiner merges the partial into its slot.
     Merge merge = Merge::None;
+    // A Call, and the Drain of its result: its accumulator's dataflow (`acc ... dataflow ws`; #395).
+    Dataflow dataflow = Dataflow::Default;
     // Feed: the tile's values start this accumulator in the fabric (`acc Y in fabric init X`;
     // docs/plans/accumulator-init-stream.md): the init is one more edge stream, fed before the
     // accumulator's first call, and its values (a vector's broadcast down the rows) are the

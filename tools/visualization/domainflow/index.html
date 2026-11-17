@@ -725,6 +725,8 @@ globalThis.DflowCore = (() => {
                          partial: isPartial(R, S.staging[s]) } : null,
       merge: ["none", "overwrite", "accumulate"][mergeOf(R, s)] || "?",
       stages: stagesOf(R, s), init: initTileOf(R, s),
+      // #395: as the program states it; 0 = the deployment's (fabric.dataflow, os when undeclared).
+      dataflow: R.steps.dataflow ? (["default", "os", "ws", "is"][R.steps.dataflow[s]] || "?") : "default",
       held: { dram: S.held_dram[s], l3: S.held_l3[s], l2: S.held_l2[s], cf: S.held_cf[s] },
     };
   }
@@ -1255,6 +1257,10 @@ globalThis.DflowCore = (() => {
         ? (st.init ? `init: the first merge opens the L2 accumulator's partial, and the Combiner adds the init ${st.init} (MERGE_INIT)`
                    : "overwrite: the first merge opens the L2 accumulator's partial (no init)")
         : st.merge === "accumulate" ? "accumulate: the Combiner adds this call's result into the partial" : "—"],
+      ["dataflow", st.kind === "CALL" || st.kind === "DRAIN"
+        ? ({ os: "output-stationary", ws: "weight-stationary", is: "input-stationary" }[st.dataflow] ||
+           "the deployment's (fabric.dataflow; os when undeclared)")
+        : "—"],
       ["stages", st.stages.length ? st.stages.map(op => op === "init" && st.init ? `init(${st.init})` : op).join(" → ") +
         (st.merge !== "none" ? " (the Combiner's, on this merge)" : "") : "—"],
       ["held after", `dram ${fmt(st.held.dram)} · l3 ${st.held.l3} · l2 ${st.held.l2} · cf ${st.held.cf}`]];
