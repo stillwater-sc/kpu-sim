@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Next, step 2: L-T1 times each dataflow by the RTL's rules, and the `.tflow` record says which
     it used. L-CA follows the cycle-accurate tile (#401).
 
+- **The domain-flow viewer plays at one step per second**, a new slowest speed, for following
+  each event as it happens. The speed control was 4, 15, 60 and 240 steps per second. Tested in a
+  headless browser (`test_playback.py`, CTest `domainflow_playback`).
+
 - **L-CA takes the deployment's mover and streamer rates, and reports its calibration** (#458,
   partial).
   - `csp_config_from` maps `movers.bm_bytes_per_cycle` and `movers.str_bytes_per_cycle` into the
