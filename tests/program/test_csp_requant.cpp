@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -574,6 +575,45 @@ TEST_CASE("Requant: a per-channel scale, on every dataflow and level", "[program
     }
 }
 
+TEST_CASE("Requant: synthesized inputs keep a per-channel scale's domains, and every level runs on them",
+          "[program][csp][run][requant][inputs]") {
+    // #457: the shifts used to be filled across int32's range, and L-B refused the first DRAIN
+    // ("the shift -1811849867 is outside 0..62"). The roles come from the program (the scale's
+    // vectors), not from operand names.
+    const auto d = s1_with_full_combiner();
+    for (const char* df : {"os", "ws", "is"}) {
+        CAPTURE(df);
+        const lang::Program ast = lang::parse(linear_pc(df));
+        const auto roles = driver::operand_roles(ast);
+        REQUIRE(roles.size() == 2);
+        CHECK(roles.at("qm") == driver::OperandRole::Multiplier);
+        CHECK(roles.at("qs") == driver::OperandRole::Shift);
+        const TileProgram in = driver::csp_inputs(ast);
+        const TensorOperand& qm = in.operand("qm");
+        const TensorOperand& qs = in.operand("qs");
+        std::set<long long> shifts;
+        for (Dim r = 0; r < qs.rows; ++r) {
+            const auto m = static_cast<long long>(qm.value(r, 0)), sh = static_cast<long long>(qs.value(r, 0));
+            CHECK((m >= (1LL << 14) && m < (1LL << 15)));
+            CHECK((sh >= 22 && sh <= 28));
+            shifts.insert(sh);
+        }
+        CHECK(shifts.size() > 1);                      // the channels differ
+        // The other operands keep fill_operand's values: A is not a role.
+        CHECK(roles.count("A") == 0);
+        driver::CspRunRequest req{ast, &d, in,
+                                  {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential, ExecutionLevel::CycleAccurate}};
+        const auto r = driver::run_csp(req);
+        REQUIRE(r.reference);
+        for (const auto& o : r.levels) {
+            CAPTURE(to_string(o.level));
+            INFO(o.skipped.value_or(""));
+            REQUIRE_FALSE(o.skipped);
+            CHECK(o.values.operand("C").values == r.reference->operand("C").values);
+        }
+    }
+}
+
 TEST_CASE("Requant: a per-channel scale's trace is opset 1.9, and refuses bad values", "[program][csp][requant]") {
     const lang::Program ast = lang::parse(linear_pc("os"));
     TileProgram in = driver::csp_inputs(ast);
@@ -622,10 +662,14 @@ TEST_CASE("Requant: what a per-channel scale refuses", "[program][csp][lang][req
     const std::string text = lang::format(lang::parse(ok));
     CHECK_THAT(text, ContainsSubstring("scale(qm[0], qs[0]) @ combiner"));
     CHECK(lang::format(lang::parse(text)) == text);
-    // Synthesized inputs span int32, so their shifts are refused, naming the stage and the value.
+    // Synthesized inputs keep the shifts in their domain (#457) and run; a shift outside 0..62,
+    // given explicitly, is refused, naming the stage and the value.
     const lang::Program ast = lang::parse(linear_pc("os"));
-    CHECK_THROWS_WITH(driver::csp_reference(ast, driver::csp_inputs(ast), 1'000'000),
-                      ContainsSubstring("scale(qm[0,0], qs[0,0]): requantize: the shift"));
+    TileProgram in = driver::csp_inputs(ast);
+    CHECK_NOTHROW(driver::csp_reference(ast, in, 1'000'000));
+    in.operand("qs").set_word(0, 0, numeric::encode("int32", 70.0));
+    CHECK_THROWS_WITH(driver::csp_reference(ast, in, 1'000'000),
+                      ContainsSubstring("scale(qm[0,0], qs[0,0]): requantize: the shift 70 is outside 0..62"));
     gen::Options o;
     o.algo = "matmul";
     o.size = 64;

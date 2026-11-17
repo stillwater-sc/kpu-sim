@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Synthesized inputs keep an operand's constrained domain** (#457). A per-channel requantized
+  program (`kpu-csp-gen --requant m,shift --requant-channels`) failed at L-B with synthesized
+  inputs ("the shift -1811849867 is outside 0..62"), because the shift vector got int32's whole
+  range.
+  - `driver::operand_roles` reads each operand's role from the program: a per-channel
+    `scale(qm[j], qs[j])`'s multipliers and shifts. It never infers a role from a name.
+    `csp_inputs` fills a multiplier in [2^14, 2^15) and a shift in [22, 28]: a typical int8
+    accumulator then lands across the int8 result, with some saturation. Every such role is
+    listed in one place.
+  - The tests that pinned the refusal now expect the run, and an explicit out-of-range shift is
+    still refused.
+  - Every program a sweep of `kpu-csp-gen`'s options writes (34) runs under `kpu-run --level all`
+    with synthesized inputs.
+
 - **The viewers show the L2 accumulator** (#456), from #455's record columns.
   - **Domain-flow:** the L2 box shows each partial as an accumulator chip, `p<slot> <merged>/<merges>`,
     from its first merge to its L2Release. The capacity line counts staged copies and partials
