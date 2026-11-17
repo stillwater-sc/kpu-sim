@@ -94,6 +94,10 @@ class Diff(unittest.TestCase):
         self.assertGreater(rows, 0)
         self.assertEqual(o["only_b"]["rows_under_matched_transactions"], rows)
         self.assertIsNotNone(o["first_divergence"])
+        # The text report says, row by row, whether its transaction joined (#470's review).
+        p = subprocess.run([sys.executable, str(DIFF), str(RTL_LCA), str(RTL)], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("(joined)", p.stdout)
 
     def test_an_event_of_another_identity_is_one_sided(self):
         b = Bundle(LCA)
@@ -103,6 +107,10 @@ class Diff(unittest.TestCase):
             code, o = run(LCA, b.dir)
             self.assertEqual(code, 1, o)
             self.assertEqual((o["only_a"]["by_kind"], o["only_b"]["by_kind"]), ({"TOKEN": 1}, {"TOKEN": 1}))
+            # The labels say why they did not join: the process is part of the identity (#470's review).
+            a, b2 = o["only_a"]["first"][0]["key"], o["only_b"]["first"][0]["key"]
+            self.assertNotEqual(a, b2)
+            self.assertIn("by no process", b2)
         finally:
             b.close()
 

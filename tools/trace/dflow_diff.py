@@ -123,7 +123,8 @@ def label(key):
     where = (f"line {line}" if line is not None else "") + \
             ("" if not loops else (", " if line is not None else "") + " ".join(f"{v}={x}" for v, x in loops))
     rb = "" if row is None else f" row {row}" + ("" if beat is None else f" beat {beat}")
-    return f"{kind} {t} {at(src, sa)} -> {at(dst, da)}{rb} ({where})"
+    by = f" by {proc}" if proc is not None else " by no process"
+    return f"{kind} {t} {at(src, sa)} -> {at(dst, da)}{rb}{by} ({where})"
 
 
 def diff(a, b, tolerance=0, show=5):
@@ -194,7 +195,8 @@ def report(o, tolerance):
             if s["rows_under_matched_transactions"] else ""
         print(f"only in {side.upper()}: {s['count']} ({kinds}{under})")
         for x in s["first"]:
-            print(f"    {x['key']}" + (f"   under {x['parent']}" if "parent" in x else ""))
+            print(f"    {x['key']}" + (f"   under {x['parent']} ({'joined' if x['parent_matched'] else 'not joined'})"
+                                         if "parent" in x else ""))
     if "untimed" in o:
         print(f"no timing comparison: {', '.join(o['untimed'])} has no time")
     else:
