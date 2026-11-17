@@ -93,6 +93,15 @@ void check_record(const DomainFlowRecord& r, const driver::CspLevelOutcome& o, c
         latest = std::max(latest, e.end);
     }
     CHECK(r.cycles == latest);
+    // A token or credit a process sends is on the lane of its action's transaction (#469's review).
+    std::map<std::uint64_t, std::uint32_t> lane_of;
+    for (const auto& e : r.events)
+        if (e.kind <= ev::Drain) lane_of[e.action] = e.lane;
+    for (const auto& e : r.events)
+        if ((e.kind == ev::Credit || e.kind == ev::Token) && e.process != record::kNone8) {
+            CAPTURE(e.action);
+            CHECK(e.lane == lane_of.at(e.action));
+        }
     for (const auto& st : r.steps) {
         const auto k = static_cast<csp::Action::Kind>(st.kind);
         CAPTURE(st.action, csp::to_string(k));
@@ -137,13 +146,18 @@ TEST_CASE("Timed record: L-T1's and L-CA's events join every data step, with the
 
 TEST_CASE("Timed record: it round-trips through the bundle", "[program][record][timed]") {
     const Runs x = runs();
-    const auto lca = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values);
+    // With the array's edge, which only geometry.l1 carries in a timed record (#469's review).
+    REQUIRE(x.lt1.pe_rows > 0);
+    const auto lca = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values, x.lt1.pe_rows, x.lt1.pe_cols);
     const std::string dir = (std::filesystem::temp_directory_path() / "kpu_timed_record_rt.dflow").string();
     std::filesystem::remove_all(dir);
     record::write_dflow(lca, dir);
     const DomainFlowRecord back = record::read_dflow(dir);
     std::filesystem::remove_all(dir);
     CHECK(back.level == "L-CA");
+    CHECK(back.fabric);
+    CHECK(back.pe_rows == lca.pe_rows);
+    CHECK(back.pe_cols == lca.pe_cols);
     CHECK(back.cycles == lca.cycles);
     CHECK(back.level_notes == lca.level_notes);
     REQUIRE(back.events.size() == lca.events.size());
@@ -185,4 +199,56 @@ TEST_CASE("Timed record: it needs every step of a run L-B finished", "[program][
     REQUIRE(x.lb.cut);
     CHECK_THROWS_WITH(record::timed_record(x.lb, "L-T1", x.lt1.records, x.lt1.values),
                       ContainsSubstring("needs every step"));
+}
+
+TEST_CASE("Timed record: each Release's credit follows its own tile's last move out", "[program][record][timed]") {
+    // C[0, 0] is stored twice: merged in L2 and stored, then read back, put through a ReLU on the
+    // Combiner, and stored again (#469's review). Each Release's credit is no earlier than the end
+    // of its own Store, the second included, not only the first.
+    const std::string text = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+                             "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                             "  tensor C[32,32] tile 16x16 inout;\n"
+                             "  acc C[0, 0] in l2 {\n    resident A[0, :], B[:, 0];\n"
+                             "    for k in 0..2 { call gemm(A[0, k], B[k, 0]) +-> C[0, 0]; }\n"
+                             "    release A[0, :], B[:, 0];\n  }\n  store C[0, 0];\n"
+                             "  resident C[0, 0];\n  call relu(C[0, 0]) -> C[0, 0] via relu @ combiner;\n"
+                             "  store C[0, 0];\n  release C[0, 0];\n}\n";
+    const csp::lang::Program ast = csp::lang::parse(text);
+    auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    d.combiner = platform::DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add", "relu"}};
+    const TileProgram in = driver::csp_inputs(ast);
+    record::DomainFlowRecorder rr(ast, text, 0);
+    const auto ref = driver::csp_reference(ast, in, 1'000'000, &rr);
+    REQUIRE(ref.values);
+    const DomainFlowRecord lb = rr.finish(&*ref.values);
+    for (const auto level : {ExecutionLevel::BlockSequential, ExecutionLevel::CycleAccurate}) {
+        const auto o = driver::csp_run_level(level, ast, &d, in, 256, true);
+        REQUIRE_FALSE(o.skipped);
+        const std::string name = level == ExecutionLevel::CycleAccurate ? "L-CA" : "L-T1";
+        CAPTURE(name);
+        const auto r = record::timed_record(lb, name, o.records, o.values);
+        // C's transactions out of L3, and its L3 credits, in program order.
+        std::uint32_t c = record::kNone32;
+        for (std::uint32_t t = 0; t < r.tiles.size(); ++t)
+            if (r.tile_name(t) == "C[0,0]") c = t;
+        REQUIRE(c != record::kNone32);
+        std::vector<const DomainFlowRecord::Event*> mine;
+        for (const auto& e : r.events)
+            if (e.tile == c && ((e.kind <= ev::Drain && e.src == ev::L3) || (e.kind == ev::Credit && e.src == ev::L3)))
+                mine.push_back(&e);
+        std::stable_sort(mine.begin(), mine.end(), [](auto* a, auto* b) { return a->action < b->action; });
+        std::size_t stores = 0, credits = 0;
+        std::uint64_t last_out = 0;
+        for (const auto* e : mine) {
+            if (e->kind == ev::Credit) {
+                ++credits;
+                CHECK(e->cycle >= last_out);
+            } else {
+                stores += e->kind == ev::Dma;
+                last_out = e->end;
+            }
+        }
+        CHECK(stores == 2);
+        CHECK(credits >= 1);
+    }
 }

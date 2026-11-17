@@ -414,8 +414,16 @@ DFR read_dflow(const std::string& dir) {
         if (version >= 6) {
             rec.level = m.at("level").get<std::string>();
             if (!m.at("time").is_null()) rec.cycles = m.at("time").at("cycles").get<std::uint64_t>();
-            if (rec.timed())
+            if (rec.timed()) {
                 for (const json& s : m.at("not_modelled")) rec.level_notes.push_back(s.get<std::string>());
+                // A timed record's array edge is its geometry's (it has no L-T1 overlay to carry it).
+                const json& l1 = m.at("geometry").at("l1");
+                if (l1.contains("rows")) {
+                    rec.fabric = true;
+                    rec.pe_rows = l1.at("rows").get<std::uint32_t>();
+                    rec.pe_cols = l1.at("cols").get<std::uint32_t>();
+                }
+            }
         }
         rec.vars = m.at("vars").get<std::vector<std::string>>();
         rec.actions = m.at("totals").at("actions").get<std::uint64_t>();

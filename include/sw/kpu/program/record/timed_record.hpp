@@ -146,6 +146,28 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
         r.events.push_back(e);
     };
     const std::uint8_t none = kNone8;
+    // Each tile's last transaction out of a layer, in program order, and whether it was a Store: a
+    // Release's credit follows its own tile's last move out of L3 (an L2Release's, out of L2).
+    struct Out { std::uint64_t end = 0; bool store = false; };
+    std::map<std::pair<std::uint32_t, std::uint8_t>, Out> last_out;
+    std::size_t at_store = 0, at_move = 0, in_place = 0;
+    auto credit_after = [&](const DFR::Step& st, std::uint8_t layer, std::uint64_t src_addr, std::uint64_t t) {
+        const auto it = last_out.find({st.tile, layer});
+        if (it == last_out.end()) {
+            // A tile no transaction moved out of its layer (an init, a bias or a scale's vectors,
+            // which the Combiner reads in place): the record has no transaction for that read, so
+            // the slot's credit has none to follow, and is left out.
+            ++in_place;
+            return;
+        }
+        if (t < it->second.end) {
+            // The level freed the slot before the transaction ended: a store, at its ejection into
+            // the DMA engine's buffer, which the format has no layer for. Stamped at its end.
+            t = it->second.end;
+            ++(it->second.store ? at_store : at_move);
+        }
+        add(st, ev::Credit, none, layer, layer == ev::L3 ? ev::Dram : ev::L3, src_addr, kNone64, t, t);
+    };
     for (const DFR::Step& st : r.steps) {
         const K k = static_cast<K>(st.kind);
         const bool data = k == K::Load || k == K::Store || k == K::Move || k == K::Writeback || k == K::Feed ||
@@ -160,90 +182,61 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
         const std::uint64_t slot = (st.flags & DFR::kHasPlace) ? std::uint64_t(st.slot) : kNone64;
         const std::uint64_t l2 = (st.flags & DFR::kHasL2) ? std::uint64_t(st.l2_slot) : kNone64;
         const std::uint64_t t0 = s.start, t1 = s.finish;
+        const std::uint32_t lane = s.lane;          // a token or credit is its process's, on its lane
+        auto out_of = [&](std::uint8_t layer, bool store = false) { last_out[{st.tile, layer}] = {t1, store}; };
         switch (k) {
             case K::Load:
-                add(st, ev::Dma, ev::PDma, ev::Dram, ev::L3, kNone64, slot, t0, t1, s.lane);
-                add(st, ev::Token, ev::PDma, ev::L3, ev::L2, kNone64, kNone64, t1, t1);
+                add(st, ev::Dma, ev::PDma, ev::Dram, ev::L3, kNone64, slot, t0, t1, lane);
+                add(st, ev::Token, ev::PDma, ev::L3, ev::L2, kNone64, kNone64, t1, t1, lane);
                 break;
             case K::Move:
-                add(st, ev::BlockMove, ev::PBm, ev::L3, ev::L2, slot, l2, t0, t1, s.lane);
-                add(st, ev::Token, ev::PBm, ev::L2, ev::L1, l2, kNone64, t1, t1);
+                add(st, ev::BlockMove, ev::PBm, ev::L3, ev::L2, slot, l2, t0, t1, lane);
+                add(st, ev::Token, ev::PBm, ev::L2, ev::L1, l2, kNone64, t1, t1, lane);
+                out_of(ev::L3);
                 break;
             case K::Feed:
-                add(st, ev::Stream, ev::PStr, ev::L2, ev::L1, l2, kNone64, t0, t1, s.lane);
-                if (l2 == kNone64) add(st, ev::Credit, ev::PStr, ev::L2, ev::L3, kNone64, kNone64, t1, t1);
+                add(st, ev::Stream, ev::PStr, ev::L2, ev::L1, l2, kNone64, t0, t1, lane);
+                if (l2 == kNone64) add(st, ev::Credit, ev::PStr, ev::L2, ev::L3, kNone64, kNone64, t1, t1, lane);
+                out_of(ev::L2);
                 break;
             case K::Call:
-                add(st, ev::Compute, ev::PCf, ev::L1, ev::Acc, kNone64, kNone64, t0, t1, s.lane);
+                add(st, ev::Compute, ev::PCf, ev::L1, ev::Acc, kNone64, kNone64, t0, t1, lane);
                 break;
             case K::Drain:
-                add(st, ev::Drain, ev::PStr, ev::Acc, ev::L2, kNone64, l2, t0, t1, s.lane);
-                add(st, ev::Credit, ev::PStr, ev::Acc, ev::L1, kNone64, kNone64, t1, t1);
-                add(st, ev::Token, ev::PStr, ev::L2, ev::L3, l2, kNone64, t1, t1);
+                add(st, ev::Drain, ev::PStr, ev::Acc, ev::L2, kNone64, l2, t0, t1, lane);
+                add(st, ev::Credit, ev::PStr, ev::Acc, ev::L1, kNone64, kNone64, t1, t1, lane);
+                add(st, ev::Token, ev::PStr, ev::L2, ev::L3, l2, kNone64, t1, t1, lane);
                 break;
             case K::Writeback:
-                add(st, ev::BlockMove, ev::PBm, ev::L2, ev::L3, l2, slot, t0, t1, s.lane);
-                add(st, ev::Token, ev::PBm, ev::L3, ev::Dram, slot, kNone64, t1, t1);
+                add(st, ev::BlockMove, ev::PBm, ev::L2, ev::L3, l2, slot, t0, t1, lane);
+                add(st, ev::Token, ev::PBm, ev::L3, ev::Dram, slot, kNone64, t1, t1, lane);
+                out_of(ev::L2);
                 break;
             case K::Store:
-                add(st, ev::Dma, ev::PDma, ev::L3, ev::Dram, slot, kNone64, t0, t1, s.lane);
+                add(st, ev::Dma, ev::PDma, ev::L3, ev::Dram, slot, kNone64, t0, t1, lane);
+                out_of(ev::L3, true);
                 break;
             case K::Release:
-                add(st, ev::Credit, none, ev::L3, ev::Dram, slot, kNone64, t1, t1);
+                credit_after(st, ev::L3, slot, t1);
                 break;
             case K::L2Release:
-                add(st, ev::Credit, none, ev::L2, ev::L3, l2, kNone64, t1, t1);
+                credit_after(st, ev::L2, l2, t1);
                 break;
             default:
                 break;                      // Inherit, Retain: no data moves, no credit returns
         }
     }
-    // A credit or token follows its tile's transaction out of (into) its source layer (E4). A Store
-    // is one transaction, from its ejection to its DRAM write, but the level frees the slot at the
-    // ejection, into the DMA engine's buffer, which the format has no layer for: the Release's
-    // credit is stamped at the store's end, and the record counts how many were.
-    {
-        std::map<std::pair<std::uint32_t, std::uint8_t>, std::uint64_t> left, arrived;   // (tile, layer) -> earliest end
-        auto note = [](auto& m, std::uint32_t t, std::uint8_t l, std::uint64_t end) {
-            auto [it, fresh] = m.emplace(std::make_pair(t, l), end);
-            if (!fresh) it->second = std::min(it->second, end);
-        };
-        for (const auto& e : r.events)
-            if (e.kind <= ev::Drain) {
-                note(left, e.tile, e.src, e.end);
-                note(arrived, e.tile, e.dst, e.end);
-            }
-        std::size_t moved = 0, in_place = 0;
-        std::vector<DFR::Event> kept;
-        kept.reserve(r.events.size());
-        for (auto& e : r.events) {
-            if (e.kind == ev::Credit || e.kind == ev::Token) {
-                const auto& m = e.kind == ev::Credit ? left : arrived;
-                const auto it = m.find({e.tile, e.src});
-                if (it == m.end()) {
-                    // A tile no transaction moved out of L3 (an init, a bias or a scale's vectors,
-                    // which the Combiner reads in place): the record has no transaction for that
-                    // read, so its slot's credit has none to follow, and is left out.
-                    ++in_place;
-                    continue;
-                }
-                if (e.cycle < it->second) {
-                    e.cycle = e.end = it->second;
-                    ++moved;
-                }
-            }
-            kept.push_back(e);
-        }
-        r.events = std::move(kept);
-        if (in_place)
-            r.level_notes.push_back(std::to_string(in_place) + " credits left out: their tiles were read in place "
-                                    "(the Combiner's init, bias and scale vectors, read from L3), which the record has "
-                                    "no transaction for");
-        if (moved)
-            r.level_notes.push_back(std::to_string(moved) + " L3 credits stamped at their store's end: " + level +
-                                    " frees a slot when its tile is ejected into the DMA engine's buffer, which the "
-                                    "record has no layer for, so a store is one transaction, ejection to DRAM write");
-    }
+    if (at_store)
+        r.level_notes.push_back(std::to_string(at_store) + " L3 credits stamped at their store's end: " + level +
+                                " frees a slot when its tile is ejected into the DMA engine's buffer, which the "
+                                "record has no layer for, so a store is one transaction, ejection to DRAM write");
+    if (at_move)
+        r.level_notes.push_back(std::to_string(at_move) + " credits stamped at the end of their tile's last move out "
+                                "of the layer: " + level + " returned them earlier");
+    if (in_place)
+        r.level_notes.push_back(std::to_string(in_place) + " credits left out: their tiles were read in place "
+                                "(the Combiner's init, bias and scale vectors, read from L3), which the record has "
+                                "no transaction for");
     // Row order is event order: by cycle, then as emitted (a transaction before its token).
     std::stable_sort(r.events.begin(), r.events.end(),
                      [](const DFR::Event& a, const DFR::Event& b) { return a.cycle < b.cycle; });
