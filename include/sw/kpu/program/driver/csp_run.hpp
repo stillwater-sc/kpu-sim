@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -55,6 +56,54 @@ namespace sw::kpu::program::driver {
 // zero for the trace's L0 to compute what the program computes. LU's A, loaded first, is an
 // input. The first touch decides, found by streaming until every `inout` operand has been
 // touched (it ends early: operands are touched in the first actions of any sane program).
+// Operands whose values have a domain the language constrains, read from the program, never
+// from an operand's name (#457). Every such role is listed here, with the domain its synthesized
+// values keep:
+//   Multiplier  a per-channel scale's multipliers, `scale(qm[j], qs[j])`'s first vector: words in
+//               [2^14, 2^15) (requantize takes (-2^31, 2^31))
+//   Shift       its shifts, the second vector: words in [22, 28] (requantize takes 0..62)
+// Together they map a typical int8 accumulator (|x| up to about 2^20) across an int8 result, with
+// some saturation, so rounding and clamping are both exercised. Any other operand is Plain. A
+// vector that is a shift anywhere is a Shift: [22, 28] is a valid multiplier too.
+enum class OperandRole : std::uint8_t { Plain, Multiplier, Shift };
+
+inline std::map<std::string, OperandRole> operand_roles(const csp::lang::Program& ast) {
+    std::map<std::string, OperandRole> roles;
+    std::function<void(const std::vector<csp::lang::Stmt>&)> walk = [&](const std::vector<csp::lang::Stmt>& body) {
+        for (const csp::lang::Stmt& s : body) {
+            for (const csp::lang::Stage& st : s.context)
+                if (st.op == "scale" && st.args.size() == 2) {          // per channel (#445)
+                    // Shift wins: one vector may be a shift in one stage and a multiplier in another
+                    // (#461's review), and a shift's domain is valid for a multiplier, not the
+                    // reverse.
+                    roles.emplace(st.args[0].name, OperandRole::Multiplier);
+                    roles[st.args[1].name] = OperandRole::Shift;
+                }
+            walk(s.body);
+        }
+    };
+    walk(ast.body);
+    return roles;
+}
+
+// An operand's synthesized values within its role's domain: deterministic, by element, as
+// fill_operand is, so a run is the same on every host.
+inline void fill_role(TensorOperand& o, OperandRole role) {
+    if (role == OperandRole::Plain) return;
+    const std::uint64_t lo = role == OperandRole::Multiplier ? (1u << 14) : 22;
+    const std::uint64_t span = role == OperandRole::Multiplier ? (1u << 14) : 7;
+    for (Dim r = 0; r < o.rows; ++r)
+        for (Dim c = 0; c < o.cols; ++c) {
+            std::uint32_t k = static_cast<std::uint32_t>(r * 2654435761u) ^ static_cast<std::uint32_t>(c * 3266489917u);
+            k ^= k >> 15;
+            k *= 2246822519u;
+            k ^= k >> 13;
+            const double v = static_cast<double>(lo + k % span);
+            if (o.fp32()) o.at(r, c) = static_cast<float>(v);
+            else o.set_word(r, c, numeric::encode(o.type, v));
+        }
+}
+
 inline TileProgram csp_inputs(const csp::lang::Program& ast) {
     TileProgram t = csp::lang::declared_operands(ast);
     std::map<std::string, bool> read_first;             // inout operand -> its first touch is a read
@@ -78,6 +127,7 @@ inline TileProgram csp_inputs(const csp::lang::Program& ast) {
         }
     }
     TileProgram out(t.name());
+    const auto roles = operand_roles(ast);
     for (const auto& d : ast.decls) {
         const TensorOperand& shape = t.operand(d.name);
         TensorOperand& o = out.add_operand(TensorOperand(shape.name, shape.rows, shape.cols, shape.tile_rows,
@@ -86,6 +136,12 @@ inline TileProgram csp_inputs(const csp::lang::Program& ast) {
         o.acc = shape.acc;
         const bool reads = d.io == "in" || (d.io == "inout" && (!read_first.count(d.name) || read_first.at(d.name)));
         if (reads) fill_operand(o);
+        // An operand with a constrained domain (a per-channel scale's multipliers or shifts) keeps
+        // to it: fill_operand's values span its whole type (#457).
+        if (reads) {
+            const auto role = roles.find(d.name);
+            if (role != roles.end()) fill_role(o, role->second);
+        }
         // A square operand the program reads and then updates in place -- LU's A, factored where
         // it lies -- is made STRICTLY diagonally dominant. fill_operand's diagonal is a nudge
         // (+32), not a guarantee, and a 64-wide row's off-diagonals sum past it: pivoting then
