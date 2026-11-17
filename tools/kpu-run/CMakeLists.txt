@@ -421,6 +421,19 @@ if(KPU_BUILD_TESTS)
     # A fixture, not DEPENDS: `ctest -R kpu_run_csp_linear_requant` alone must still generate it.
     set_tests_properties(csp_gen_linear_requant PROPERTIES FIXTURES_SETUP linear_requant_csp)
     set_tests_properties(kpu_run_csp_linear_requant PROPERTIES FIXTURES_REQUIRED linear_requant_csp)
+    # Calibration (#458): timing answers to L-CA, so kpu-run reports L-T1's makespan against L-CA's
+    # on every run that has both. Report only: recorded here on reference programs, not held to a
+    # tolerance until the cycle-accurate tile (#401) settles L-CA's fabric timing.
+    foreach(_cal matmul_48x48x48_t16 linear_64_t16_relu)
+        add_test(NAME kpu_run_calibration_${_cal}
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--program$<SEMICOLON>${_corpus}/${_cal}.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>all
+                -DEXPECT_CODE=0
+                -DMUST_MATCH=calibration..L-T1./.L-CA.makespan.[0-9]+[.][0-9]+.*reported,.not.held.to.a.tolerance
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+        set_tests_properties(kpu_run_calibration_${_cal} PROPERTIES LABELS "program;driver;csp;calibration")
+    endforeach()
     # A per-channel scale (#427): its multipliers and shifts come with the inputs. Synthesized ones
     # span int32, so the run is refused where a shift is first used, naming the stage and the value.
     add_test(NAME csp_gen_linear_requant_channels

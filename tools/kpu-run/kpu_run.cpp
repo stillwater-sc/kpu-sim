@@ -184,6 +184,21 @@ void print_levels(const std::vector<CspLevelOutcome>& levels, const std::vector<
                   << o.ve.bm_bound << "  fabric " << o.ve.fabric << "   (busy/bound)   window " << window << "\n";
         for (const auto& u : o.unmodelled) std::cout << "        unmodelled: " << u << "\n";
     }
+    // Calibration (#458): timing answers to L-CA, so L-T1's makespan is reported against it. Report
+    // only: no tolerance is held until the cycle-accurate tile (#401) settles L-CA's fabric timing.
+    const CspLevelOutcome* lt1 = nullptr;
+    const CspLevelOutcome* lca = nullptr;
+    for (const auto& o : levels) {
+        if (o.skipped || !o.has_timing) continue;
+        if (o.level == ExecutionLevel::BlockSequential) lt1 = &o;
+        if (o.level == ExecutionLevel::CycleAccurate) lca = &o;
+    }
+    if (lt1 && lca && lca->makespan > 0) {
+        const double ratio = static_cast<double>(lt1->makespan) / static_cast<double>(lca->makespan);
+        std::cout << "  calibration  L-T1 / L-CA makespan " << std::fixed << std::setprecision(3) << ratio
+                  << std::defaultfloat << " (" << lt1->makespan << " / " << lca->makespan
+                  << " cycles; L-CA is the timing reference; reported, not held to a tolerance)\n";
+    }
 }
 
 // Every level that ran, against L-B's values, printed; true when all are within bound.

@@ -22,10 +22,21 @@
 //   movers.vector.bm, combiner   bm_ve_lanes/rate, combiner_lanes/rate: the vector units a tile
 //                            context's stages run on (absent = 0 lanes: the site has none)
 //
-// NOT MAPPED, listed in `unmapped`: the spec's rates (dma.bytes_per_cycle and the movers'
-// bytes per cycle) against the executor's GB/s and latency fields, macs_per_cycle against its
-// compute latency, and l2.banks_per_tile, which is an L-T2 bank count and not a count of
-// tile-sized L2 buffers. The executor keeps its defaults for those.
+//   the rates (#458)         the spec's are bytes per cycle, the executor's GB/s at clock_ghz (the
+//                            reference clock, 1 GHz): gbps = bytes_per_cycle x clock_ghz.
+//                            movers.bm_bytes_per_cycle -> bm_bandwidth_gbps;
+//                            movers.str_bytes_per_cycle -> str_bandwidth_gbps;
+//                            dma.bytes_per_cycle: with memory.dram, the hosted LPDDR5 model's
+//                            timing governs every transfer (every reference deployment hosts
+//                            one). Without it, the legacy controller charges a fixed DRAM latency
+//                            whatever a transfer's size, so the rate cannot reach L-CA's timing:
+//                            mc_bandwidth_gbps is set to each controller's engines x the engine
+//                            rate for its statistics, and `unmapped` names the gap (decided
+//                            2026-11-17: name it, leave the legacy model).
+//
+// NOT MAPPED, listed in `unmapped`: fabric.pe_rows/pe_cols (with the cycle-accurate tile, #401)
+// and l2.banks_per_tile, which is an L-T2 bank count and not a count of tile-sized L2 buffers
+// (with #388/#417). The executor keeps its defaults for those.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -138,8 +149,17 @@ inline std::optional<CspDeviceConfig> csp_config_from(
     if (d.fabric.pe_rows)
         out.unmapped.push_back("fabric.pe_rows/pe_cols: L-T1 times an accumulator's gemm chain as a systolic "
                                "stream on them; the executor's compute fabric keeps its own timing");
-    out.unmapped.push_back("dma.bytes_per_cycle and movers.*_bytes_per_cycle: the executor's "
-                           "rates are GB/s and latency fields; its defaults are kept");
+    // The rates (#458): bytes per cycle at the executor's reference clock.
+    c.bm_bandwidth_gbps = d.movers.bm_bytes_per_cycle * c.clock_ghz;
+    c.str_bandwidth_gbps = d.movers.str_bytes_per_cycle * c.clock_ghz;
+    if (c.dram) {
+        out.unmapped.push_back("dma.bytes_per_cycle: memory.dram is hosted, so the LPDDR5 model's timing sets "
+                               "each transfer's rate, not the engine's");
+    } else {
+        c.mc_bandwidth_gbps = static_cast<double>(per) * d.dma.bytes_per_cycle * c.clock_ghz;   // statistics
+        out.unmapped.push_back("dma.bytes_per_cycle: no memory.dram, and the legacy controller times a transfer "
+                               "by DRAM latency, not by its size; declare memory.dram for a rate-true DMA");
+    }
     // The compute fabric (docs/plans/system-schedule-debugger.md §3.2): one compute at a time
     // per compute tile, its latency from the MAC rate.
     if (d.compute_tiles == 0) return fail("compute_tiles is zero; the executor needs a compute tile");

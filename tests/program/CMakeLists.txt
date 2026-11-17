@@ -346,6 +346,16 @@ set_tests_properties(test_tile_flow_lod PROPERTIES
 )
 
 # The physical shape: array layout, folded-torus NoC, floorplan (#286 step 1)
+# L-CA takes the deployment's rates (#458).
+kpu_add_component_test(test_lca_rates "program"
+    test_lca_rates.cpp
+)
+
+set_tests_properties(test_lca_rates PROPERTIES
+    LABELS "program;lca;rates;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 kpu_add_component_test(test_floorplan "program"
     test_floorplan.cpp
 )

@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-CA takes the deployment's mover and streamer rates, and reports its calibration** (#458,
+  partial).
+  - `csp_config_from` maps `movers.bm_bytes_per_cycle` and `movers.str_bytes_per_cycle` into the
+    executor's GB/s at its 1 GHz reference clock (gbps = bytes per cycle x clock_ghz). They were
+    the executor's defaults (51.2 and 102.4) whatever the deployment declared. On a 64x64 matmul
+    on S1, L-CA's makespan goes from 5162 to 4049 cycles.
+  - `dma.bytes_per_cycle` reaches L-CA through a hosted DRAM (every reference deployment has
+    one), whose LPDDR5 model is rate-true. Without one, the legacy controller charges a fixed DRAM
+    latency whatever a transfer's size, so kpu-run names that gap (decided 2026-11-17: name it,
+    leave the legacy model). Its channel rate (engines x the engine rate) feeds its statistics.
+  - **Calibration, report only** (decided 2026-11-17): timing answers to L-CA, so kpu-run prints
+    L-T1's makespan against L-CA's on every run that has both. CTests
+    `kpu_run_calibration_<program>` record it on reference programs. A tolerance waits for the
+    cycle-accurate tile (#401).
+  - Still not read, and named: `fabric.pe_rows`/`pe_cols` (with #401) and `l2.banks_per_tile`
+    (with #388/#417).
+  - Two characterizations measured at the old defaults are pinned to them, and the change at the
+    deployment's rates is tracked in #462:
+    - with the NoC wired, T4 runs 2% faster than without;
+    - a driver window of 16 is 11% off the whole program.
+
 - **The viewers show the L2 accumulator** (#456), from #455's record columns.
   - **Domain-flow:** the L2 box shows each partial as an accumulator chip, `p<slot> <merged>/<merges>`,
     from its first merge to its L2Release. The capacity line counts staged copies and partials
