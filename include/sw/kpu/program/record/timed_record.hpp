@@ -167,6 +167,9 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
             ++(it->second.store ? at_store : at_move);
         }
         add(st, ev::Credit, none, layer, layer == ev::L3 ? ev::Dram : ev::L3, src_addr, kNone64, t, t);
+        // The residency is over: a later one of the same tile that nothing moves out (read in place
+        // by the Combiner) has no transaction for its credit to follow (#469's review).
+        last_out.erase(it);
     };
     for (const DFR::Step& st : r.steps) {
         const K k = static_cast<K>(st.kind);

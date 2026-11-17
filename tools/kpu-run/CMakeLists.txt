@@ -797,9 +797,10 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lca.dflow)
         set_tests_properties(domainflow_viewer PROPERTIES FIXTURES_REQUIRED
-            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged;dflow_rtl_sample;dflow_rtl_sample_addressed;dflow_timed_l2acc")
+            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged;dflow_rtl_sample;dflow_rtl_sample_addressed;dflow_l2acc;dflow_timed_l2acc")
         set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
             csp_gen_requant_channels kpu_run_requant_channels_synthesized
             csp_gen_dflow_l2acc kpu_run_csp_dflow_l2acc dflow_check_l2acc tflow_check_l2acc l2acc_checks_selftest l2acc_views

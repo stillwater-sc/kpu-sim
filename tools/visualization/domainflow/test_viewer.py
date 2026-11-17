@@ -466,12 +466,18 @@ class ViewerTest(unittest.TestCase):
         # An independent replay of the recorded actions: a step's `to` channel gains its tile, its
         # `from` channel loses it, and a Call consumes what was fed since the last call (its result
         # stays, or opens as an accumulator). A staged copy (version 5) stays in L2 when it is fed,
-        # and its L2_RELEASE takes it out. Every step's counts must equal L-B's held counts.
+        # and its L2_RELEASE takes it out. An L2 accumulator's partial (#455, #456) is opened by its
+        # overwrite Drain; an accumulate Drain merges into it, and does not reset its arrival.
+        # Every step's counts must equal L-B's held counts.
         S = T["steps"]
         ch = [c["name"] for c in m["channels"]]
         L3, L2, CF, CALL = ch.index("l3"), ch.index("l2"), ch.index("cf"), m["kinds"].index("CALL")
         L2REL = m["kinds"].index("L2_RELEASE") if "L2_RELEASE" in m["kinds"] else -1
         feeds = {}                                      # staging -> its staged Feeds' steps
+        merges = {}                                     # a partial's staging -> its Drains' steps
+        merge = S.get("merge") or [0] * S["rows"]       # optional (#455): 0 none, 1 overwrite, 2 accumulate
+        G2 = T.get("l2_staging") or {}
+        partial = G2.get("partial") or [0] * G2.get("rows", 0)
         l2, cf, fed, moves, calls, chains, open_ = {}, {}, [], {}, [], [], {}
         snaps, wanted = {}, set(sample)
         for s in range(S["rows"]):
@@ -479,6 +485,8 @@ class ViewerTest(unittest.TestCase):
             staged = m["version"] >= 5 and S["flags"][s] & HAS_L2
             if staged and to == CF:
                 feeds.setdefault(S["staging"][s], []).append(s)
+            if staged and merge[s]:
+                merges.setdefault(S["staging"][s], []).append(s)
             if f == L3 and to == L2:
                 moves.setdefault(t, []).append(s)
             if S["kind"][s] == L2REL:
@@ -487,7 +495,7 @@ class ViewerTest(unittest.TestCase):
                 l2.pop(t)
             if f == CF:
                 cf.pop(t)
-            if to == L2:
+            if to == L2 and not (merge[s] == 2 and t in l2):
                 l2[t] = s
             if to == CF:
                 cf[t] = (s, False)
@@ -526,8 +534,11 @@ class ViewerTest(unittest.TestCase):
                 if m["version"] < 5 or not S["flags"][a] & STAGES:
                     return None
                 g = S["staging"][a]
-                return {"staging": g, "cf": S["l2_cf"][a], "slot": S["l2_slot"][a],
-                        "fed": sum(1 for x in feeds.get(g, []) if x <= s), "of": T["l2_staging"]["feeds"][g]}
+                at = {"staging": g, "cf": S["l2_cf"][a], "slot": S["l2_slot"][a]}
+                if g < len(partial) and partial[g]:
+                    return {**at, "partial": True, "merged": sum(1 for x in merges.get(g, []) if x <= s),
+                            "of": T["l2_staging"]["merges"][g]}
+                return {**at, "fed": sum(1 for x in feeds.get(g, []) if x <= s), "of": T["l2_staging"]["feeds"][g]}
             contents = {"l2": [{"tile": t, "since": a, "moves": nm(t), "staged": st(a)}
                                for t, a in sorted(l2s.items(), key=lambda kv: kv[1])],
                         "cf": [{"tile": t, "since": a, "acc": acc} for t, (a, acc) in sorted(cfs.items(), key=lambda kv: kv[1][0])]}
