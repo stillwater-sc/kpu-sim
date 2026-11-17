@@ -104,4 +104,14 @@ std::vector<T> read_col(const json& table, const std::string& blob, const std::s
     throw RecordError("record: no column " + name);
 }
 
+// A column a later writer added (an optional, additive column): `fill` for every row when the
+// record predates it, read_col otherwise.
+template <typename T>
+std::vector<T> read_col_or(const json& table, const std::string& blob, const std::string& name,
+                           const char* dtype, std::size_t count, T fill) {
+    for (const json& c : table.at("columns"))
+        if (c.at("name").get<std::string>() == name) return read_col<T>(table, blob, name, dtype, count);
+    return std::vector<T>(count, fill);
+}
+
 } // namespace sw::kpu::program::record::columnar

@@ -118,6 +118,7 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         t.put("staging", "u64", col<std::uint64_t>(rec.steps, [](const DFR::Step& s) { return s.staging; }));
         t.put("l2_cf", "u32", col<std::uint32_t>(rec.steps, [](const DFR::Step& s) { return s.l2_cf; }));
         t.put("l2_slot", "u32", col<std::uint32_t>(rec.steps, [](const DFR::Step& s) { return s.l2_slot; }));
+        t.put("merge", "u8", col<std::uint8_t>(rec.steps, [](const DFR::Step& s) { return s.merge; }));   // #455
         tables["steps"] = write_table(t, dir);
     }
     {
@@ -130,6 +131,8 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         t.put("tile", "u32", col<std::uint32_t>(rec.stagings, [](const St& x) { return x.tile; }));
         t.put("cf", "u32", col<std::uint32_t>(rec.stagings, [](const St& x) { return x.cf; }));
         t.put("slot", "u32", col<std::uint32_t>(rec.stagings, [](const St& x) { return x.slot; }));
+        t.put("partial", "u8", col<std::uint8_t>(rec.stagings, [](const St& x) { return x.partial; }));   // #455
+        t.put("merges", "u64", col<std::uint64_t>(rec.stagings, [](const St& x) { return x.merges; }));
         tables["l2_staging"] = write_table(t, dir);
     }
     {
@@ -403,10 +406,12 @@ DFR read_dflow(const std::string& dir) {
                 auto staging = read_col<std::uint64_t>(t, blob, "staging", "u64", n);
                 auto l2_cf = read_col<std::uint32_t>(t, blob, "l2_cf", "u32", n);
                 auto l2_slot = read_col<std::uint32_t>(t, blob, "l2_slot", "u32", n);
+                auto merge = columnar::read_col_or<std::uint8_t>(t, blob, "merge", "u8", n, 0);   // #455; older: none
                 for (std::size_t i = 0; i < n; ++i) {
                     rec.steps[i].staging = staging[i];
                     rec.steps[i].l2_cf = l2_cf[i];
                     rec.steps[i].l2_slot = l2_slot[i];
+                    rec.steps[i].merge = merge[i];
                 }
             }
         }
@@ -419,8 +424,10 @@ DFR read_dflow(const std::string& dir) {
             auto tile = read_col<std::uint32_t>(t, blob, "tile", "u32", n);
             auto cf = read_col<std::uint32_t>(t, blob, "cf", "u32", n);
             auto slot = read_col<std::uint32_t>(t, blob, "slot", "u32", n);
+            auto partial = columnar::read_col_or<std::uint8_t>(t, blob, "partial", "u8", n, 0);   // #455; older: none
+            auto merges = columnar::read_col_or<std::uint64_t>(t, blob, "merges", "u64", n, 0);
             for (std::size_t i = 0; i < n; ++i)
-                rec.stagings.push_back({tile[i], cf[i], slot[i], open[i], close[i], residency[i], feeds[i]});
+                rec.stagings.push_back({tile[i], cf[i], slot[i], open[i], close[i], residency[i], feeds[i], partial[i], merges[i]});
         }
         {
             auto [t, blob] = table("tiles", n);

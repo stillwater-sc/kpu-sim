@@ -39,6 +39,10 @@
 //                   its Feeds (the reuse count). Steps carry the L2 address they write, read or
 //                   free (l2_cf, l2_slot; flag kHasL2), the staging (staging), and kStages on a
 //                   staging Move. The manifest's machine.l2 is the program's `l2 = N` (0: none).
+//                   Optional columns (#455): l2_staging.partial and .merges, an L2 accumulator's
+//                   partial (opened by its overwrite Drain, merged into, never fed), and
+//                   steps.merge, each Drain's merge (0 none, 1 overwrite, 2 accumulate). A record
+//                   without them reads as no partials (read_col_or).
 //   (version 6)     the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md,
 //                   #386). The manifest names the level and the producer, time (null at L-B), every
 //                   layer's geometry (L-B models DRAM and L3; L2's banks and rows, the accumulator and
@@ -143,6 +147,7 @@ struct DomainFlowRecord {
         std::uint32_t l3_tile = kNone32, slot = kNone32, bank = kNone32;   // valid when kHasPlace
         std::uint32_t l2_cf = kNone32, l2_slot = kNone32;                 // valid when kHasL2
         std::uint64_t staging = kNone64;                                    // index into stagings
+        std::uint8_t merge = 0;     // a Drain's merge into an L2 accumulator (csp::Merge: 0 none, 1 overwrite, 2 accumulate)
     };
     struct Staging {
         std::uint32_t tile = 0, cf = 0, slot = 0;
@@ -150,6 +155,11 @@ struct DomainFlowRecord {
         std::uint64_t close = kNone64;              // its L2Release
         std::uint64_t residency = kNone64;          // the L3 residency it copies
         std::uint64_t feeds = 0;                    // Feeds of the copy: its reuse count
+        // An L2 accumulator's partial (#429; #455), not a staged copy: its overwrite Drain opens it,
+        // the Combiner merges every Drain into it (merges, the first included), its Writeback reads
+        // it and its L2Release frees it. Never fed.
+        std::uint8_t partial = 0;
+        std::uint64_t merges = 0;
     };
     struct Residency {
         std::uint32_t tile = 0;
@@ -467,12 +477,14 @@ public:
                 st.slot = a.l2->slot;
                 st.open = i;
                 st.residency = a.residency == csp::kNone ? kNone64 : a.residency;
+                st.partial = a.merge != csp::Merge::None;     // an L2 accumulator's first Drain opens its slot
                 rec_.stagings.push_back(st);
             } else if (a.kind == csp::Action::Kind::Feed) {
                 ++rec_.stagings.at(a.staging).feeds;
             } else if (a.kind == csp::Action::Kind::L2Release) {
                 rec_.stagings.at(a.staging).close = i;
             }
+            if (a.kind == csp::Action::Kind::Drain && a.merge != csp::Merge::None) ++rec_.stagings.at(a.staging).merges;
         }
 
         // The iteration summary: every loop iteration at every depth, for the whole run.
@@ -525,6 +537,7 @@ public:
             s.l2_slot = a.l2->slot;
             s.staging = a.staging;
         }
+        s.merge = static_cast<std::uint8_t>(a.merge);
         rec_.steps.push_back(s);
     }
 

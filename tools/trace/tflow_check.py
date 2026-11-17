@@ -46,7 +46,9 @@ Invariants:
     TF13 one copy per L2 slot (version 6: the program stages) every staged copy is in one of the
                         program's l2_slots, held [t0, t1) inside the run and fed at least once; the
                         copies placed in one slot of one compute tile's L2 never overlap in time,
-                        and no more than l2_slots are held at once
+                        and no more than l2_slots are held at once. An L2 accumulator's partial
+                        (#455; the optional columns partial and merges) shares the slots, and is
+                        merged into at least once and never fed instead
     TF14 the fabric's phases (version 6) each chain runs on a compute tile with PEs and calls;
                         front = in0 + skew and last = in1 + skew, with skew = (rows-1) + (cols-1);
                         on one compute tile the chains' operand streams [in0, in1) never overlap; and
@@ -135,6 +137,10 @@ def _named(rows, what):
     return rows
 
 
+# Optional columns a later writer added (#455): checked when present, absent from older records.
+OPTIONAL = {"l2_residency": {"partial": "u8", "merges": "u32"}}
+
+
 def load(path):
     d = Path(path)
     try:
@@ -188,6 +194,9 @@ def load(path):
                 if declared.get(col) != dtype:
                     raise Unreadable(f"{name}.{col} is declared {declared.get(col)!r}, "
                                      f"the format says {dtype}")
+            for col, dtype in OPTIONAL.get(name, {}).items():      # present only in newer records
+                if col in declared and declared[col] != dtype:
+                    raise Unreadable(f"{name}.{col} is declared {declared[col]!r}, the format says {dtype}")
             for c in t["columns"]:
                 n = rows + 1 if (name == "op_tiles" and c["name"] == "offset") else rows
                 if name == "op_tiles" and c["name"] in ("tile", "written"):
@@ -498,6 +507,8 @@ def check(rec):
         r.ran("TF13")
         l2r, nl2 = rec["l2_residency"], rec["l2_residency_rows"]
         cap = m["l2_slots"]
+        part = l2r.get("partial") or [0] * nl2          # #455; absent from older records, which had none
+        merges = l2r.get("merges") or [0] * nl2
         by_slot, ev = {}, []
         for i in range(nl2):
             who = f"{tile_name(l2r['tile'][i])}" if l2r["tile"][i] < len(tiles) else f"tile {l2r['tile'][i]}"
@@ -507,7 +518,13 @@ def check(rec):
                 continue
             if not (0 <= t0 <= t1 <= makespan):
                 r.fail("TF13", f"{who} holds L2 slot {slot} over [{t0}, {t1}), not inside [0, {makespan}]")
-            if l2r["feeds"][i] < 1:
+            if part[i]:
+                if l2r["feeds"][i]:
+                    r.fail("TF13", f"{who}'s partial in L2 slot {slot} is fed {l2r['feeds'][i]} times; a partial "
+                                   f"is merged into, never fed")
+                if merges[i] < 1:
+                    r.fail("TF13", f"{who}'s partial in L2 slot {slot} is never merged into")
+            elif l2r["feeds"][i] < 1:
                 r.fail("TF13", f"{who} is staged in L2 slot {slot} and never fed")
             if t1 > t0:
                 by_slot.setdefault((l2r["cf"][i], slot), []).append((t0, t1, i))

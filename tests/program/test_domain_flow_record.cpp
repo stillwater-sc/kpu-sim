@@ -189,6 +189,52 @@ TEST_CASE("dflow: the bundle round-trips", "[dflow][record]") {
     std::filesystem::remove_all(dir);
 }
 
+TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[dflow][record][l2acc]") {
+    // #455: the staging an L2 accumulator's first Drain opens is a partial, merged into by every
+    // Drain (overwrite, then accumulate) and never fed. Older records have no such columns, and
+    // read as no partials.
+    const std::string text = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                             "  tensor A[16,32] tile 16x16 in;\n  tensor B[32,16] tile 16x16 in;\n"
+                             "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
+                             "  resident D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                             "    for k in 0..2 {\n      resident A[0, k], B[k, 0];\n"
+                             "      call gemm(A[0, k], B[k, 0]) +-> C[0, 0];\n      release A[0, k], B[k, 0];\n    }\n  }\n"
+                             "  release D[0, 0];\n  store C[0, 0];\n}\n";
+    const DomainFlowRecord a = record_of(text).rec;
+    REQUIRE(a.stagings.size() == 1);
+    CHECK(a.stagings[0].partial == 1);
+    CHECK(a.stagings[0].merges == 2);
+    CHECK(a.stagings[0].feeds == 0);
+    std::vector<std::uint8_t> merges;
+    for (const auto& st : a.steps)
+        if (st.merge) merges.push_back(st.merge);
+    CHECK(merges == std::vector<std::uint8_t>{1, 2});        // overwrite, then accumulate
+
+    const auto dir = scratch("l2acc");
+    record::write_dflow(a, dir.string());
+    const DomainFlowRecord b = record::read_dflow(dir.string());
+    REQUIRE(b.stagings.size() == 1);
+    CHECK((b.stagings[0].partial == 1 && b.stagings[0].merges == 2));
+    REQUIRE(b.steps.size() == a.steps.size());
+    for (std::size_t i = 0; i < a.steps.size(); ++i) CHECK(b.steps[i].merge == a.steps[i].merge);
+
+    // A record written before the columns: read with none.
+    nlohmann::json m = nlohmann::json::parse(slurp((dir / "manifest.json").string()));
+    for (const char* table : {"l2_staging", "steps"}) {
+        auto& cols = m["tables"][table]["columns"];
+        nlohmann::json kept = nlohmann::json::array();
+        for (const auto& c : cols)
+            if (c["name"] != "partial" && c["name"] != "merges" && c["name"] != "merge") kept.push_back(c);
+        cols = kept;
+    }
+    std::ofstream((dir / "manifest.json").string()) << m.dump();
+    const DomainFlowRecord old = record::read_dflow(dir.string());
+    REQUIRE(old.stagings.size() == 1);
+    CHECK((old.stagings[0].partial == 0 && old.stagings[0].merges == 0));
+    for (const auto& st : old.steps) CHECK(st.merge == 0);
+    std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("dflow: values round-trip, bit for bit", "[dflow][record][values]") {
     const std::string text = slurp("tests/program/corpus/linear_64_t16_relu.csp");
     const DomainFlowRecord a = record_of(text, 0, record::parse_value_selection("C[1,2],b")).rec;

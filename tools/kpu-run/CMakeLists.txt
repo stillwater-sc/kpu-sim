@@ -602,6 +602,29 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(kpu_run_csp_dflow_staged PROPERTIES
             FIXTURES_REQUIRED dflow_staged_csp FIXTURES_SETUP dflow_staged)
         set_tests_properties(dflow_check_staged PROPERTIES FIXTURES_REQUIRED dflow_staged)
+        # An L2 accumulator (#455): kpu-csp-gen --dataflow ws --init bias writes `acc C[:, j] in l2
+        # init D[:, j]`, recorded at L-T1 (its .dflow and .tflow), checked (S5, TF13 for a partial),
+        # and each rule broken on purpose in a copy.
+        add_test(NAME csp_gen_dflow_l2acc
+            COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 64 --tile 16 --l3 16 --dataflow ws --init bias
+                    --target ${_deploy}/kpu_s1_combiner.json -o ${CMAKE_CURRENT_BINARY_DIR}/dflow_l2acc.csp)
+        add_test(NAME kpu_run_csp_dflow_l2acc
+            COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/dflow_l2acc.csp
+                    --deploy ${_deploy}/kpu_s1_combiner.json --level block-sequential
+                    --dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.dflow
+                    --tflow ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.tflow)
+        add_test(NAME dflow_check_l2acc
+            COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.dflow)
+        add_test(NAME tflow_check_l2acc
+            COMMAND ${KPU_PYTHON3} ${_tflow_check} ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.tflow)
+        add_test(NAME l2acc_checks_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_l2acc_checks.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.tflow)
+        set_tests_properties(csp_gen_dflow_l2acc PROPERTIES FIXTURES_SETUP dflow_l2acc_csp)
+        set_tests_properties(kpu_run_csp_dflow_l2acc PROPERTIES
+            FIXTURES_REQUIRED dflow_l2acc_csp FIXTURES_SETUP dflow_l2acc)
+        set_tests_properties(dflow_check_l2acc tflow_check_l2acc l2acc_checks_selftest
+            PROPERTIES FIXTURES_REQUIRED dflow_l2acc)
         add_test(NAME dflow_check_selftest
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_linear_64_t16_relu.dflow
@@ -676,6 +699,7 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(domainflow_viewer PROPERTIES FIXTURES_REQUIRED
             "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged;dflow_rtl_sample;dflow_rtl_sample_addressed")
         set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
+            csp_gen_dflow_l2acc kpu_run_csp_dflow_l2acc dflow_check_l2acc tflow_check_l2acc l2acc_checks_selftest
             kpu_run_csp_dflow_reference dflow_check_reference dflow_check_selftest domainflow_viewer
             kpu_run_csp_dflow_values_refuses kpu_run_csp_dflow_streamed dflow_check_streamed
             csp_gen_dflow_staged kpu_run_csp_dflow_staged dflow_check_staged
