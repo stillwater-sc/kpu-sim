@@ -26,9 +26,11 @@
 //                            reference clock, 1 GHz): gbps = bytes_per_cycle x clock_ghz.
 //                            movers.bm_bytes_per_cycle -> bm_bandwidth_gbps;
 //                            movers.str_bytes_per_cycle -> str_bandwidth_gbps;
-//                            dma.bytes_per_cycle: with memory.dram, the hosted LPDDR5 model's
-//                            timing governs every transfer (every reference deployment hosts
-//                            one). Without it, the legacy controller charges a fixed DRAM latency
+//                            dma.bytes_per_cycle does not reach the timing. With memory.dram,
+//                            the hosted LPDDR5 model times every transfer from the memory.dram
+//                            parameters, and the engine rate is ignored (every reference
+//                            deployment hosts one). Without it, the legacy controller charges a
+//                            fixed DRAM latency
 //                            whatever a transfer's size, so the rate cannot reach L-CA's timing:
 //                            mc_bandwidth_gbps is set to each controller's engines x the engine
 //                            rate for its statistics, and `unmapped` names the gap (decided

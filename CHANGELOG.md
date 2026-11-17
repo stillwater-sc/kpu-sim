@@ -15,10 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     executor's GB/s at its 1 GHz reference clock (gbps = bytes per cycle x clock_ghz). They were
     the executor's defaults (51.2 and 102.4) whatever the deployment declared. On a 64x64 matmul
     on S1, L-CA's makespan goes from 5162 to 4049 cycles.
-  - `dma.bytes_per_cycle` reaches L-CA through a hosted DRAM (every reference deployment has
-    one), whose LPDDR5 model is rate-true. Without one, the legacy controller charges a fixed DRAM
-    latency whatever a transfer's size, so kpu-run names that gap (decided 2026-11-17: name it,
-    leave the legacy model). Its channel rate (engines x the engine rate) feeds its statistics.
+  - `dma.bytes_per_cycle` does not reach L-CA's timing, and kpu-run names it either way:
+    - with a hosted DRAM (every reference deployment has one), the LPDDR5 model times each
+      transfer from the `memory.dram` parameters, and the engine rate is ignored;
+    - without one, the legacy controller charges a fixed DRAM latency whatever a transfer's size
+      (decided 2026-11-17: name it, leave the legacy model). Its channel rate (engines x the engine
+      rate) feeds only its statistics.
   - **Calibration, report only** (decided 2026-11-17): timing answers to L-CA, so kpu-run prints
     L-T1's makespan against L-CA's on every run that has both. CTests
     `kpu_run_calibration_<program>` record it on reference programs. A tolerance waits for the
