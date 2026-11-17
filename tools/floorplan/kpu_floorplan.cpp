@@ -3,7 +3,7 @@
 // kpu-floorplan: the physical shape of a deployment, as a summary, a JSON floorplan and an
 // SVG (#286 step 1; docs/plans/tile-flow-debugger.md §3.1).
 //
-//   kpu-floorplan --deploy <spec.json> [--device <name>] [--json <out>] [--svg <out>]
+//   kpu-floorplan --deploy <spec.json> [--device <name>] [--json <out>] [--svg <out>] [--structure <out>]
 //   kpu-floorplan --deploy <spec.json> --import <floorplan.json>     validate a floorplan
 //
 // Exit codes: 0 done; 1 the deployment has no floorplan, or an imported one does not fit
@@ -30,12 +30,14 @@ namespace {
 
 void usage(std::ostream& o) {
     o << "usage: kpu-floorplan --deploy <spec.json> [--device <name>] [--json <out.json>]\n"
-         "                     [--svg <out.svg>] [--import <floorplan.json>]\n"
+         "                     [--svg <out.svg>] [--structure <out.json>] [--import <floorplan.json>]\n"
          "\n"
          "  --deploy <file>   the deployment spec to lay out (required)\n"
          "  --device <name>   which device of a multi-device spec (default: the first)\n"
          "  --json <file>     write the floorplan as JSON (the format --import reads)\n"
          "  --svg <file>      write the floorplan as SVG\n"
+         "  --structure <file> write the structure record, kpu-structure v1 (#392), which the\n"
+         "                    floorplan view reads (tools/visualization/floorplan)\n"
          "  --import <file>   read a floorplan and validate it against the deployment,\n"
          "                    instead of generating one\n";
 }
@@ -49,7 +51,7 @@ bool write_file(const std::string& path, const std::string& text) {
 } // namespace
 
 int main(int argc, char** argv) {
-    std::string deploy, device, json_out, svg_out, import;
+    std::string deploy, device, json_out, svg_out, structure_out, import;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto value = [&](std::string& into) {
@@ -65,6 +67,7 @@ int main(int argc, char** argv) {
         else if (a == "--device") { if (!value(device)) return 2; }
         else if (a == "--json") { if (!value(json_out)) return 2; }
         else if (a == "--svg") { if (!value(svg_out)) return 2; }
+        else if (a == "--structure") { if (!value(structure_out)) return 2; }
         else if (a == "--import") { if (!value(import)) return 2; }
         else {
             std::cerr << "kpu-floorplan: unknown argument '" << a << "'\n";
@@ -162,6 +165,20 @@ int main(int argc, char** argv) {
             return 2;
         }
         std::cout << "  wrote        " << svg_out << "\n";
+    }
+    if (!structure_out.empty()) {
+        std::string record;
+        try {
+            record = floorplan_to_structure(fp);
+        } catch (const FloorplanError& e) {
+            std::cerr << "kpu-floorplan: " << e.what() << "\n";
+            return 1;
+        }
+        if (!write_file(structure_out, record)) {
+            std::cerr << "kpu-floorplan: cannot write '" << structure_out << "'\n";
+            return 2;
+        }
+        std::cout << "  wrote        " << structure_out << "\n";
     }
     return 0;
 }

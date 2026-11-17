@@ -2,7 +2,7 @@
 
 `index.html` draws a machine's floorplan from a **structure record**, `kpu-structure` v1
 (`docs/plans/shared-structure-record.md`), from either producer:
-- the model: `kpu-floorplan --deploy <spec.json> --json fp.json`, converted;
+- the model: `kpu-floorplan --deploy <spec.json> --structure fp.structure.json`, natively;
 - the RTL generator: `kpu-gen floorplan <spec.yaml> -o floorplan.json`, converted.
 
 It is #447, moved from branes-ai/embodied-ai-soc-generator#59 by ADR 0005: the views live in
@@ -11,7 +11,9 @@ kpu-sim, and the RTL writes records in kpu-sim's formats.
 ## Use
 
 ```bash
-# A record, from either floorplan (or a record already):
+# The model writes a record directly:
+kpu-floorplan --deploy tests/program/deploy/kpu_t64.json --structure fp.structure.json
+# A record from the RTL generator's floorplan.json (or the model's older --json):
 python3 tools/trace/structure_from_floorplan.py floorplan.json -o fp.structure.json
 # One self-contained page, to open, share or attach (pack.py converts a floorplan itself too):
 python3 tools/visualization/floorplan/pack.py fp.structure.json -o floorplan.html

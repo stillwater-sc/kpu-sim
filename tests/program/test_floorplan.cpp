@@ -15,6 +15,8 @@
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/platform/floorplan.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <cstdlib>
 #include <deque>
 #include <functional>
@@ -436,6 +438,66 @@ TEST_CASE("the floorplan JSON round-trips, byte for byte, and is deterministic",
     CHECK(floorplan_to_json(back) == text);
     CHECK(back.digest() == fp.digest());
     CHECK(back.block_count() == fp.block_count());
+}
+
+TEST_CASE("the floorplan as a structure record: every block once, in mm, in one tree",
+          "[program][platform][floorplan][structure]") {
+    // kpu-structure v1 (#392). The record's equivalence with the converted JSON, field for field,
+    // is CTest structure_native_t4; this pins its shape over the T64's 8x8 board.
+    const DeploymentSpec spec = t64();
+    const SocFloorplan fp = generate_floorplan(spec);
+    const std::string text = floorplan_to_structure(fp);
+    CHECK(floorplan_to_structure(generate_floorplan(spec)) == text);        // deterministic
+    const nlohmann::json r = nlohmann::json::parse(text);
+    CHECK(r.at("format") == "kpu-structure");
+    CHECK(r.at("version") == 1);
+    CHECK(r.at("provenance").at("source") == "model");
+    CHECK(r.at("provenance").at("details").at("floorplan_digest") == fp.digest());
+    CHECK(r.at("floorplan").at("estimated") == true);
+    CHECK(r.at("floorplan").at("die").at("width").get<double>() == fp.die.w_um * 1e-3);
+
+    // One record block per floorplan block, plus the die root; ids unique; every parent a block.
+    const auto& blocks = r.at("blocks");
+    CHECK(blocks.size() == fp.block_count() + 1);
+    std::map<std::string, const nlohmann::json*> by_id;
+    for (const auto& b : blocks) CHECK(by_id.emplace(b.at("id").get<std::string>(), &b).second);
+    std::size_t roots = 0;
+    for (const auto& b : blocks) {
+        if (!b.contains("parent")) { ++roots; CHECK(b.at("kind") == "die"); continue; }
+        REQUIRE(by_id.count(b.at("parent").get<std::string>()) == 1);
+        const FloorplanBlock* src = fp.find(b.at("id").get<std::string>());
+        REQUIRE(src != nullptr);
+        CHECK(b.at("rect")[0].get<double>() == src->rect.x_um * 1e-3);
+        CHECK(b.at("rect")[3].get<double>() == src->rect.h_um * 1e-3);
+        if (src->resource) CHECK(b.at("resource") == format(*src->resource));
+    }
+    CHECK(roots == 1);
+    CHECK(by_id.at("t64/l3[0]/bm[1]")->at("role") == "block_mover");
+
+    // The NoC: one network, one link per floorplan link, each end a node of it.
+    REQUIRE(r.at("networks").size() == 1);
+    const auto& noc = r.at("networks")[0];
+    CHECK(noc.at("routing") == "ring");
+    CHECK(noc.at("links").size() == fp.noc.size());
+    std::set<std::string> nodes;
+    for (const auto& n : noc.at("nodes")) nodes.insert(n.at("id").get<std::string>());
+    for (const auto& l : noc.at("links")) {
+        CHECK(nodes.count(l.at("from").get<std::string>()) == 1);
+        CHECK(nodes.count(l.at("to").get<std::string>()) == 1);
+    }
+}
+
+TEST_CASE("a block named as the die still imports, and only its structure record is refused",
+          "[program][platform][floorplan][structure]") {
+    // #453's review: `<device>/die` is the structure record's die root. A version-1 floorplan
+    // may name a group so, and it must still import and draw; only the record would duplicate
+    // the id (and make the group its own parent), so floorplan_to_structure refuses it.
+    const DeploymentSpec spec = t64();
+    SocFloorplan fp = generate_floorplan(spec);
+    edit(fp.blocks, "t64/array", [](FloorplanBlock& b) { b.name = "t64/die"; });
+    CHECK(validate_floorplan(fp, spec).empty());
+    CHECK_NOTHROW(floorplan_from_json(floorplan_to_json(fp), spec));
+    CHECK_THROWS_WITH(floorplan_to_structure(fp), ContainsSubstring("\"t64/die\" uses the id the die reserves"));
 }
 
 TEST_CASE("an imported floorplan that does not fit the deployment is refused, by name",

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`kpu-floorplan --structure`** (#392): the model writes the structure record, `kpu-structure`
+  v1, natively (`floorplan_to_structure`). CTest `structure_native_t4` holds it to the converted
+  record, block for block. **`tools/trace/structure_diff.py`** compares two records by id,
+  provenance aside, within a relative tolerance; exit 0, 1 or 2.
+
 ## [0.9.0] - 2026-11-16
 
 v0.9.0 closes its milestone: one tile at three levels (L-B, L-T1, L-CA), and the first RTL
