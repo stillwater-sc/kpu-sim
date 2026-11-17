@@ -679,6 +679,29 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(dflow_check_timed_linear_lt1 dflow_check_timed_linear_lca PROPERTIES
             FIXTURES_REQUIRED dflow_timed_linear)
         set_tests_properties(dflow_check_timed_lu_lt1 PROPERTIES FIXTURES_REQUIRED dflow_timed_lu)
+        # dflow_diff.py (#402): two records joined event by event. The RTL sample under the names
+        # A, B and C, whose program L-CA runs, against L-CA's record of that program (the done-when:
+        # they join, and the diff names the first divergence); and L-T1's against L-CA's.
+        add_test(NAME dflow_rtl_sample_abc
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/dflow_rtl_sample.py --names A,B,C
+                    --program-out ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_abc.csp
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_abc.dflow)
+        set_tests_properties(dflow_rtl_sample_abc PROPERTIES FIXTURES_SETUP dflow_rtl_sample_abc)
+        add_test(NAME kpu_run_csp_dflow_timed_sample
+            COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_abc.csp --deploy ${_deploy}/kpu_s1.json
+                    --level all --dflow-lca ${CMAKE_CURRENT_BINARY_DIR}/timed_sample_lca.dflow)
+        set_tests_properties(kpu_run_csp_dflow_timed_sample PROPERTIES
+            FIXTURES_REQUIRED dflow_rtl_sample_abc FIXTURES_SETUP dflow_timed_sample)
+        add_test(NAME dflow_diff_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_diff.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/timed_linear_lt1.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/timed_linear_lca.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_abc.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/timed_sample_lca.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_48x48x48_t16.dflow)
+        set_tests_properties(dflow_diff_selftest PROPERTIES FIXTURES_REQUIRED
+            "dflow_timed_linear;dflow_rtl_sample_abc;dflow_timed_sample;dflow_matmul_48x48x48_t16"
+            LABELS "program;csp;domainflow")
         # A timed record needs its level: --dflow-lca without L-CA is refused by name.
         add_test(NAME kpu_run_csp_dflow_timed_needs_its_level
             COMMAND ${CMAKE_COMMAND} -DCMD=$<TARGET_FILE:run>
