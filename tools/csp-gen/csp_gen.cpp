@@ -58,8 +58,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 the fabric; ws holds B's tile, staged in L2 across the i loop;
                                 is holds A's, across the j loop. ws and is keep C's partials
                                 in L2 slots, merged by the Combiner (they declare
-                                l2 = tiles per panel + 1, and take no --orient, --stage-a or
-                                --init). A linear epilogue under ws or is runs @ combiner on
+                                l2 = tiles per panel + 1, take no --orient or --stage-a, and of
+                                --init take bias and bias-row, which the Combiner adds on each
+                                tile's first merge). A linear epilogue under ws or is runs @ combiner on
                                 each tile's final merge, @ bm.egress (ws), or unfused
   --act <relu|gelu|silu|atan>   linear: the activation               (default relu)
   --place <fabric|combiner|bm.egress|unfused>
@@ -68,7 +69,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 into the dtype on the Combiner, round(x * m / 2^shift), ties to
                                 even, saturated; C is declared `<dtype> ... out acc <accumulator>`.
                                 A linear's epilogue is then add(b[j]), scale, relu, all @ combiner
-                                (--place combiner): b is in the accumulator's type
+                                (--place combiner): b is in the accumulator's type. A matmul's
+                                --init bias or bias-row (int32) is added before the scale, for
+                                every dataflow; --init accumulate is refused
   --requant-channels            with --requant: per channel, each column's multiplier and shift
                                 from the int32 vectors qm and qs, scale(qm[j], qs[j]); their
                                 values come with the inputs (--inputs), shifts in 0..62
