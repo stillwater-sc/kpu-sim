@@ -706,3 +706,96 @@ TEST_CASE("Requant: what a per-channel scale refuses", "[program][csp][lang][req
     o.requant_channels = true;
     CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("it needs --requant"));
 }
+
+namespace {
+
+// A requantized matmul with an init (#395): C = scale(A . B + D) or scale(A . B + b), the init in
+// the accumulator's type, added before the scale (the fabric's init for os; the Combiner's
+// MERGE_INIT on each tile's first merge for ws and is, the scale on its final merge).
+gen::Options matmul_qi(const std::string& dataflow, const std::string& init, bool channels, Dim size) {
+    gen::Options o;
+    o.algo = "matmul";
+    o.size = size;
+    o.tile = 16;
+    o.l3 = 32;
+    o.dtype = "int8";
+    o.dataflow = dataflow;
+    o.init = init;
+    o.requant = true;
+    o.requant_m = kM;
+    o.requant_shift = kShift;
+    o.requant_channels = channels;
+    return o;
+}
+
+}  // namespace
+
+TEST_CASE("Requant: an init before the scale, on every dataflow and level", "[program][csp][run][requant][init]") {
+    // The full int8 epilogue the generator used to refuse ("requant with an init is not built
+    // yet"): D's tile (init bias) or b's row (init bias-row), int32, added to the int32 matmul as a
+    // register adds it (wrapping), then the scale, uniform or per channel. One K block (size 16) is
+    // the case where the first merge, which adds the init, is also the final one, which scales.
+    const auto d = s1_with_full_combiner();
+    std::size_t moved = 0;                                  // results the init changes
+    for (const Dim size : {Dim{64}, Dim{16}})
+        for (const char* df : {"os", "ws", "is"})
+            for (const char* init : {"bias", "bias-row"})
+                for (const bool channels : {false, true}) {
+                    CAPTURE(size, df, init, channels);
+                    const std::string src = gen::generate(matmul_qi(df, init, channels, size));
+                    CHECK_THAT(src, ContainsSubstring("int8 tile 16x16 out acc int32"));
+                    CHECK_THAT(src, ContainsSubstring(std::string(init) == "bias" ? "tensor D[" : "vector b["));
+                    const lang::Program ast = lang::parse(src);
+                    TileProgram in = driver::csp_inputs(ast);
+                    if (channels) set_channels(in);
+                    // The int32 matmul on the same A and B: no init, no scale.
+                    gen::Options po = matmul_qi(df, "none", false, size);
+                    po.requant = false;
+                    const lang::Program plain_ast = lang::parse(gen::generate(po));
+                    TileProgram plain_in = driver::csp_inputs(plain_ast);
+                    for (const char* n : {"A", "B"}) plain_in.operand(n).values = in.operand(n).values;
+                    const auto plain = driver::csp_reference(plain_ast, plain_in, 1'000'000);
+                    REQUIRE(plain.values);
+                    const TensorOperand& c32 = plain.values->operand("C");
+                    const bool tile = std::string(init) == "bias";
+                    const TensorOperand& bias = in.operand(tile ? "D" : "b");
+                    std::vector<long long> want;
+                    for (Dim r = 0; r < c32.rows; ++r)
+                        for (Dim c = 0; c < c32.cols; ++c) {
+                            const long long x = static_cast<long long>(c32.value(r, c));
+                            const long long bv = static_cast<long long>(tile ? bias.value(r, c) : bias.value(c, 0));
+                            const long long s = static_cast<long long>(static_cast<std::int32_t>(
+                                static_cast<std::uint32_t>(static_cast<std::int64_t>(x + bv))));
+                            const long long m = channels ? static_cast<long long>(in.operand("qm").value(c, 0)) : kM;
+                            const int sh = channels ? static_cast<int>(in.operand("qs").value(c, 0)) : kShift;
+                            want.push_back(expected(s, m, sh));
+                            moved += expected(s, m, sh) != expected(x, m, sh);
+                        }
+                    driver::CspRunRequest req{ast, &d, in,
+                                              {ExecutionLevel::Behavioral, ExecutionLevel::BlockSequential,
+                                               ExecutionLevel::CycleAccurate}};
+                    const auto r = driver::run_csp(req);
+                    REQUIRE(r.reference);
+                    CHECK(r.reference_note.empty());       // the trace replays L-B bit for bit
+                    REQUIRE(r.levels.size() == 3);
+                    for (const auto& o : r.levels) {
+                        CAPTURE(to_string(o.level));
+                        INFO(o.skipped.value_or(""));
+                        REQUIRE_FALSE(o.skipped);
+                        const TensorOperand& got = o.values.operand("C");
+                        REQUIRE(got.type == "int8");
+                        std::size_t n = 0, bad = 0;
+                        for (Dim rr = 0; rr < got.rows; ++rr)
+                            for (Dim cc = 0; cc < got.cols; ++cc)
+                                if (static_cast<long long>(got.value(rr, cc)) != want[n++]) ++bad;
+                        CHECK(bad == 0);
+                    }
+                }
+    CHECK(moved > 0);                                       // the data reaches the init
+}
+
+TEST_CASE("Requant: an accumulate init is still refused, by name", "[program][csp][gen][requant][init]") {
+    // C += A . B onto an int8 result would add the scaled result to an unscaled sum.
+    gen::Options o = matmul_qi("os", "accumulate", false, 64);
+    CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("requant with init accumulate is not built yet"));
+}

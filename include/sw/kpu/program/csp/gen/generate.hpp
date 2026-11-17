@@ -172,7 +172,7 @@ inline void check(const Options& o) {
         const numeric::NumberSystem* ns = numeric::find(o.dtype);
         if (!ns || ns->kind != numeric::Kind::Integer)
             throw GenError("csp-gen: requant takes an integer accumulator into an integer dtype; dtype is '" + o.dtype + "'");
-        if (o.init != "none") throw GenError("csp-gen: requant with an init is not built yet");
+        if (o.init == "accumulate") throw GenError("csp-gen: requant with init accumulate is not built yet");
         if (o.stage_a) throw GenError("csp-gen: requant with stage_a is not built yet");
         if (o.requant_m <= -(1LL << 31) || o.requant_m >= (1LL << 31) || o.requant_shift < 0 || o.requant_shift > 62)
             throw GenError("csp-gen: requant m in (-2^31, 2^31), shift in 0..62");

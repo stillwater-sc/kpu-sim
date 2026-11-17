@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The full int8 epilogue, generated** (#395). `kpu-csp-gen --dtype int8 --requant m,shift
+  --init bias|bias-row` (with or without `--requant-channels`) now writes C = scale(A . B + D)
+  or scale(A . B + b), for os, ws and is, with the init in int32 added before the scale. Under os
+  the fabric starts each accumulator from its init and the store scales it. Under ws and is the
+  Combiner adds the init on each tile's first merge and scales on its final merge, which is the
+  same merge when there is one K block. Every level computes it bit for bit against a reference
+  computed independently in the test. `--init accumulate` with `--requant` stays refused, by name.
+  The `--dataflow` help no longer says ws and is take no `--init`; they take bias and bias-row.
+
 - **A reduction's dataflow, stated in the program** (#395, step 1 of 2).
   - `acc C[:, j] in l2 dataflow ws { ... }` (or `is`, `os`) says which operand the array holds.
     Unstated on an L2 accumulator, the deployment's new `fabric.dataflow` applies (os when
