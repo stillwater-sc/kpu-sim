@@ -142,6 +142,26 @@ class L2AccViews(unittest.TestCase):
         self.assertEqual(errors, [])
         page.close()
 
+    def test_tileflow_reads_partial_without_merges(self):
+        # #460's review: a bundle with `partial` and no `merges` still draws, and its L2 slot
+        # inspector names the partial (with zero merges) instead of throwing.
+        part = self.tmp / "partial-only.tflow"
+        shutil.copytree(TFLOW, part)
+        m = json.loads((part / "manifest.json").read_text())
+        t = m["tables"]["l2_residency"]
+        t["columns"] = [c for c in t["columns"] if c["name"] != "merges"]
+        (part / "manifest.json").write_text(json.dumps(m))
+        _m, rec = tflow_record(TFLOW)
+        l2 = rec["l2_residency"]
+        slot = l2["slot"][next(i for i in range(rec["l2_residency_rows"]) if l2["partial"][i])]
+        page, errors = self.open(pack("tileflow", part, self.tmp / "partial-only-tf.html"))
+        self.assertIn("L2 ACCUMULATOR", page.inner_text("#diag").upper())
+        self.click_row(page, next(x["name"] for x in lod_rows(TFLOW)
+                                  if x["kind"] == "l2_slot" and re.search(rf"slot\[{slot}\]$", x["name"])))
+        self.assertRegex(page.inner_text("#insp"), r"accumulator partial, 0 merges")
+        self.assertEqual(errors, [])
+        page.close()
+
     # ---- domain-flow -----------------------------------------------------------------------
     def test_domainflow_reads_partial_without_merges(self):
         # #460's review: each optional column defaults on its own, as the C++ reader does, so a

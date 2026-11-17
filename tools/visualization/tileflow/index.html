@@ -211,6 +211,9 @@ function parse(files) {
   R.tr = tb("transit");
   R.co = tb("compute");
   R.l2 = m.version === 6 ? tb("l2_residency") : { rows: 0 };
+  // The optional merges column (#455) defaults to zero on its own, as the C++ reader does: a
+  // bundle may carry `partial` without it.
+  if (!R.l2.merges) R.l2.merges = new Array(R.l2.rows).fill(0);
   // An L2 accumulator's partial (#455's optional columns; absent from older bundles): merged into
   // by the Combiner, written back, never fed. Not a staged copy.
   R.l2.isPartial = i => !!(R.l2.partial && R.l2.partial[i]);
