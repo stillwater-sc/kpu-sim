@@ -854,3 +854,37 @@ TEST_CASE("Dataflow: the deployment's default, fabric.dataflow", "[program][csp]
     bad.devices[0].fabric.dataflow = "diagonal";
     CHECK_THAT(bad.validate(), ContainsSubstring("fabric.dataflow 'diagonal' must be os, ws or is"));
 }
+
+TEST_CASE("Dataflow: an accumulator's dataflow ends with it; a later Call on its tile carries none",
+          "[program][csp][dataflow][decl]") {
+    // C[0, 0] is reduced (in L2 as ws, or in the fabric), stored, then read back and written in
+    // place through a ReLU. The ReLU is not the reduction's: it and its Drain carry no dataflow.
+    for (const char* acc : {"in l2 dataflow ws", "in fabric"}) {
+        CAPTURE(acc);
+        const std::string src = std::string("csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+                                "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
+                                "  tensor C[32,32] tile 16x16 inout;\n  acc C[0, 0] ") + acc +
+                                " {\n    resident A[0, :], B[:, 0];\n"
+                                "    for k in 0..2 { call gemm(A[0, k], B[k, 0]) +-> C[0, 0]; }\n"
+                                "    release A[0, :], B[:, 0];\n  }\n  store C[0, 0];\n"
+                                "  resident C[0, 0];\n  call relu(C[0, 0]) -> C[0, 0] via relu @ combiner;\n"
+                                "  store C[0, 0];\n  release C[0, 0];\n}\n";
+        const Dataflow want = std::string(acc) == "in fabric" ? Dataflow::OS : Dataflow::WS;
+        const CspProgram p = lang::compile(src);
+        bool stored = false;
+        std::size_t gemms = 0, later = 0;
+        for (const Action& a : p.actions) {
+            if (a.kind == Action::Kind::Store && a.tile.operand == "C") stored = true;
+            if (a.kind != Action::Kind::Call && a.kind != Action::Kind::Drain) continue;
+            if (!stored) {
+                if (a.kind == Action::Kind::Call) ++gemms;
+                CHECK(a.dataflow == want);
+            } else {
+                ++later;
+                CHECK(a.dataflow == Dataflow::Default);
+            }
+        }
+        CHECK(gemms == 2);
+        CHECK(later >= 1);                  // the ReLU's Call
+    }
+}
