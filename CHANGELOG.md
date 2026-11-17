@@ -24,7 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     freed at its ejection, before the DRAM write ends (its credit is stamped at the store's end);
     the Combiner's in-place reads of an init, a bias or a scale's vectors (their credits are left
     out). The record counts each.
-  - Next: `dflow_diff.py`, which joins two records event by event.
+  - **`tools/trace/dflow_diff.py`** (part 2) joins two records of one program on the identity key.
+    It reports the events only one record has (row events under their transactions) and, with both
+    timed, the first and the largest divergences of start and duration. A layer whose addresses
+    differ in form (slots against rows) is joined without them. It is a debugging tool, not a CI
+    gate. `dflow_rtl_sample.py --names A,B,C --program-out` writes the sample under names L-CA runs.
+    L-CA's record of its program joins every one of the sample's transactions, and the diff names
+    the first divergence: the first load's DMA.
 
 - **The full int8 epilogue, generated** (#395). `kpu-csp-gen --dtype int8 --requant m,shift
   --init bias|bias-row` (with or without `--requant-channels`) now writes C = scale(A . B + D)
