@@ -255,6 +255,7 @@ struct CspLevelOutcome {
     std::map<std::string, std::size_t> one_leg;
     std::uint64_t link_delay_cycles = 0;
     std::uint32_t pe_rows = 0, pe_cols = 0;
+    std::string dataflow = "os";        // the deployment's default (fabric.dataflow), for a Call that states none (#395)
     std::size_t compute_tiles = 0;
     std::uint64_t dram_loads = 0, dram_stores = 0, dram_bytes = 0;
     std::uint64_t cf_busy = 0;
@@ -452,6 +453,7 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.link_delay_cycles = st.link_delay_cycles;
         o.pe_rows = static_cast<std::uint32_t>(dev.pe_rows);
         o.pe_cols = static_cast<std::uint32_t>(dev.pe_cols);
+        o.dataflow = dev.dataflow;
         o.compute_tiles = lt.lanes_of(csp::TransactionalInterpreter::Proc::Cf);
         o.unmodelled.push_back("tile contexts' vector-unit time (movers.vector): L-T1 applies the stages' "
                                "values; their time is L-CA's");

@@ -309,6 +309,27 @@ class DflowStationary(unittest.TestCase):
     def test_the_manifest_names_the_dataflow(self):
         f = self.b.manifest["lt1"]["fabric"]
         self.assertEqual((f["mapping"], f["drain_edge"]), ("weight-stationary", "south"))
+        self.assertEqual(f["default_dataflow"], "os")       # kpu_s1_combiner declares none
+
+    # A chain's dataflow is its Calls' (#466's review).
+    def call_step(self):
+        return next(self.b.get("lt1_calls", "action", r) for r in range(self.b.rows("lt1_calls"))
+                    if self.b.get("lt1_calls", "chain", r) == self.c)
+
+    def test_a_chain_is_its_calls_dataflow(self):
+        self.b.set("lt1_chains", "dataflow", self.c, 3)
+        self.fails("P2", "is is, but its call 1")
+
+    def test_a_default_call_takes_the_deployments(self):
+        self.b.set("steps", "dataflow", self.call_step(), 0)
+        self.fails("P2", "is os (the deployment's default)")
+
+    def test_an_older_manifest_defaults_to_os(self):
+        # Written before default_dataflow: a default Call reads as os, as read_dflow has it.
+        del self.b.manifest["lt1"]["fabric"]["default_dataflow"]
+        self.b.save_manifest()
+        self.b.set("steps", "dataflow", self.call_step(), 0)
+        self.fails("P2", "is os (the deployment's default)")
 
 
 if __name__ == "__main__":

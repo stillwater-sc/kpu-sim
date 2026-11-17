@@ -251,6 +251,7 @@ struct DomainFlowRecord {
     struct Call { std::uint64_t action = 0; std::uint32_t chain = 0, pos = 0; };
     bool fabric = false;
     std::uint32_t pe_rows = 0, pe_cols = 0;
+    std::string default_dataflow = "os";    // the deployment's fabric.dataflow: a default step's (#395)
     std::uint64_t link_delay_cycles = 0;
     std::vector<std::pair<std::string, std::uint64_t>> one_leg;     // calls timed as one leg, by why
     std::vector<Chain> chains;
@@ -310,6 +311,7 @@ inline void attach_lt1(DomainFlowRecord& rec, const driver::CspLevelOutcome& lt1
     rec.fabric = lt1.pe_rows > 0;
     rec.pe_rows = lt1.pe_rows;
     rec.pe_cols = lt1.pe_cols;
+    rec.default_dataflow = lt1.dataflow;
     rec.link_delay_cycles = lt1.link_delay_cycles;
     for (const auto& [why, n] : lt1.one_leg) rec.one_leg.emplace_back(why, n);
     for (const TI::Chain& c : lt1.chains) {

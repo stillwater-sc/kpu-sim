@@ -319,7 +319,8 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         }
         m["lt1"]["fabric"] = rec.fabric
             ? json{{"pe_rows", rec.pe_rows}, {"pe_cols", rec.pe_cols}, {"mapping", mapping},
-                   {"drain_edge", edge}, {"chains", rec.chains.size()}, {"link_delay_cycles", rec.link_delay_cycles}}
+                   {"drain_edge", edge}, {"default_dataflow", rec.default_dataflow}, {"chains", rec.chains.size()},
+                   {"link_delay_cycles", rec.link_delay_cycles}}
             : json(nullptr);
     } else {
         m["lt1"] = nullptr;
@@ -617,6 +618,7 @@ DFR read_dflow(const std::string& dir) {
                     rec.fabric = true;
                     rec.pe_rows = f.at("pe_rows").get<std::uint32_t>();
                     rec.pe_cols = f.at("pe_cols").get<std::uint32_t>();
+                    rec.default_dataflow = f.value("default_dataflow", std::string("os"));   // #395; older: os
                     rec.link_delay_cycles = f.at("link_delay_cycles").get<std::uint64_t>();
                 }
             }
