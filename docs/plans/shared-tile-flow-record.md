@@ -71,6 +71,8 @@ as its default. The checkers type-check an optional column when it is present. T
 | `l2_staging` | `partial` | `u8` | 0 | the slot holds an L2 accumulator's partial (#429), not a staged copy: its overwrite Drain opens it, the Combiner merges every Drain into it, its Writeback reads it, its L2Release frees it, and nothing feeds it (#455) |
 | `l2_staging` | `merges` | `u64` | 0 | a partial's Drains, the first included |
 | `steps` | `merge` | `u8` | 0 | a Drain's merge into an L2 accumulator: 0 none, 1 overwrite, 2 accumulate |
+| `steps` | `stages` | `u16` | 0 | the vector stages the action applies as it moves its tile, a bit per `csp::VeOp` (add 0, relu 1, gelu 2, silu 3, atan 4, mxint8 5, mxfp8 6, scale 7, init 8); on a merge they are the Combiner's, in the order the language fixes (#456) |
+| `steps` | `init_tile` | `u32` | none | the init stage's tile (an index into `tiles`): the first merge's MERGE_INIT (#456) |
 | `.tflow` `l2_residency` | `partial`, `merges` | `u8`, `u32` | 0 | the same, for L-T1's L2 slots |
 
 `dflow_check` S5 and `tflow_check` TF13 check a partial. A record written before these columns had

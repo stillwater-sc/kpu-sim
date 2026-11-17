@@ -405,7 +405,8 @@ def in_domain(domain, r, c):
 
 
 # Optional columns a later writer added (#455): checked when present, absent from older records.
-OPTIONAL = {"l2_staging": {"partial": "u8", "merges": "u64"}, "steps": {"merge": "u8"}}
+OPTIONAL = {"l2_staging": {"partial": "u8", "merges": "u64"},
+            "steps": {"merge": "u8", "stages": "u16", "init_tile": "u32"}}
 
 
 def load(path):

@@ -119,6 +119,8 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         t.put("l2_cf", "u32", col<std::uint32_t>(rec.steps, [](const DFR::Step& s) { return s.l2_cf; }));
         t.put("l2_slot", "u32", col<std::uint32_t>(rec.steps, [](const DFR::Step& s) { return s.l2_slot; }));
         t.put("merge", "u8", col<std::uint8_t>(rec.steps, [](const DFR::Step& s) { return s.merge; }));   // #455
+        t.put("stages", "u16", col<std::uint16_t>(rec.steps, [](const DFR::Step& s) { return s.stages; }));   // #456
+        t.put("init_tile", "u32", col<std::uint32_t>(rec.steps, [](const DFR::Step& s) { return s.init_tile; }));
         tables["steps"] = write_table(t, dir);
     }
     {
@@ -407,11 +409,15 @@ DFR read_dflow(const std::string& dir) {
                 auto l2_cf = read_col<std::uint32_t>(t, blob, "l2_cf", "u32", n);
                 auto l2_slot = read_col<std::uint32_t>(t, blob, "l2_slot", "u32", n);
                 auto merge = columnar::read_col_or<std::uint8_t>(t, blob, "merge", "u8", n, 0);   // #455; older: none
+                auto stages = columnar::read_col_or<std::uint16_t>(t, blob, "stages", "u16", n, 0);   // #456; older: none
+                auto init_tile = columnar::read_col_or<std::uint32_t>(t, blob, "init_tile", "u32", n, kNone32);
                 for (std::size_t i = 0; i < n; ++i) {
                     rec.steps[i].staging = staging[i];
                     rec.steps[i].l2_cf = l2_cf[i];
                     rec.steps[i].l2_slot = l2_slot[i];
                     rec.steps[i].merge = merge[i];
+                    rec.steps[i].stages = stages[i];
+                    rec.steps[i].init_tile = init_tile[i];
                 }
             }
         }

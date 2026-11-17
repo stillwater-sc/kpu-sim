@@ -209,6 +209,16 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
     for (const auto& st : a.steps)
         if (st.merge) merges.push_back(st.merge);
     CHECK(merges == std::vector<std::uint8_t>{1, 2});        // overwrite, then accumulate
+    // #456: the first merge carries the Combiner's init stage, and its tile; the later one none.
+    std::vector<std::uint16_t> stages;
+    std::vector<std::uint32_t> inits;
+    for (const auto& st : a.steps)
+        if (st.merge) { stages.push_back(st.stages); inits.push_back(st.init_tile); }
+    const auto init_bit = static_cast<std::uint16_t>(1u << static_cast<unsigned>(csp::VeOp::Init));
+    CHECK(stages == std::vector<std::uint16_t>{init_bit, 0});
+    REQUIRE(inits[0] < a.tiles.size());
+    CHECK(a.operands[a.tiles[inits[0]].operand].name == "D");
+    CHECK(inits[1] == record::kNone32);
 
     const auto dir = scratch("l2acc");
     record::write_dflow(a, dir.string());
@@ -216,7 +226,9 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
     REQUIRE(b.stagings.size() == 1);
     CHECK((b.stagings[0].partial == 1 && b.stagings[0].merges == 2));
     REQUIRE(b.steps.size() == a.steps.size());
-    for (std::size_t i = 0; i < a.steps.size(); ++i) CHECK(b.steps[i].merge == a.steps[i].merge);
+    for (std::size_t i = 0; i < a.steps.size(); ++i)
+        CHECK((b.steps[i].merge == a.steps[i].merge && b.steps[i].stages == a.steps[i].stages &&
+               b.steps[i].init_tile == a.steps[i].init_tile));
 
     // A record written before the columns: read with none.
     nlohmann::json m = nlohmann::json::parse(slurp((dir / "manifest.json").string()));

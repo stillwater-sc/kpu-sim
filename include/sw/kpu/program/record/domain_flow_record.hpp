@@ -42,7 +42,9 @@
 //                   Optional columns (#455): l2_staging.partial and .merges, an L2 accumulator's
 //                   partial (opened by its overwrite Drain, merged into, never fed), and
 //                   steps.merge, each Drain's merge (0 none, 1 overwrite, 2 accumulate). A record
-//                   without them reads as no partials (read_col_or).
+//                   without them reads as no partials (read_col_or). And (#456) steps.stages, a
+//                   bit per csp::VeOp the action's stages apply, and steps.init_tile, the init
+//                   stage's tile (none: kNone32).
 //   (version 6)     the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md,
 //                   #386). The manifest names the level and the producer, time (null at L-B), every
 //                   layer's geometry (L-B models DRAM and L3; L2's banks and rows, the accumulator and
@@ -148,6 +150,11 @@ struct DomainFlowRecord {
         std::uint32_t l2_cf = kNone32, l2_slot = kNone32;                 // valid when kHasL2
         std::uint64_t staging = kNone64;                                    // index into stagings
         std::uint8_t merge = 0;     // a Drain's merge into an L2 accumulator (csp::Merge: 0 none, 1 overwrite, 2 accumulate)
+        // The vector stages the action applies as it moves its tile (csp::Action::context; #456): bit
+        // (1 << csp::VeOp) per op, so init, add, scale, relu, ... on a Drain into an L2 accumulator
+        // are the Combiner's. The language fixes their order (init or add, scale, then relu).
+        std::uint16_t stages = 0;
+        std::uint32_t init_tile = kNone32;          // the init stage's tile (index into tiles), if any
     };
     struct Staging {
         std::uint32_t tile = 0, cf = 0, slot = 0;
@@ -538,6 +545,10 @@ public:
             s.staging = a.staging;
         }
         s.merge = static_cast<std::uint8_t>(a.merge);
+        for (const csp::Stage& st : a.context) {
+            s.stages = static_cast<std::uint16_t>(s.stages | (1u << static_cast<unsigned>(st.op)));
+            if (st.op == csp::VeOp::Init) s.init_tile = tile_index(st.arg);
+        }
         rec_.steps.push_back(s);
     }
 
