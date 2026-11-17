@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The record checkers know the L2 accumulator** (#455). A program with `acc ... in l2` (and its
+  init) failed both checkers: `dflow_check` S2 ("a DRAIN carries an L2 address") and
+  `tflow_check` TF13 ("staged in L2 ... and never fed"). Every `kpu-csp-gen --dataflow ws|is`
+  program was affected.
+  - The records now say which L2 slot holds an accumulator's partial, and how each Drain merges.
+    These are optional columns: `l2_staging.partial` and `.merges`, and `steps.merge`, in `.dflow`;
+    `l2_residency.partial` and `.merges` in `.tflow`. A record without them reads as before.
+  - `dflow_check` S5: a partial is opened by its overwrite Drain, accumulated into inside its life,
+    written back once and never fed, and its merges are its Drains. S2 allows a partial's Drains
+    and Writeback their L2 address. `tflow_check` TF13: a partial is merged into, not fed.
+  - Tests: 18 generated programs (os, ws and is; no init, bias and bias row; fp32 and int8) check
+    clean. `test_l2acc_checks.py` breaks each rule in a copy. Both readers round-trip the columns,
+    and read a record without them.
+
 - **`kpu-floorplan --structure`** (#392): the model writes the structure record, `kpu-structure`
   v1, natively (`floorplan_to_structure`). CTest `structure_native_t4` holds it to the converted
   record, block for block. **`tools/trace/structure_diff.py`** compares two records by id,

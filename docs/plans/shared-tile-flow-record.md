@@ -62,6 +62,20 @@ a transaction's layer pair or a geometry form; it keeps the `layers` and `event_
 change needs a new version. A reader of 6.*n* reads every 6.*m* with *m* ≤ *n*, and refuses a
 later one. A 6.0 record may use none of 6.1's additions.
 
+**Optional columns.** A later writer may add a column to an existing table, when a record without
+it still means what it did: a reader keeps the columns it knows and reads a missing optional column
+as its default. The checkers type-check an optional column when it is present. They are:
+
+| Table | Column | Type | Default | Meaning |
+|---|---|---|---|---|
+| `l2_staging` | `partial` | `u8` | 0 | the slot holds an L2 accumulator's partial (#429), not a staged copy: its overwrite Drain opens it, the Combiner merges every Drain into it, its Writeback reads it, its L2Release frees it, and nothing feeds it (#455) |
+| `l2_staging` | `merges` | `u64` | 0 | a partial's Drains, the first included |
+| `steps` | `merge` | `u8` | 0 | a Drain's merge into an L2 accumulator: 0 none, 1 overwrite, 2 accumulate |
+| `.tflow` `l2_residency` | `partial`, `merges` | `u8`, `u32` | 0 | the same, for L-T1's L2 slots |
+
+`dflow_check` S5 and `tflow_check` TF13 check a partial. A record written before these columns had
+no partials (L2 accumulators came later), so it reads as before.
+
 Two writers produce the format:
 
 - `src/program/domain_flow_record.cpp`, kpu-sim's C++ writer;

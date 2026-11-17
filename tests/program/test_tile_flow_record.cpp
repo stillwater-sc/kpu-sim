@@ -407,6 +407,31 @@ TEST_CASE("version 5: every residency is at the address L-T1 placed it, one tile
 }
 
 
+TEST_CASE("version 6: an L2 accumulator's partial is recorded as merged into, not fed", "[program][record][l2][l2acc]") {
+    // #455: L-T1's L2 slot for an accumulator's partial carries partial and merges; the record
+    // keeps them, and they round-trip.
+    Run r;
+    r.ast = lang::parse("csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                        "  tensor A[16,32] tile 16x16 in;\n  tensor B[32,16] tile 16x16 in;\n"
+                        "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
+                        "  resident D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
+                        "    for k in 0..2 {\n      resident A[0, k], B[k, 0];\n"
+                        "      call gemm(A[0, k], B[k, 0]) +-> C[0, 0];\n      release A[0, k], B[k, 0];\n    }\n  }\n"
+                        "  release D[0, 0];\n  store C[0, 0];\n}\n");
+    r.inputs = driver::csp_inputs(r.ast);
+    r.spec = platform::read_spec_file("tests/program/deploy/kpu_s1_combiner.json");
+    r.outcome = driver::csp_run_level(driver::ExecutionLevel::BlockSequential, r.ast, &r.spec.device(0), r.inputs);
+    REQUIRE_FALSE(r.outcome.skipped);
+    const TileFlowRecord rec = r.record();
+    REQUIRE(rec.l2_residency.size() == 1);
+    CHECK((rec.l2_residency[0].partial == 1 && rec.l2_residency[0].merges == 2 && rec.l2_residency[0].feeds == 0));
+    const std::string dir = scratch("v6-l2acc");
+    write_tflow(rec, dir);
+    const TileFlowRecord back = read_tflow(dir);
+    REQUIRE(back.l2_residency.size() == 1);
+    CHECK((back.l2_residency[0].partial == 1 && back.l2_residency[0].merges == 2));
+}
+
 TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and read back", "[program][record][l2]") {
     gen::Options o;
     o.size = 64;

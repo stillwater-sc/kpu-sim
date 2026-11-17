@@ -105,6 +105,14 @@ tile into an L2 slot, the calls inside it feed the copy, and its L2_RELEASE free
     S3 reuse counts           with every step recorded, a staging's feeds are its staged Feeds
     S4 all free at the end    every staging closes after it opens (only a refused run leaves one
                               open)
+    S5 an L2 accumulator      (#455; the optional columns l2_staging.partial and .merges, and
+                              steps.merge) a partial's slot is opened by its overwrite Drain (its
+                              open step, checked from the partial's side: a Drain that names it,
+                              carries its L2 address and opens it), every other Drain into it
+                              accumulates inside its life, it is written back once, after its last
+                              Drain and before its L2Release, it is never fed, and its merges are
+                              its Drains; a staged copy takes no merge. A partial's Drains and
+                              Writeback carry its L2 address (S2 allows them there, and only there)
 
 Version 6 is the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md; #386):
 the level and producer, time where the level has it, each layer's geometry, the events both sides
@@ -396,6 +404,10 @@ def in_domain(domain, r, c):
     return True
 
 
+# Optional columns a later writer added (#455): checked when present, absent from older records.
+OPTIONAL = {"l2_staging": {"partial": "u8", "merges": "u64"}, "steps": {"merge": "u8"}}
+
+
 def load(path):
     path = Path(path)
     try:
@@ -478,6 +490,9 @@ def load(path):
             if col not in cols:
                 raise Unreadable(f"{name}: no column {col}")
             if cols[col][0] != dtype:
+                raise Unreadable(f"{name}.{col} is {cols[col][0]}, expected {dtype}")
+        for col, dtype in OPTIONAL.get(name, {}).items():           # present only in newer records
+            if col in cols and cols[col][0] != dtype:
                 raise Unreadable(f"{name}.{col} is {cols[col][0]}, expected {dtype}")
         tables[name] = {"rows": rows, "dtypes": {k: v[0] for k, v in cols.items()},
                         **{k: v[1] for k, v in cols.items()}}
@@ -711,6 +726,11 @@ def check(m, T, limit=20):
 def check_staging(m, T, bad):
     G, S = T["l2_staging"], T["steps"]
     ng, n = G["rows"], S["rows"]
+    # An L2 accumulator's partial (#455): optional columns, absent from records written before it
+    # (which had no partials to carry).
+    partial = G.get("partial") or [0] * ng
+    merges = G.get("merges")
+    merge = S.get("merge") or [0] * n
     actions, l2 = m["totals"]["actions"], m["machine"]["l2"]
     refused = m.get("refusal") is not None
     complete = not m["cut"] and n == actions
@@ -763,8 +783,10 @@ def check_staging(m, T, bad):
         if g >= ng:
             bad("S2", f"step {i} names staging {g}; there are {ng}")
             continue
-        if k not in (MOVE_KIND, FEED_KIND, L2_RELEASE_KIND):
-            bad("S2", f"step {i}: a {m['kinds'][k] if k < len(m['kinds']) else k} carries an L2 address")
+        ok = (MOVE_KIND, FEED_KIND, L2_RELEASE_KIND) + ((DRAIN_KIND, WRITEBACK_KIND) if partial[g] else ())
+        if k not in ok:
+            bad("S2", f"step {i}: a {m['kinds'][k] if k < len(m['kinds']) else k} carries an L2 address"
+                      + ("" if partial[g] else " (its staging is not an L2 accumulator's partial)"))
         if (S["l2_cf"][i], S["l2_slot"][i]) != (G["cf"][g], G["slot"][g]):
             bad("S2", f"step {i} is at l2[{S['l2_cf'][i]}] slot {S['l2_slot'][i]}; its staging {g} is at "
                       f"l2[{G['cf'][g]}] slot {G['slot'][g]}")
@@ -773,8 +795,9 @@ def check_staging(m, T, bad):
         o, c = G["open"][g], G["close"][g]
         if bool(f & STAGES) != (o == i):
             bad("S2", f"step {i}: flag stages is {bool(f & STAGES)}, and staging {g} opens at {o}")
-        if f & STAGES and k != MOVE_KIND:
-            bad("S2", f"step {i} stages a tile but is not a Move")
+        if f & STAGES and k != (DRAIN_KIND if partial[g] else MOVE_KIND):
+            bad("S2", f"step {i} opens {'a partial' if partial[g] else 'a staging'} but is not a "
+                      f"{'Drain' if partial[g] else 'Move'}")
         if k == L2_RELEASE_KIND and c != i:
             bad("S2", f"step {i} ends staging {g}, which ends at {c}")
         if k == FEED_KIND:
@@ -785,6 +808,78 @@ def check_staging(m, T, bad):
         for g in range(ng):
             if feeds[g] != G["feeds"][g]:
                 bad("S3", f"staging {g} records {G['feeds'][g]} feeds; its steps give {feeds[g]}")
+    check_partials(m, T, bad, partial, merges, merge, complete)
+
+
+OVERWRITE, ACCUMULATE = 1, 2
+
+
+def check_partials(m, T, bad, partial, merges, merge, complete):
+    """S5: an L2 accumulator's partial is merged into, written back once, and never fed (#455)."""
+    G, S = T["l2_staging"], T["steps"]
+    ng, n = G["rows"], S["rows"]
+    drains, writebacks = [0] * ng, [0] * ng
+    last_drain, writeback_at = [None] * ng, [None] * ng
+    for i in range(n):
+        g, k, mg = S["staging"][i], S["kind"][i], merge[i]
+        if mg not in (0, OVERWRITE, ACCUMULATE):
+            bad("S5", f"step {i}: merge {mg} is not none, overwrite or accumulate")
+            continue
+        if mg and k != DRAIN_KIND:
+            bad("S5", f"step {i}: a {m['kinds'][k] if k < len(m['kinds']) else k} carries a merge; only a Drain merges")
+            continue
+        if g == NONE64 or g >= ng:
+            if mg:
+                bad("S5", f"step {i}: a Drain merges ({'overwrite' if mg == OVERWRITE else 'accumulate'}) into no L2 slot")
+            continue
+        if not partial[g]:
+            if mg:
+                bad("S5", f"step {i}: a Drain merges into staging {g}, a staged copy, not an L2 accumulator's partial")
+            continue
+        o, c = G["open"][g], G["close"][g]
+        if k == FEED_KIND:
+            bad("S5", f"step {i} feeds staging {g}, an L2 accumulator's partial: a partial is merged into, never fed")
+        elif k == DRAIN_KIND:
+            drains[g] += 1
+            last_drain[g] = i
+            if writeback_at[g] is not None:
+                bad("S5", f"step {i} merges into partial {g} after its Writeback at step {writeback_at[g]}: "
+                          f"the Writeback carries no later merge")
+            if i == o and mg != OVERWRITE:
+                bad("S5", f"step {i} opens partial {g} with merge {mg}, not overwrite")
+            if i != o and mg != ACCUMULATE:
+                bad("S5", f"step {i} merges into partial {g} after its first Drain at {o} with merge {mg}, "
+                          f"not accumulate")
+            if not (o <= i and (c == NONE64 or i < c)):
+                bad("S5", f"step {i} merges into partial {g} outside its life ({o}, {c})")
+        elif k == WRITEBACK_KIND:
+            writebacks[g] += 1
+            writeback_at[g] = i
+            if not (o < i and (c == NONE64 or i < c)):
+                bad("S5", f"step {i} writes partial {g} back outside its life ({o}, {c})")
+    for g in range(ng):
+        if not partial[g]:
+            continue
+        # Its open step, from the partial's side: the steps' own references can be lost, and then
+        # nothing above sees the opening at all.
+        o = G["open"][g]
+        if o < n:
+            f = S["flags"][o]
+            if (S["kind"][o] != DRAIN_KIND or merge[o] != OVERWRITE or S["staging"][o] != g
+                    or not (f & HAS_L2) or not (f & STAGES)):
+                bad("S5", f"partial {g} opens at step {o}, which is not an overwrite Drain that names it, carries "
+                          f"its L2 address and opens it (kind {S['kind'][o]}, merge {merge[o]}, staging "
+                          f"{S['staging'][o]}, flags {f:#x})")
+        if G["feeds"][g]:
+            bad("S5", f"partial {g} records {G['feeds'][g]} feeds; a partial is never fed")
+        # At most one Writeback in any record, a cut one included; exactly one in a complete life.
+        if writebacks[g] > 1:
+            bad("S5", f"partial {g} is written back {writebacks[g]} times, more than once")
+        if complete and G["close"][g] != NONE64:
+            if writebacks[g] == 0:
+                bad("S5", f"partial {g} is never written back before its L2Release")
+            if merges is not None and merges[g] != drains[g]:
+                bad("S5", f"partial {g} records {merges[g]} merges; its Drains give {drains[g]}")
 
 
 def check_fabric(m, T, bad):
