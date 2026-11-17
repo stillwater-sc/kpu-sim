@@ -13,6 +13,7 @@
 
 #include <cstring>
 #include <filesystem>
+#include <set>
 
 namespace sw::kpu::program::record {
 
@@ -300,9 +301,25 @@ void write_dflow(const DFR& rec, const std::string& dir) {
         for (const auto& [why, n] : rec.one_leg) one_leg[why] = n;
         m["lt1"]["one_leg"] = one_leg;
         // The fabric pipeline: null when the deployment declares no PE array (every call one leg).
+        // Its mapping is the chains' dataflow (#395): output-stationary drains north, weight- and
+        // input-stationary leave south; a run that mixes them says so, and lt1_chains.dataflow
+        // names each. A run with no chains keeps output-stationary, the fabric accumulator's.
+        std::set<std::uint8_t> modes;
+        for (const auto& ch : rec.chains) modes.insert(ch.dataflow);
+        const char* mapping = "output-stationary";
+        const char* edge = "north";
+        if (modes.size() > 1) {
+            mapping = edge = "per-chain";
+        } else if (modes.count(2)) {
+            mapping = "weight-stationary";
+            edge = "south";
+        } else if (modes.count(3)) {
+            mapping = "input-stationary";
+            edge = "south";
+        }
         m["lt1"]["fabric"] = rec.fabric
-            ? json{{"pe_rows", rec.pe_rows}, {"pe_cols", rec.pe_cols}, {"mapping", "output-stationary"},
-                   {"drain_edge", "north"}, {"chains", rec.chains.size()}, {"link_delay_cycles", rec.link_delay_cycles}}
+            ? json{{"pe_rows", rec.pe_rows}, {"pe_cols", rec.pe_cols}, {"mapping", mapping},
+                   {"drain_edge", edge}, {"chains", rec.chains.size()}, {"link_delay_cycles", rec.link_delay_cycles}}
             : json(nullptr);
     } else {
         m["lt1"] = nullptr;

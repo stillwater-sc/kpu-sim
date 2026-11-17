@@ -574,6 +574,8 @@ def check(rec):
                 # Weight- or input-stationary: PRELOAD R clocks (R >= the stationary tile's K rows),
                 # S rows streamed, the last crossing the W columns and then the R rows, out south.
                 R, S = pre[i], strm[i]
+                if ch["calls"][i] != 1:
+                    r.fail("TF14", f"chain {i} is stationary with {ch['calls'][i]} calls; each call is a chain of one")
                 if R < rows or S < 1:
                     r.fail("TF14", f"chain {i}: a stationary chain with PRELOAD {R} for {rows} rows and {S} rows streamed")
                 elif front != in0 + R or in1 != front + S or last != in1 + (cols - 1) or out1 != last + R:

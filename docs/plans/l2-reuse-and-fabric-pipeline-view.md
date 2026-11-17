@@ -220,6 +220,7 @@ lt1_calls.bin   action (join key), chain id, k of K, inject0, inject1   (its sha
 lt1_chains.bin  chain id, cf lane, in0, front, in1, last, out1, link_delay
                 (cycles; both tables empty, and meta says why, when the deployment has no array)
 meta            + array_rows, array_cols, drain_edge = "north", mapping = "output-stationary"
+                  (#395: the chains' dataflow; ws/is "south", a mixed run "per-chain")
 ```
 
 #### 3.1.1 Assumptions of the stream model

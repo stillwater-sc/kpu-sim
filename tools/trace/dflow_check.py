@@ -905,29 +905,6 @@ def check_partials(m, T, bad, partial, merges, merge, complete):
                 bad("S5", f"partial {g} records {merges[g]} merges; its Drains give {drains[g]}")
 
 
-def check_stationary_chain(c, C, G, legs, cf, R, S, calls_of, f, bad):
-    """A weight- or input-stationary chain (#395): one call, PRELOAD R clocks (R is the array's
-    rows, at least the stationary tile's K), S rows streamed, the last crossing W columns and then
-    R rows, out south; the call's cf leg holds the compute tile R + max(S, R)."""
-    rows, cols = C["used_rows"][c], C["used_cols"][c]
-    in0, front, in1, last, out1 = (C[k][c] for k in ("in0", "front", "in1", "last", "out1"))
-    if R != f["pe_rows"] or rows > R or S < 1:
-        bad("P2", f"chain {c}: PRELOAD {R} for {rows} stationary rows on a {f['pe_rows']}-row array, {S} rows streamed")
-        return
-    if front - in0 != R or in1 - front != S:
-        bad("P2", f"chain {c}: front - in0 is {front - in0} (PRELOAD {R}) and in1 - front is {in1 - front} ({S} rows streamed)")
-    if out1 != NONE64 and (last - in1 != cols - 1 or out1 - last != R or C["link_delay"][c] != 0):
-        bad("P2", f"chain {c}: last - in1 is {last - in1} (W - 1 = {cols - 1}) and out1 - last is {out1 - last} (R = {R})")
-    got = sorted(calls_of.get(c, []))
-    if len(got) != 1 or C["calls"][c] != 1:
-        bad("P3", f"chain {c} is stationary with {len(got)} calls; each call is a chain of one")
-        return
-    cl = [g for g in legs.get(got[0][0], []) if G["proc"][g] == cf]
-    if len(cl) == 1 and (G["start"][cl[0]] != in0 or G["finish"][cl[0]] != in0 + R + max(S, R)):
-        bad("P3", f"chain {c}: its call runs [{G['start'][cl[0]]}, {G['finish'][cl[0]]}); PRELOAD and the stream "
-                  f"give [{in0}, {in0 + R + max(S, R)})")
-
-
 def check_fabric(m, T, bad):
     C, K, G, S = T["lt1_chains"], T["lt1_calls"], T["lt1_legs"], T["steps"]
     o = m.get("lt1")
@@ -969,18 +946,29 @@ def check_fabric(m, T, bad):
         if dfs[c] not in (1, 2, 3):
             bad("P2", f"chain {c}: dataflow {dfs[c]} is not os, ws or is")
             continue
-        if dfs[c] != 1:
-            check_stationary_chain(c, C, G, legs, cf, pre[c], strm[c], calls_of, f, bad)
-            by_lane.setdefault(lane, []).append((in0, in1, c))
-            continue
+        # A weight- or input-stationary chain (#395): PRELOAD R clocks (the array's rows, at least the
+        # held tile's K), S rows streamed, the last crossing W columns and then R rows, out south;
+        # one call, its cf leg holding the compute tile R + max(S, R). Every other rule is shared.
+        stationary = dfs[c] != 1
+        R, Sr = pre[c], strm[c]
         skew = (rows - 1) + (cols - 1)
-        if front - in0 != skew:
+        if stationary:
+            if R != f["pe_rows"] or rows > R or Sr < 1:
+                bad("P2", f"chain {c}: PRELOAD {R} for {rows} stationary rows on a {f['pe_rows']}-row array, {Sr} rows streamed")
+            elif front - in0 != R or in1 - front != Sr:
+                bad("P2", f"chain {c}: front - in0 is {front - in0} (PRELOAD {R}) and in1 - front is {in1 - front} "
+                          f"({Sr} rows streamed)")
+        elif front - in0 != skew:
             bad("P2", f"chain {c}: front - in0 is {front - in0}; the skew is {skew}")
         if in1 < in0:
             bad("P2", f"chain {c}: in1 {in1} is before in0 {in0}")
         over = out1 != NONE64                  # its calls are over: last and out1 are known
         if (last == NONE64) != (out1 == NONE64):
             bad("P2", f"chain {c} records last {last} and out1 {out1}: both are known or neither is")
+        elif over and stationary:
+            if last - in1 != cols - 1 or out1 - last != R or delay != 0:
+                bad("P2", f"chain {c}: last - in1 is {last - in1} (W - 1 = {cols - 1}), out1 - last is {out1 - last} "
+                          f"(R = {R}) and link_delay {delay} (none: out south)")
         elif over:
             if last - in1 != skew:
                 bad("P2", f"chain {c}: last - in1 is {last - in1}; the skew is {skew}")
@@ -990,6 +978,8 @@ def check_fabric(m, T, bad):
         elif drain != NONE64:
             bad("P2", f"chain {c} was drained at action {drain}, yet its calls are not over")
         got = sorted(calls_of.get(c, []))
+        if stationary and ncalls != 1:
+            bad("P3", f"chain {c} is stationary with {ncalls} calls; each call is a chain of one")
         if [p for _, p in got] != list(range(1, len(got) + 1)) or len(got) != ncalls:
             bad("P3", f"chain {c}'s calls are numbered {[p for _, p in got]}; it records {ncalls}")
         elif got:
@@ -1006,7 +996,11 @@ def check_fabric(m, T, bad):
                     bad("P3", f"chain {c} call {p} runs on cf lane {G['lane'][g]}; the chain owns lane {lane}")
                 if p == 1 and G["start"][g] != in0:
                     bad("P3", f"chain {c}: its first call starts at {G['start'][g]}; in0 is {in0}")
-                if p == ncalls and G["finish"][g] != in1:
+                if stationary:
+                    if G["finish"][g] != in0 + R + max(Sr, R):
+                        bad("P3", f"chain {c}: its call runs [{G['start'][g]}, {G['finish'][g]}); PRELOAD and the "
+                                  f"stream give [{in0}, {in0 + R + max(Sr, R)})")
+                elif p == ncalls and G["finish"][g] != in1:
                     bad("P3", f"chain {c}: its last call ends at {G['finish'][g]}; in1 is {in1}")
                 if prev_end is not None and G["start"][g] < prev_end:
                     bad("P3", f"chain {c} call {p} starts at {G['start'][g]}, before call {p - 1} ends at {prev_end}")

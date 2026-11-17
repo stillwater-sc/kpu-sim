@@ -240,6 +240,10 @@ class TflowStationary(unittest.TestCase):
         self.b.set("chain", "dataflow", self.c, 7)
         self.fails("dataflow 7 is not os, ws or is")
 
+    def test_a_stationary_chain_has_one_call(self):
+        self.b.set("chain", "calls", self.c, 2)
+        self.fails("is stationary with 2 calls")
+
     def test_without_the_columns_it_is_os_and_fails(self):
         # An older record had no stationary chains: read as os, these break the OS wavefront.
         drop_columns(self.b, "chain", {"dataflow", "preload", "streamed"})
@@ -276,6 +280,35 @@ class DflowStationary(unittest.TestCase):
     def test_a_wrong_preload_fails(self):
         self.b.set("lt1_chains", "preload", self.c, 3)
         self.fails("P2", "PRELOAD 3")
+
+    # The shared rules hold for a stationary chain too (#466's review).
+    def test_a_drained_chain_is_closed(self):
+        self.b.set("lt1_chains", "out1", self.c, dc.NONE64)
+        self.fails("P2", "both are known or neither is")
+
+    def test_its_call_runs_on_its_lane(self):
+        call = next(self.b.get("lt1_calls", "action", r) for r in range(self.b.rows("lt1_calls"))
+                    if self.b.get("lt1_calls", "chain", r) == self.c)
+        cf = self.b.manifest["processes"].index("cf")
+        g = next(g for g in range(self.b.rows("lt1_legs"))
+                 if self.b.get("lt1_legs", "action", g) == call and self.b.get("lt1_legs", "proc", g) == cf)
+        self.b.set("lt1_legs", "lane", g, self.b.get("lt1_chains", "lane", self.c) + 1)
+        self.fails("P3", "the chain owns lane")
+
+    def test_a_stationary_chain_has_one_call(self):
+        self.b.set("lt1_chains", "calls", self.c, 2)
+        self.fails("P3", "is stationary with 2 calls")
+
+    def test_its_drain_waits_for_its_results(self):
+        drain = self.b.get("lt1_chains", "drain_action", self.c)
+        self.assertNotEqual(drain, dc.NONE64)
+        g = next(g for g in range(self.b.rows("lt1_legs")) if self.b.get("lt1_legs", "action", g) == drain)
+        self.b.set("lt1_chains", "out1", self.c, self.b.get("lt1_legs", "start", g) + 1)
+        self.fails("P4", "starts before its last result is out")
+
+    def test_the_manifest_names_the_dataflow(self):
+        f = self.b.manifest["lt1"]["fabric"]
+        self.assertEqual((f["mapping"], f["drain_edge"]), ("weight-stationary", "south"))
 
 
 if __name__ == "__main__":
