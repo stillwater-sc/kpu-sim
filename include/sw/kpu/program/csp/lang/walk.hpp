@@ -1004,6 +1004,7 @@ private:
         partial_.erase(k);
         acc_.erase(k);
         acc_calls_.erase(k);
+        dataflow_.erase(k);             // its last Drain is out: a later Call on the tile is not its
     }
 
     // `stage T in l2 { ... }`: each tile of T, resident in L3, copied into an L2 slot for the block.
@@ -1219,6 +1220,7 @@ private:
         emit(Action::Kind::Release, y, id, d);
         acc_.erase(k);
         acc_calls_.erase(k);
+        dataflow_.erase(k);
     }
 
     // `retain y`: the residency ends without a Release -- its slot and the tile outlive the
@@ -1254,6 +1256,7 @@ private:
             emit(Action::Kind::Retain, y, id, d);
             acc_.erase(acc);
             acc_calls_.erase(k);
+            dataflow_.erase(k);
             retained_.insert(k);
             return;
         }
