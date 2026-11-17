@@ -252,3 +252,38 @@ TEST_CASE("Timed record: each Release's credit follows its own tile's last move 
         CHECK(credits >= 1);
     }
 }
+
+TEST_CASE("Timed record: a Release uses up its tile's last move out", "[program][record][timed]") {
+    // One tile, two residencies: the first moved out of L3 and released, the second only read in
+    // place (as the Combiner reads an init) and released (#469's review). The second Release has
+    // no transaction to follow, so its credit is left out and counted, not stamped after the first.
+    using K = csp::Action::Kind;
+    DomainFlowRecord lb;
+    lb.tiles.push_back({0, 0, 0});
+    lb.l3 = 4;
+    const K kinds[] = {K::Load, K::Move, K::Release, K::Load, K::Release};
+    std::vector<csp::TransactionalInterpreter::Record> recs;
+    for (std::uint64_t a = 0; a < 5; ++a) {
+        DomainFlowRecord::Step st;
+        st.action = a;
+        st.kind = static_cast<std::uint8_t>(kinds[a]);
+        st.tile = 0;
+        st.flags = DomainFlowRecord::kHasPlace;
+        st.slot = 0;
+        lb.steps.push_back(st);
+        csp::TransactionalInterpreter::Record r;
+        r.action = a;
+        r.kind = kinds[a];
+        r.start = 10 * a;
+        r.finish = 10 * a + (kinds[a] == K::Release ? 0 : 5);
+        recs.push_back(r);
+    }
+    lb.actions = 5;
+    const auto r = record::timed_record(lb, "L-T1", recs, TileProgram{});
+    std::size_t credits = 0;
+    for (const auto& e : r.events) credits += e.kind == ev::Credit;
+    CHECK(credits == 1);                    // the first residency's
+    bool counted = false;
+    for (const auto& n : r.level_notes) counted = counted || n.rfind("1 credits left out", 0) == 0;
+    CHECK(counted);
+}
