@@ -105,10 +105,14 @@ idle (kpu_s1's 64x64 tiles use half its 128 rows). Every other call keeps one le
   of C, which breaks the chain's one-C-per-array rule;
 - a chain opening while every compute tile holds an open accumulator.
 
-**The mapping is output-stationary.** That is what `acc C[i,j] in fabric { for k ... }` already
-means: C stays in the PEs across the chain, and A and B stream through. Other mappings
-(`SpaceTimeMap::b_stationary`, ...) come later and are a schedule choice, never a deployment field
-(memory: schedule vs machine parameters).
+**A fabric accumulator's mapping is output-stationary.** That is what `acc C[i,j] in fabric { for k ... }`
+means: C stays in the PEs across the chain, and A and B stream through. The fill, drain and
+top-link rules below are output-stationary's. Weight- and input-stationary came later (#395):
+the program states them on an L2 accumulator (`acc ... in l2 dataflow ws|is`), with the
+deployment's `fabric.dataflow` as a default for one that states none. Each such call is a chain of
+one, timed PRELOAD R, then the stream, its partial sums leaving south. Their rules are in
+`include/sw/kpu/program/csp/transactional.hpp`'s header and `docs/plans/shared-tile-flow-record.md`'s
+optional chain columns; the north drain below does not apply to them.
 
 **The fabric drains through the network (architect, Q3, 2026-10-16).**
 - PEs have no double-buffered result registers.

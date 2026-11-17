@@ -91,7 +91,8 @@ timed as an output-stationary systolic stream, on r x c PEs with skew = (r-1) + 
                               and a chain's Drain starts no earlier than its out1
     (#395) a weight- or input-stationary chain (the optional columns dataflow, preload,
     streamed): one call, front - in0 == R (PRELOAD, the array's rows), in1 - front == S (rows
-    streamed), last - in1 == W - 1, out1 - last == R, no link delay; its call's cf leg is
+    streamed), last - in1 == W - 1, out1 - last == R, no link delay; every chain's dataflow is
+    its Calls' steps.dataflow, a default (0) resolved by lt1.fabric.default_dataflow; its call's cf leg is
     R + max(S, R); it is outside the top link (P5), its results leave south
     P5 the top link           each chain's out1 is at least the previous chain's on its lane plus
                               r, and link_delay is exactly what that cost; the manifest's chain
@@ -176,6 +177,7 @@ from pathlib import Path
 
 VERSIONS = (1, 2, 3, 4, 5, 6)
 NONE8, NONE32, NONE64 = 0xFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF
+DATAFLOW_NAMES = {1: "os", 2: "ws", 3: "is"}
 DTYPES = {"u8": ("B", 1), "u16": ("H", 2), "u32": ("I", 4), "u64": ("Q", 8), "i64": ("q", 8),
           "f32": ("f", 4), "f64": ("d", 8)}
 OPENS, CLOSES, RETAINS, HAS_PLACE, PINNED, HAS_L2, STAGES = 1, 2, 4, 8, 16, 32, 64
@@ -933,6 +935,10 @@ def check_fabric(m, T, bad):
     dfs = C.get("dataflow") or [1] * C["rows"]
     pre = C.get("preload") or [0] * C["rows"]
     strm = C.get("streamed") or [0] * C["rows"]
+    # A chain's dataflow is its Calls' (#395): a step that states none (0) takes the deployment's
+    # default, lt1.fabric.default_dataflow. Compared only when the record carries both columns.
+    step_df = S.get("dataflow") if C.get("dataflow") else None
+    default_df = {"os": 1, "ws": 2, "is": 3}.get(f.get("default_dataflow", ""), None)
     for c in range(C["rows"]):
         rows, cols, lane = C["used_rows"][c], C["used_cols"][c], C["lane"][c]
         in0, front, in1, last, out1, delay = (C[k][c] for k in ("in0", "front", "in1", "last", "out1", "link_delay"))
@@ -978,6 +984,14 @@ def check_fabric(m, T, bad):
         elif drain != NONE64:
             bad("P2", f"chain {c} was drained at action {drain}, yet its calls are not over")
         got = sorted(calls_of.get(c, []))
+        if step_df is not None:
+            for a, p in got:
+                if a >= n:
+                    continue
+                eff = step_df[a] or default_df
+                if eff is not None and eff != dfs[c]:
+                    bad("P2", f"chain {c} is {DATAFLOW_NAMES[dfs[c]]}, but its call {p} (step {a}) is "
+                              f"{DATAFLOW_NAMES.get(eff, eff)}" + ("" if step_df[a] else " (the deployment's default)"))
         if stationary and ncalls != 1:
             bad("P3", f"chain {c} is stationary with {ncalls} calls; each call is a chain of one")
         if [p for _, p in got] != list(range(1, len(got) + 1)) or len(got) != ncalls:
