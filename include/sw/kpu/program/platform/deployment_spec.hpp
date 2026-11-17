@@ -79,7 +79,12 @@ struct DeviceSpecification {
     // as one leg at macs_per_cycle, as before. Declared, L-T1 times an accumulator's gemm chain
     // as an output-stationary wavefront: operands in, results draining north on their own links.
     // Not `array`, which is the grid of compute tiles.
-    struct Fabric { std::optional<Dim> pe_rows, pe_cols; } fabric;
+    struct Fabric {
+        std::optional<Dim> pe_rows, pe_cols;
+        // The dataflow a reduction uses when its program names none (#395): os, ws or is.
+        // Undeclared: os. Written only when declared, so existing specs keep their digests.
+        std::optional<std::string> dataflow;
+    } fabric;
     Dim element_bytes = 4;
 
     // The RTL systolic tile's own configuration (#396): what the KPU RTL generator builds for
@@ -511,6 +516,8 @@ inline std::string DeploymentSpec::validate() const {
         if (d.dma.window && !d.memory.dram)
             return where + ": dma.window needs memory.dram: a burst is the DRAM's burst, "
                            "placed by its address map";
+        if (d.fabric.dataflow && *d.fabric.dataflow != "os" && *d.fabric.dataflow != "ws" && *d.fabric.dataflow != "is")
+            return where + ": fabric.dataflow '" + *d.fabric.dataflow + "' must be os, ws or is";
         if (d.fabric.pe_rows.has_value() != d.fabric.pe_cols.has_value())
             return where + ": fabric.pe_rows and fabric.pe_cols are declared together or not at all";
         if (d.fabric.pe_rows) {

@@ -62,7 +62,7 @@ const std::set<std::string>& l1_keys() {
     return k;
 }
 const std::set<std::string>& fabric_keys() {
-    static const std::set<std::string> k = {"pe_rows", "pe_cols"};
+    static const std::set<std::string> k = {"pe_rows", "pe_cols", "dataflow"};
     return k;
 }
 const std::set<std::string>& array_keys() {
@@ -315,6 +315,10 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
         reject_unknown(s, fabric_keys(), w);
         d.fabric.pe_rows = read_optional_dim(s, "pe_rows", w);
         d.fabric.pe_cols = read_optional_dim(s, "pe_cols", w);
+        if (s.contains("dataflow")) {
+            if (!s.at("dataflow").is_string()) throw SpecError("deployment: " + w + ".dataflow must be a string");
+            d.fabric.dataflow = s.at("dataflow").get<std::string>();
+        }
     }
     if (obj.contains("array")) {
         const json& s = obj.at("array");
@@ -445,10 +449,11 @@ json write_device(const DeviceSpecification& d) {
     // The physical shape, each object written only when something in it is declared -- so a
     // spec that never mentions one keeps its canonical bytes, and every existing
     // deployment_digest with it.
-    if (d.fabric.pe_rows || d.fabric.pe_cols) {
+    if (d.fabric.pe_rows || d.fabric.pe_cols || d.fabric.dataflow) {
         json f = json::object();
         if (d.fabric.pe_rows) f["pe_rows"] = *d.fabric.pe_rows;
         if (d.fabric.pe_cols) f["pe_cols"] = *d.fabric.pe_cols;
+        if (d.fabric.dataflow) f["dataflow"] = *d.fabric.dataflow;
         o["fabric"] = f;
     }
     if (d.systolic) {

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A reduction's dataflow, stated in the program** (#395, step 1 of 2).
+  - `acc C[:, j] in l2 dataflow ws { ... }` (or `is`, `os`) says which operand the array holds.
+    Unstated, the deployment's new `fabric.dataflow` applies (os when undeclared, and written
+    only when declared, so existing specs keep their digests).
+  - `ws` and `is` need `in l2`, because each call's partial sums leave the array. The walker and
+    the validator both refuse them on an in-fabric accumulator.
+  - The walker stamps the dataflow on the accumulator's Calls and their Drains (`Action::dataflow`).
+  - `kpu-csp-gen --dataflow ws|is` writes it. The `.dflow` record gains the optional step column
+    `dataflow`, checked by `dflow_check` S6. The domain-flow viewer shows each Call's and Drain's
+    dataflow.
+  - L-B's values do not depend on it (the existing per-tile test).
+  - Next, step 2: L-T1 times each dataflow by the RTL's rules, and the `.tflow` record says which
+    it used. L-CA follows the cycle-accurate tile (#401).
+
 - **L-CA takes the deployment's mover and streamer rates, and reports its calibration** (#458,
   partial).
   - `csp_config_from` maps `movers.bm_bytes_per_cycle` and `movers.str_bytes_per_cycle` into the

@@ -135,6 +135,40 @@ class DflowPartials(unittest.TestCase):
         self.fails("S5", "after its Writeback")
 
 
+class DflowDataflow(unittest.TestCase):
+    """#395: the fixture's program states `dataflow ws` on its accumulator; S6 checks the column."""
+
+    def setUp(self):
+        self.b = Bundle(DFLOW)
+        self.steps = self.b.rows("steps")
+
+    def tearDown(self):
+        self.b.close()
+
+    def test_calls_and_drains_carry_ws(self):
+        ws = [i for i in range(self.steps) if self.b.get("steps", "dataflow", i) == 2]
+        self.assertTrue(ws, "no step carries ws")
+        kinds = {self.b.get("steps", "kind", i) for i in ws}
+        self.assertLessEqual(kinds, {dc.CALL_KIND, dc.DRAIN_KIND})
+        self.assertIn(dc.CALL_KIND, kinds)
+
+    def fails(self, needle):
+        code, report = run("dflow_check.py", self.b.dir)
+        self.assertEqual(code, 1, f"expected S6 to fail; the checker exited {code}")
+        hits = [v["message"] for v in report["violations"] if v["invariant"] == "S6"]
+        self.assertTrue(any(needle in h for h in hits), f"S6: {hits[:3]} (all: {ids(report)})")
+
+    def test_only_a_call_or_drain_carries_one(self):
+        load = next(i for i in range(self.steps) if self.b.get("steps", "kind", i) == dc.LOAD_KIND)
+        self.b.set("steps", "dataflow", load, 2)
+        self.fails("carries a dataflow; only a Call and its Drain do")
+
+    def test_a_dataflow_is_in_range(self):
+        call = next(i for i in range(self.steps) if self.b.get("steps", "kind", i) == dc.CALL_KIND)
+        self.b.set("steps", "dataflow", call, 9)
+        self.fails("dataflow 9 is not default, os, ws or is")
+
+
 class TflowPartials(unittest.TestCase):
     def setUp(self):
         self.b = Bundle(TFLOW)

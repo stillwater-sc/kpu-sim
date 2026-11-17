@@ -105,7 +105,7 @@ TEST_CASE("Dataflow: the WS and IS programs are generated, validated and describ
         const std::string src = program(df);
         // The stationary operand staged across the reuse loop; C's partials an L2 accumulator.
         CHECK_THAT(src, ContainsSubstring("machine flat(l3 = 9, l2 = 5)"));
-        CHECK_THAT(src, ContainsSubstring(std::string(df) == "ws" ? "acc C[:, j] in l2 {" : "acc C[i, :] in l2 {"));
+        CHECK_THAT(src, ContainsSubstring(std::string(df) == "ws" ? "acc C[:, j] in l2 dataflow ws {" : "acc C[i, :] in l2 dataflow is {"));
         CHECK_THAT(src, ContainsSubstring(std::string(df) == "ws" ? "stage B[k, j] in l2 {" : "stage A[i, k] in l2 {"));
         CHECK_THAT(src, ContainsSubstring(std::string(df) == "ws" ? "weight-stationary" : "input-stationary"));
         CHECK_THAT(src, ContainsSubstring("(5 used at peak)"));
@@ -779,4 +779,74 @@ TEST_CASE("L-CA: a tile context's add waits for its vector's Load to land", "[pr
     const auto r = sw::kpu::timing::CspDriver(exec, s, inputs, 256).run();
     REQUIRE(r.completed);
     CHECK(same_bits(r.values.operand("C").values, ref.values->operand("C").values));
+}
+
+TEST_CASE("Dataflow: the program states it on the accumulator, and every Call and Drain carries it",
+          "[program][csp][dataflow][decl]") {
+    // #395: `acc C[:, j] in l2 dataflow ws`. The generator writes it; the printer round-trips it;
+    // the walker stamps it on the accumulator's Calls and on their Drains, and on nothing else.
+    for (const char* df : {"ws", "is"}) {
+        CAPTURE(df);
+        const std::string src = program(df);
+        CHECK_THAT(src, ContainsSubstring(std::string(" in l2 dataflow ") + df));
+        const std::string text = lang::format(lang::parse(src));
+        CHECK_THAT(text, ContainsSubstring(std::string("dataflow ") + df));
+        CHECK(lang::format(lang::parse(text)) == text);
+        Dataflow want = Dataflow::Default;
+        REQUIRE(parse_dataflow(df, want));
+        const CspProgram p = lang::compile(src);
+        std::size_t calls = 0, drains = 0;
+        for (const Action& a : p.actions) {
+            if (a.kind == Action::Kind::Call) { ++calls; CHECK(a.dataflow == want); }
+            else if (a.kind == Action::Kind::Drain && a.tile.operand == "C") { ++drains; CHECK(a.dataflow == want); }
+            else CHECK(a.dataflow == Dataflow::Default);
+        }
+        CHECK(calls == 64);
+        CHECK(drains == 64);
+    }
+    // os: the generator's fabric accumulators state none, so the deployment's applies.
+    for (const Action& a : lang::compile(program("os")).actions) CHECK(a.dataflow == Dataflow::Default);
+}
+
+TEST_CASE("Dataflow: ws and is need an L2 accumulator, in the walker and the validator", "[program][csp][dataflow][decl]") {
+    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+                             "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+                             "  tensor C[16,16] tile 16x16 out;\n  resident A[0, 0], B[0, 0];\n";
+    const std::string tail = " {\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
+                             "  release A[0, 0], B[0, 0];\n  store C[0, 0];\n}\n";
+    for (const char* df : {"ws", "is"}) {
+        CAPTURE(df);
+        const std::string src = head + "  acc C[0, 0] in fabric dataflow " + df + tail;
+        for (bool symbolic : {false, true}) {
+            CAPTURE(symbolic);
+            CHECK_THAT(error_of(src, symbolic), ContainsSubstring("partial sums leave the array after every call"));
+        }
+    }
+    // os in the fabric is what an in-fabric accumulator is: accepted, and stamped.
+    const std::string os = head + "  acc C[0, 0] in fabric dataflow os" + tail;
+    CHECK(error_of(os, false) == "accepted");
+    CHECK(error_of(os, true) == "accepted");
+    bool stamped = false;
+    for (const Action& a : lang::compile(os).actions)
+        if (a.kind == Action::Kind::Call) stamped = a.dataflow == Dataflow::OS;
+    CHECK(stamped);
+    // An unknown dataflow is a syntax error.
+    CHECK_THAT(error_of(head + "  acc C[0, 0] in fabric dataflow xs" + tail, false), ContainsSubstring("expected os, ws or is"));
+}
+
+TEST_CASE("Dataflow: the deployment's default, fabric.dataflow", "[program][csp][dataflow][decl]") {
+    // Declared or not at all: undeclared is os, and a spec without it keeps its canonical bytes.
+    const auto plain = platform::read_spec_file("tests/program/deploy/kpu_s1.json");
+    CHECK_FALSE(plain.device(0).fabric.dataflow);
+    const std::string bytes = platform::to_json(plain);
+    CHECK(bytes.find("\"dataflow\"") == std::string::npos);
+    auto ws = plain;
+    ws.devices[0].fabric.dataflow = "ws";
+    CHECK(ws.validate().empty());
+    const auto back = platform::from_json(platform::to_json(ws));
+    REQUIRE(back.device(0).fabric.dataflow);
+    CHECK(*back.device(0).fabric.dataflow == "ws");
+    auto bad = plain;
+    bad.devices[0].fabric.dataflow = "diagonal";
+    CHECK_THAT(bad.validate(), ContainsSubstring("fabric.dataflow 'diagonal' must be os, ws or is"));
 }

@@ -122,6 +122,9 @@ struct Stmt {
     // Acc: `in l2` -- an L2 accumulator (#429, #430): each tile's partial in an L2 slot, every
     // call's result merged into it by the Combiner. Its tile may be a slice. Else `in fabric`.
     bool in_l2 = false;
+    // Acc: `dataflow os|ws|is` (#395) -- the reduction's dataflow on the array; empty: the
+    // deployment's (`fabric.dataflow`, os when undeclared). ws and is need `in l2`.
+    std::string dataflow;
 };
 
 struct Decl {
@@ -567,6 +570,12 @@ private:
                 s.in_l2 = true;
             } else {
                 expect_word("fabric");
+            }
+            if (word("dataflow")) {          // #395
+                take();
+                s.dataflow = ident("a dataflow (os, ws or is)");
+                if (s.dataflow != "os" && s.dataflow != "ws" && s.dataflow != "is")
+                    throw SyntaxError(line(), "dataflow '" + s.dataflow + "': expected os, ws or is");
             }
             if (word("init")) {              // in l2: the Combiner adds it on the first merge (#427)
                 take();

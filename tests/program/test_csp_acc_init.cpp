@@ -454,8 +454,8 @@ TEST_CASE("acc init: an L2 accumulator's init, added by the Combiner on the firs
           "[program][csp][init][l2acc]") {
     using driver::ExecutionLevel;
     const auto d = s1_combiner();
-    CHECK_THAT(stationary("ws", "bias", "fp32"), ContainsSubstring("acc C[:, j] in l2 init D[:, j] {"));
-    CHECK_THAT(stationary("is", "bias-row", "fp32"), ContainsSubstring("acc C[i, :] in l2 init b[:] {"));
+    CHECK_THAT(stationary("ws", "bias", "fp32"), ContainsSubstring("acc C[:, j] in l2 dataflow ws init D[:, j] {"));
+    CHECK_THAT(stationary("is", "bias-row", "fp32"), ContainsSubstring("acc C[i, :] in l2 dataflow is init b[:] {"));
     for (const char* df : {"ws", "is"})
         for (const char* init : {"bias", "bias-row"})
             for (const char* dtype : {"fp32", "int8"}) {

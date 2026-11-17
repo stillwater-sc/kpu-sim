@@ -703,6 +703,11 @@ private:
                     acc_l2(s, depth, definite);
                     break;
                 }
+                if (s.dataflow == "ws" || s.dataflow == "is")       // #395, as the walker refuses it
+                    throw CompileError(s.line, "acc ... in fabric dataflow " + s.dataflow + ": a " +
+                                               (s.dataflow == "ws" ? "weight" : "input") + "-stationary reduction's "
+                                               "partial sums leave the array after every call; merge them in L2 "
+                                               "(`acc ... in l2 dataflow " + s.dataflow + "`)");
                 const Family y = single(s.out);
                 if (s.init) init(s, y);
                 for (const Entry& e : state_)

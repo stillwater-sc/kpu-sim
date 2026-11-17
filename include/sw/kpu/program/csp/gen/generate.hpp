@@ -387,7 +387,8 @@ inline std::string stationary_nest(const Options& o, bool linear_fused) {
     s += "  for " + outer + " in 0.." + nt + " {\n";
     if (at_egress) s += "    resident b[j];\n";
     if (!init.empty()) s += "    resident " + init + ";\n";
-    s += "    acc " + panel + " in l2" + (init.empty() ? std::string() : " init " + init) + " {\n";
+    // The dataflow is the program's to state (#395): the array holds the stationary tile.
+    s += "    acc " + panel + " in l2 dataflow " + o.dataflow + (init.empty() ? std::string() : " init " + init) + " {\n";
     s += "      for k in 0.." + std::to_string(at_combiner ? n - 1 : n) + " {\n";
     s += block("k", false);
     s += "      }\n";
