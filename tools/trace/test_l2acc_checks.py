@@ -101,6 +101,27 @@ class DflowPartials(unittest.TestCase):
         drop_columns(self.b, "steps", {"merge"})
         self.fails("S2", "a DRAIN carries an L2 address")
 
+    def test_its_open_step_is_checked_from_the_partial(self):
+        # #459's review: the opening Drain loses its staging reference, its L2 flags and its merge,
+        # so no step-side rule sees it; the partial's own open must still find an overwrite there.
+        o = self.b.get("l2_staging", "open", self.p)
+        self.b.set("steps", "staging", o, dc.NONE64)
+        self.b.set("steps", "flags", o, self.b.get("steps", "flags", o) & ~(dc.HAS_L2 | dc.STAGES))
+        self.b.set("steps", "merge", o, 0)
+        self.fails("S5", f"partial {self.p} opens at step {o}, which is not an overwrite Drain")
+
+    def test_the_writeback_follows_the_last_drain(self):
+        # #459's review: a merge after the Writeback is not in what was written back. Swap the last
+        # accumulate Drain with the Writeback: the counts stay, the order is wrong.
+        d = max(i for i in self.on_p if self.b.get("steps", "kind", i) == dc.DRAIN_KIND)
+        w = self.step(dc.WRITEBACK_KIND)
+        self.assertLess(d, w)
+        self.b.set("steps", "kind", d, dc.WRITEBACK_KIND)
+        self.b.set("steps", "merge", d, 0)
+        self.b.set("steps", "kind", w, dc.DRAIN_KIND)
+        self.b.set("steps", "merge", w, 2)
+        self.fails("S5", "after its Writeback")
+
 
 class TflowPartials(unittest.TestCase):
     def setUp(self):
