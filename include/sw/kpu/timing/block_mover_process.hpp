@@ -460,6 +460,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
+                    events.back().detail = "l3";   // the pool it frees (#402)
                     events.back().set_slot(in_flight_->slot_id);
                 }
                 in_flight_target_ = nullptr;
@@ -516,6 +517,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
+                    events.back().detail = "l3";   // the pool it frees (#402)
                     if (l3_source) events.back().set_slot(l3_source->slot_id);   // L3, not the L2 it landed in
                 }
             } else {
@@ -562,6 +564,7 @@ private:
                         in_flight_->tile.tile_id,
                         name()
                     ));
+                    events.back().detail = "l2";   // the pool it frees (#402)
                     if (l2_source) events.back().set_slot(l2_source->slot_id);   // L2, not the L3 it landed in
                 }
             }
@@ -613,6 +616,7 @@ private:
             if (credit_released) {
                 events.push_back(TimingEvent(EventType::CREDIT_RELEASED, current_cycle,
                                              config_.mover_id, id, name()));
+                events.back().detail = "l3";   // the pool it frees (#402)
                 events.back().set_slot(entry->slot_id);
             }
             it = release_queue_.erase(it);
@@ -691,6 +695,7 @@ private:
                     dedup_tile.tile_id,
                     name()
                 ));
+                events.back().detail = "l3";   // the pool it frees (#402)
                 events.back().set_slot(l3_entry->slot_id);   // the L3 reference it consumed
             }
             // Do not advance i - remove_at shifted the next element into i

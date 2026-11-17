@@ -24,6 +24,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Makespans move by the read latency. The window rule of `test_csp_driver` is pinned to the
     pooled L2 for #462 to restate.
 
+- **The timed levels write their own domain-flow records** (#402, part 1 of 2). `kpu-run
+  --dflow-lt1 <dir>` and `--dflow-lca <dir>` write L-T1's and L-CA's runs as `.dflow` 6.2 records.
+  - **Contents:** L-B's steps, the level's events with their cycles, and the level's own final
+    values. Each DMA, block move, stream, compute and drain is one transaction, joined to its action,
+    with tokens and credits as the RTL sample writes them.
+  - **Format 6.2:** L2, the accumulator and the array's edge may be addressed by slot
+    (`{"modelled": true, "slots": N}`). The checker accepts that form from minor 2, and refuses a
+    layer declared both ways. The domain-flow viewer reads 6.2.
+  - **The identity key** now includes the position's program line. Two statements in loops of one
+    variable name moved one tile at the same indices (LU's `laswp` and `trsm_ll` both move
+    `A[k, k]`). The finer key still accepts every record the old one did.
+  - **Not modelled, by name:** row events (no level models rows yet; #388, #401); a store's slot
+    freed at its ejection, before the DRAM write ends (its credit is stamped at the store's end);
+    the Combiner's in-place reads of an init, a bias or a scale's vectors (their credits are left
+    out). The record counts each.
+  - Next: `dflow_diff.py`, which joins two records event by event.
+
 - **The full int8 epilogue, generated** (#395). `kpu-csp-gen --dtype int8 --requant m,shift
   --init bias|bias-row` (with or without `--requant-channels`) now writes C = scale(A . B + D)
   or scale(A . B + b), for os, ws and is, with the init in int32 added before the scale. Under os
@@ -147,6 +164,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   v1, natively (`floorplan_to_structure`). CTest `structure_native_t4` holds it to the converted
   record, block for block. **`tools/trace/structure_diff.py`** compares two records by id,
   provenance aside, within a relative tolerance; exit 0, 1 or 2.
+
+### Fixed
+
+- **L-CA's Releases are timed at their credit return** (#402). `timing/csp_records.hpp` stamped a
+  Release at the driver's handover, often before the BlockMover had retired the entry: a credit
+  ahead of its tile's Move out of L3, seen in the bubble report's Release waits too. The executor
+  and the BlockMover now mark each `CREDIT_RELEASED` with its pool (`l3`, `l2`). A Release takes its
+  tile's next L3 credit return, and an L2Release its next `L2:release`.
 
 ## [0.9.0] - 2026-11-16
 

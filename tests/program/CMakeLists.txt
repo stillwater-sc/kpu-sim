@@ -73,6 +73,16 @@ set_tests_properties(test_domain_flow_record PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# A timed level's own domain-flow record (#402): L-T1's and L-CA's events with their cycles
+kpu_add_component_test(test_timed_record "program"
+    test_timed_record.cpp
+)
+
+set_tests_properties(test_timed_record PROPERTIES
+    LABELS "program;csp;domainflow;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # One program on both sides: a CSP program as the KPU RTL's tile command stream (#397)
 kpu_add_component_test(test_tile_commands "program"
     test_tile_commands.cpp

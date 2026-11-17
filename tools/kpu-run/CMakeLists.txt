@@ -651,6 +651,41 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_l2acc_checks.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.dflow ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.tflow)
         set_tests_properties(csp_gen_dflow_l2acc PROPERTIES FIXTURES_SETUP dflow_l2acc_csp)
+        # The timed levels' own records (#402, version 6.2): L-T1's and L-CA's events with their
+        # cycles, L2 and the accumulator by slot. The L2 accumulator's program at both levels, the
+        # fused linear at both, and LU at L-T1 (L-CA does not run getrf), each checked.
+        add_test(NAME kpu_run_csp_dflow_timed_l2acc
+            COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/dflow_l2acc.csp
+                    --deploy ${_deploy}/kpu_s1_combiner.json --level all
+                    --dflow-lt1 ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lt1.dflow
+                    --dflow-lca ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lca.dflow)
+        set_tests_properties(kpu_run_csp_dflow_timed_l2acc PROPERTIES
+            FIXTURES_REQUIRED dflow_l2acc_csp FIXTURES_SETUP dflow_timed_l2acc)
+        add_test(NAME kpu_run_csp_dflow_timed_linear
+            COMMAND run --program ${_corpus}/linear_64_t16_relu.csp --deploy ${_deploy}/kpu_s1.json --level all
+                    --dflow-lt1 ${CMAKE_CURRENT_BINARY_DIR}/timed_linear_lt1.dflow
+                    --dflow-lca ${CMAKE_CURRENT_BINARY_DIR}/timed_linear_lca.dflow)
+        set_tests_properties(kpu_run_csp_dflow_timed_linear PROPERTIES FIXTURES_SETUP dflow_timed_linear)
+        add_test(NAME kpu_run_csp_dflow_timed_lu
+            COMMAND run --program ${_corpus}/lu_64_t16.csp --deploy ${_deploy}/kpu_s1.json --level block-sequential
+                    --dflow-lt1 ${CMAKE_CURRENT_BINARY_DIR}/timed_lu_lt1.dflow)
+        set_tests_properties(kpu_run_csp_dflow_timed_lu PROPERTIES FIXTURES_SETUP dflow_timed_lu)
+        foreach(_t l2acc_lt1 l2acc_lca linear_lt1 linear_lca lu_lt1)
+            add_test(NAME dflow_check_timed_${_t}
+                COMMAND ${KPU_PYTHON3} ${_dflow_check} ${CMAKE_CURRENT_BINARY_DIR}/timed_${_t}.dflow)
+        endforeach()
+        set_tests_properties(dflow_check_timed_l2acc_lt1 dflow_check_timed_l2acc_lca PROPERTIES
+            FIXTURES_REQUIRED dflow_timed_l2acc)
+        set_tests_properties(dflow_check_timed_linear_lt1 dflow_check_timed_linear_lca PROPERTIES
+            FIXTURES_REQUIRED dflow_timed_linear)
+        set_tests_properties(dflow_check_timed_lu_lt1 PROPERTIES FIXTURES_REQUIRED dflow_timed_lu)
+        # A timed record needs its level: --dflow-lca without L-CA is refused by name.
+        add_test(NAME kpu_run_csp_dflow_timed_needs_its_level
+            COMMAND ${CMAKE_COMMAND} -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${_corpus}/linear_64_t16_relu.csp$<SEMICOLON>--deploy$<SEMICOLON>${_deploy}/kpu_s1.json$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--dflow-lca$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/timed_refused.dflow
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--dflow-lca:.L-CA.did.not.run
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
         set_tests_properties(kpu_run_csp_dflow_l2acc PROPERTIES
             FIXTURES_REQUIRED dflow_l2acc_csp FIXTURES_SETUP dflow_l2acc)
         # The viewers on it (#456): the domain-flow and tile-flow pages in a headless browser (skipped
@@ -714,10 +749,11 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_check_v6.py
                     ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_48x48x48_t16.dflow
-                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow)
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lca.dflow)
         set_tests_properties(dflow_check_rtl_sample dflow_result_rtl_sample PROPERTIES FIXTURES_REQUIRED dflow_rtl_sample)
         set_tests_properties(dflow_check_v6_selftest PROPERTIES FIXTURES_REQUIRED
-            "dflow_rtl_sample;dflow_matmul_48x48x48_t16;dflow_rtl_sample_addressed")
+            "dflow_rtl_sample;dflow_matmul_48x48x48_t16;dflow_rtl_sample_addressed;dflow_timed_l2acc")
         # The viewer (step 3): pack each bundle, refuse a non-bundle, and run the page's data layer
         # in Node on the reference run, a retain chain, LU, a cut bundle and the RTL sample.
         # The playback speeds, slowest one step per second, in a headless browser (skipped without
@@ -737,9 +773,11 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_streamed.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow
-                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow)
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_l2acc.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lca.dflow)
         set_tests_properties(domainflow_viewer PROPERTIES FIXTURES_REQUIRED
-            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged;dflow_rtl_sample;dflow_rtl_sample_addressed")
+            "dflow_reference;dflow_matmul_relu_retain_32_t16;dflow_lu_64_t16;dflow_cut;dflow_linear_64_t16_relu;dflow_streamed;dflow_staged;dflow_rtl_sample;dflow_rtl_sample_addressed;dflow_l2acc;dflow_timed_l2acc")
         set_tests_properties(${_dflow_tests} kpu_run_csp_dflow_cut dflow_check_cut csp_gen_dflow_reference
             csp_gen_requant_channels kpu_run_requant_channels_synthesized
             csp_gen_dflow_l2acc kpu_run_csp_dflow_l2acc dflow_check_l2acc tflow_check_l2acc l2acc_checks_selftest l2acc_views
