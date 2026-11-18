@@ -697,6 +697,7 @@ public:
     [[nodiscard]] const L2Banks* l2_banks() const { return l2_banks_.get(); }
     /// Keep each L2 transfer's booking (its rows' clocks; L2Banks::log) for the run's record.
     void keep_l2_log(bool keep) { if (l2_banks_) l2_banks_->keep_log(keep); }
+    [[nodiscard]] bool keeps_l2_log() const { return l2_banks_ && l2_banks_->keeps_log(); }
     [[nodiscard]] TagCAM& l3_tag_cam() { return l3_tile_tag_cam(single_l3_tile("l3_tag_cam")); }
     [[nodiscard]] size_t l3_tiles() const { return l3_tile_credits_.size(); }
     /// The compute fabric: its tiles (0 = the legacy unbounded model) and each one's busy cycles.

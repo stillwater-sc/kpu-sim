@@ -4,13 +4,17 @@ Self-test for dflow_diff.py (#402): two records of one program joined on the ide
 
 Usage: python3 test_dflow_diff.py <lt1.dflow> <lca.dflow> <rtl-sample-abc.dflow> <lca-of-the-sample.dflow> <lb.dflow>
 
-- the first two are kpu-sim's L-T1 and L-CA records of one program (kpu-run --dflow-lt1, --dflow-lca);
+- the first two are kpu-sim's L-T1 and L-CA records of one program (kpu-run --dflow-lt1, --dflow-lca),
+  on a deployment with a banked L2 (l2.banks_per_tile or sp_banks, e.g. kpu_s1.json), so that the
+  L-CA record has L2 by rows, with at least two rows, row events and a Block Move into an L2 row;
 - the third is the RTL sample under the names A, B, C (dflow_rtl_sample.py --names A,B,C), and the
   fourth L-CA's record of its own program (--program-out), which L-CA runs under those names;
 - the fifth an L-B record, which has no events.
 
 A record joins itself with nothing one-sided and no divergence; a shifted event is named as the
-first divergence; a dropped event is one-sided; L-T1 and L-CA join every event and diverge; the RTL
+first divergence; a dropped event is one-sided; a transfer placed elsewhere is placed differently;
+L-T1 and L-CA join every transaction, token and credit and diverge, L-CA's banked row events being
+one-sided under matched transactions; the RTL
 sample and L-CA join every transaction across L2's two address forms, and the sample's row events
 are one-sided under matched transactions (the done-when of #402).
 
@@ -54,6 +58,7 @@ class Diff(unittest.TestCase):
         b = Bundle(LCA)
         try:
             rows = b.manifest["geometry"]["l2"]["rows"]
+            self.assertGreaterEqual(rows, 2, "the fixture's L2 has another row to move the transfer to")
             e = next(i for i in range(b.rows("events"))
                      if dc.EVENT_KINDS[b.get("events", "kind", i)] == "BLOCK_MOVE"
                      and b.get("events", "dst", i) == dc.LAYERS.index("l2")

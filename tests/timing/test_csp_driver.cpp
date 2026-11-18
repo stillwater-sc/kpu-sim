@@ -379,3 +379,21 @@ TEST_CASE("CSP driver: a Release retires its entry after the moves before it, an
     CHECK(in_l2[2] >= in_l3[1]);       // the later move takes the second load's copy
     CHECK(released[1] >= in_l2[2]);
 }
+
+TEST_CASE("CSP driver: a run leaves the executor's L2 log mode as it found it", "[timing][csp][driver][banks]") {
+    // The executor is the caller's: keeping events turns the banks' booking log on for the run
+    // (#401), and the run gives it back as it was.
+    const csp::CspProgram p = trace_fixtures::compiled(matmul(64, 32));
+    ConcurrentTimingExecutor exec(machine("kpu_s1.json"));
+    REQUIRE(exec.l2_banks());
+    CHECK_FALSE(exec.keeps_l2_log());
+    {
+        CspDriver d(exec, p);
+        d.keep_events(true);
+        REQUIRE(d.run().completed);
+    }
+    CHECK_FALSE(exec.keeps_l2_log());
+    exec.keep_l2_log(true);                 // the caller's own choice survives a run without events
+    REQUIRE(CspDriver(exec, p).run().completed);
+    CHECK(exec.keeps_l2_log());
+}

@@ -210,6 +210,12 @@ public:
 
     Result run() {
         exec_.reset();
+        // The executor is the caller's: its L2 log mode is restored however the run ends.
+        struct LogMode {
+            ConcurrentTimingExecutor& e;
+            bool was;
+            ~LogMode() { e.keep_l2_log(was); }
+        } log_mode{exec_, exec_.keeps_l2_log()};
         exec_.keep_l2_log(keep_events_);
         exec_.l2_tag_cam().set_placed_slots(static_cast<std::uint32_t>(l2_));   // the program's L2 slots
         // DRAM holds every input tile; the program's loads read them.

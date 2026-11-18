@@ -272,9 +272,10 @@ through a layer the record declares not modelled.
 
 Not modelled is `{"modelled": false, "why": "<reason>"}`.
 
-**A layer addressed by slot (6.2, #402).** kpu-sim's timed levels place tiles in L2 slots, a
+**A layer addressed by slot (6.2, #402).** L-T1 and an unbanked L-CA place tiles in L2 slots, a
 staged copy or an L2 accumulator's partial, and have no rows. They declare L2, the accumulator
-and L1 as `{"modelled": true, "slots": N}`, N ≥ 0:
+and L1 as `{"modelled": true, "slots": N}`, N ≥ 0. (A banked L-CA declares L2 by rows instead,
+and its L2 addresses are booked rows, not slots; its accumulator and L1 stay slotted.)
 
 - an event's address in such a layer is a slot, `< N`, or none. An unstaged tile's L2 address is
   none. A layer of 0 slots has no addresses: kpu-sim's accumulator (the PEs, or an L2 partial at
@@ -467,9 +468,11 @@ included), and 2 when either cannot be read, fails the checker, or has no events
 
 The RTL sample's matrix is named L. L-CA maps a program's matrices onto A, B and C, so
 `dflow_rtl_sample.py --names A,B,C --program-out p.csp` writes the same sample under those names,
-with its program. L-CA's record of that program joins every one of the sample's transactions. The
-sample's row events are one-sided, under joined transactions. The first divergence is the first
-load.
+with its program. L-CA's record of that program joins every one of the sample's transactions. A
+row event joins one with the same key under its joined transaction: L2's addresses are not in the
+key, so the sample's BM_ROW row 0, beat 0 can match a banked L-CA's. The sample's other row events,
+whose row or beat L-CA has no counterpart for, are one-sided, under joined transactions. The first
+divergence is the first load.
 
 ## 9. Producers
 

@@ -107,6 +107,7 @@ public:
     // A fresh run (the executor's reset): no bookings, no counts. The calendar is keyed by absolute
     // clock, and a reset restarts the clock at 0.
     void keep_log(bool keep) { keep_log_ = keep; }
+    [[nodiscard]] bool keeps_log() const { return keep_log_; }
     // The last booking's leg completes at max(move, other), the transfer's `move` cycles running
     // alongside `other` cycles of other work (a drain's Combiner): its stalls delayed the leg only
     // by what they added past `other`.

@@ -314,6 +314,16 @@ TEST_CASE("Bank rows: a record whose L2 is declared both ways is refused", "[pro
         out << m.dump();
     }
     CHECK_THROWS_WITH(record::read_dflow(dir), Catch::Matchers::ContainsSubstring("must be positive"));
+    // Out of 32 bits either way: refused, not narrowed.
+    for (const std::int64_t bad : {std::int64_t(-1), std::int64_t(4294967297)}) {
+        m["geometry"]["l2"]["banks"] = 4;
+        m["geometry"]["l2"]["rows"] = bad;
+        {
+            std::ofstream out(dir + "/manifest.json");
+            out << m.dump();
+        }
+        CHECK_THROWS_WITH(record::read_dflow(dir), Catch::Matchers::ContainsSubstring("fit 32 bits"));
+    }
 }
 
 TEST_CASE("Bank rows: a result ahead that finished before the operand was ready is not its bank cause", "[program][csp][bubbles][banks]") {
@@ -347,7 +357,9 @@ TEST_CASE("Bank rows: a result ahead that finished before the operand was ready 
         return Cause::Unknown;
     };
     CHECK(cause_of(rs) == Cause::Result);
-    rs[1].finish = 30;                      // still writing back when the Move was ready: it held it
+    rs[1].finish = 30;                      // still writing back when the Move was ready, but the Move
+    CHECK(cause_of(rs) == Cause::Result);   // started at 35, on another lane: something else held it
+    rs[1].finish = 35;                      // the Move took the lane the Writeback freed: it held it
     CHECK(cause_of(rs) == Cause::L2Bank);
 }
 
@@ -370,4 +382,36 @@ TEST_CASE("Bank rows: an egress unit's time hides a writeback's bank stalls", "[
     REQUIRE(b.log().back().delay > 0);       // both read ports taken at clock 0: its first row waits
     b.overlap_last(move, move + 5);
     CHECK(b.log().back().delay == 0);
+}
+
+TEST_CASE("Bank rows: a move whose writeback ran long at the banks names them", "[program][csp][bubbles][banks]") {
+    // A Move of a tile a Writeback just put back in L3: the Move's data waited for the Writeback,
+    // whose rows waited for their banks.
+    using P = csp::TransactionalInterpreter::Proc;
+    auto rec = [](std::size_t action, K kind, P proc, const char* op, std::uint64_t ready, std::uint64_t start,
+                  std::uint64_t finish) {
+        Rec r;
+        r.action = action;
+        r.kind = kind;
+        r.tile = TileCoord{op, 0, 0};
+        r.proc = proc;
+        r.ready = ready;
+        r.start = start;
+        r.finish = finish;
+        return r;
+    };
+    std::vector<Rec> rs = {rec(0, K::Call, P::Cf, "E", 0, 0, 10),       rec(1, K::Writeback, P::Bm, "C", 0, 0, 30),
+                           rec(2, K::Move, P::Bm, "C", 30, 30, 34),     rec(3, K::Feed, P::Str, "C", 34, 34, 38),
+                           rec(4, K::Call, P::Cf, "D", 38, 38, 48)};
+    std::map<std::string, std::uint64_t> busy{{"bm", 34}, {"str", 4}, {"cf", 20}};
+    std::map<std::string, std::size_t> lanes{{"dma", 1}, {"bm", 1}, {"str", 1}, {"cf", 1}};
+    using Cause = csp::BubbleReport::Cause;
+    auto cause_of = [&](const std::vector<Rec>& v) {
+        for (const auto& b : csp::bubble_report(v, 48, busy, lanes).bubbles)
+            if (b.call == 4) return b.cause;
+        return Cause::Unknown;
+    };
+    CHECK(cause_of(rs) == Cause::Result);
+    rs[1].bank_wait = rs[1].bank_delay = 8;
+    CHECK(cause_of(rs) == Cause::L2Bank);
 }

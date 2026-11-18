@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **L-CA's banked L2 in its records** (#401, slice 1's second part; closes #402's last item).
   - **Timed record:** an L-CA record of a banked L2 declares it in the rows form (banks, rows, row
-    width, row-mod-banks), like the RTL's. An event's L2 address is its transfer's first row. Each
+    width, row-mod-banks), like the RTL's. A transaction's L2 address is its transfer's first row,
+    and a row event's the row it accessed (an event with no L2 address, such as a Load's token, has
+    none). Each
     transfer's rows are row events (BM_ROW, STR_ROW, DRAIN_ROW), at the clocks the banks served
     them. A transfer with more L2 rows than its tile has rows keeps its transaction but gets no row
     events (E3 places a row inside its tile), and the record's notes count those.

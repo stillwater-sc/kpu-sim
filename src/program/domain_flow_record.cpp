@@ -424,10 +424,14 @@ DFR read_dflow(const std::string& dir) {
                     throw RecordError("read_dflow: geometry.l2 declares both slots and rows");
                 if (l2.contains("rows") && l2.value("interleave", std::string()) != "row-mod-banks")
                     throw RecordError("read_dflow: geometry.l2 is by rows, but its interleave is not row-mod-banks");
-                if (l2.contains("rows") &&
-                    (l2.at("banks").get<std::uint32_t>() == 0 || l2.at("rows").get<std::uint32_t>() == 0 ||
-                     l2.at("row_bytes").get<std::uint32_t>() == 0))
-                    throw RecordError("read_dflow: geometry.l2's banks, rows and row_bytes must be positive");
+                if (l2.contains("rows"))
+                    for (const char* k : {"banks", "rows", "row_bytes"}) {
+                        const json& v = l2.at(k);
+                        if (!v.is_number_integer() || v.get<std::int64_t>() <= 0 ||
+                            v.get<std::int64_t>() > std::int64_t(std::numeric_limits<std::uint32_t>::max()))
+                            throw RecordError(std::string("read_dflow: geometry.l2.") + k +
+                                              " must be positive and fit 32 bits");
+                    }
                 if (l2.contains("rows"))
                     rec.l2_rows = DFR::L2Rows{l2.at("banks").get<std::uint32_t>(), l2.at("rows").get<std::uint32_t>(),
                                               l2.at("row_bytes").get<std::uint32_t>()};
