@@ -418,12 +418,13 @@ TEST_CASE("Bank rows: a move whose writeback ran long at the banks names them", 
     CHECK(cause_of(rs) == Cause::Result);
     rs[1].bank_wait = rs[1].bank_delay = 8;
     CHECK(cause_of(rs) == Cause::L2Bank);
-    // A later L2 credit set the Move's ready, not the Writeback: the stalls did not delay it.
-    rs[2].ready = rs[2].start = 32;         // ready, and started, at the credit's clock
+    // Something later than the Writeback set the Move's ready (no credit stall, so its handover):
+    // the stalls did not delay it, and the walk names the issue order.
+    rs[2].ready = rs[2].start = 32;         // ready, and started, at its handover
     rs[2].finish = 36;
     rs[3].ready = rs[3].start = 36;
     rs[3].finish = 40;
     rs[4].ready = rs[4].start = 40;
     rs[4].finish = 50;
-    CHECK(cause_of(rs) != Cause::L2Bank);
+    CHECK(cause_of(rs) == Cause::Issue);
 }

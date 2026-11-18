@@ -59,7 +59,8 @@ struct BubbleReport {
 
     // Why a compute lane sat idle before a call.
     enum class Cause : std::uint8_t {
-        Issue,          // the call was ready; the fabric's in-order issue held it
+        Issue,          // in-order issue held it: the fabric's for a call; for a move whose source was
+                        // there before it, its handover in program order (L-CA's driver window)
         Accumulator,    // it waited for the previous call on its accumulator
         StreamerBusy,   // its operand's Feed waited for a streamer lane
         L2Slot,         // the Feed's Move (a staging) waited for its L2 slot's credit
@@ -375,11 +376,12 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
                 if (!src) return Cause::Unknown;
                 if (src->kind != Action::Kind::Load) {
                     into->chain.push_back(src->action);
-                    // A Writeback it waits for ran long at the L2 banks, and its finish set the Move's
-                    // ready (no later credit did): its stalls delayed the data.
-                    const bool sets = src->finish >= r->ready;
-                    return src->kind == Action::Kind::Writeback && src->bank_delay > 0 && sets ? Cause::L2Bank
-                                                                                             : Cause::Result;
+                    // A source that finished after the Move was ready did not set its ready. A credit
+                    // stall would have set l2_wait (L2Slot, above), so what did is the Move's
+                    // handover: the program's issue order (at L-CA, the driver's window).
+                    if (src->finish < r->ready) return Cause::Issue;
+                    // A Writeback it waits for ran long at the L2 banks: its stalls delayed the data.
+                    return src->kind == Action::Kind::Writeback && src->bank_delay > 0 ? Cause::L2Bank : Cause::Result;
                 }
                 return explain(src, depth + 1);
             }
