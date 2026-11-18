@@ -1159,7 +1159,7 @@ private:
             live_ -= 1;
             if (acc->reserved) {
                 l2_results_ -= count(acc->tile);                       // its results' L2 slots: freed now,
-                if (s.late) late_l2_ = std::max(late_l2_, count(acc->tile));   // or, late, held as l2_held() says
+                if (s.late) late_l2_ = std::max<std::size_t>(late_l2_, count(acc->tile));   // or, late, held as l2_held() says
             }
             accs_.erase(acc);
             stores_ += multiplier_;
