@@ -702,6 +702,20 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(dflow_diff_selftest PROPERTIES FIXTURES_REQUIRED
             "dflow_timed_linear;dflow_rtl_sample_abc;dflow_timed_sample;dflow_matmul_48x48x48_t16"
             LABELS "program;csp;domainflow")
+        # The resource-occupancy viewer (#390): L-CA's and L-T1's records of the L2 accumulator's
+        # program, overlaid, and the RTL sample; an L-B record (no time) is refused.
+        add_test(NAME occupancy_viewer
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/occupancy/test_viewer.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lca.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lt1.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow
+                    --lb ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_48x48x48_t16.dflow
+                    --ambiguous ${CMAKE_CURRENT_BINARY_DIR}/timed_sample_lca.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_abc.dflow)
+        set_tests_properties(occupancy_viewer PROPERTIES FIXTURES_REQUIRED
+            "dflow_timed_l2acc;dflow_rtl_sample;dflow_rtl_sample_addressed;dflow_matmul_48x48x48_t16;dflow_timed_sample;dflow_rtl_sample_abc"
+            LABELS "program;csp;domainflow;viewer")
         # A timed record needs its level: --dflow-lca without L-CA is refused by name.
         add_test(NAME kpu_run_csp_dflow_timed_needs_its_level
             COMMAND ${CMAKE_COMMAND} -DCMD=$<TARGET_FILE:run>
