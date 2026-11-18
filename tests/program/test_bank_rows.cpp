@@ -321,8 +321,10 @@ TEST_CASE("Bank rows: a record whose L2 is declared both ways is refused", "[pro
         {
             std::ofstream out(dir + "/manifest.json");
             out << m.dump();
+            out.close();
+            REQUIRE(out);                   // the bad row count reached the file
         }
-        CHECK_THROWS_WITH(record::read_dflow(dir), Catch::Matchers::ContainsSubstring("fit 32 bits"));
+        CHECK_THROWS_WITH(record::read_dflow(dir), Catch::Matchers::ContainsSubstring("geometry.l2.rows"));
     }
 }
 
@@ -359,7 +361,9 @@ TEST_CASE("Bank rows: a result ahead that finished before the operand was ready 
     CHECK(cause_of(rs) == Cause::Result);
     rs[1].finish = 30;                      // still writing back when the Move was ready, but the Move
     CHECK(cause_of(rs) == Cause::Result);   // started at 35, on another lane: something else held it
-    rs[1].finish = 35;                      // the Move took the lane the Writeback freed: it held it
+    rs[1].finish = 35;                      // finished as the Move started, but on the other lane:
+    CHECK(cause_of(rs) == Cause::Result);   // the Move did not take its lane
+    rs[1].lane = 0;                         // the same lane: the Move took the lane it freed
     CHECK(cause_of(rs) == Cause::L2Bank);
 }
 
@@ -414,4 +418,12 @@ TEST_CASE("Bank rows: a move whose writeback ran long at the banks names them", 
     CHECK(cause_of(rs) == Cause::Result);
     rs[1].bank_wait = rs[1].bank_delay = 8;
     CHECK(cause_of(rs) == Cause::L2Bank);
+    // A later L2 credit set the Move's ready, not the Writeback: the stalls did not delay it.
+    rs[2].ready = rs[2].start = 32;         // ready, and started, at the credit's clock
+    rs[2].finish = 36;
+    rs[3].ready = rs[3].start = 36;
+    rs[3].finish = 40;
+    rs[4].ready = rs[4].start = 40;
+    rs[4].finish = 50;
+    CHECK(cause_of(rs) != Cause::L2Bank);
 }

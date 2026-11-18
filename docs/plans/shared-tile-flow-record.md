@@ -222,7 +222,12 @@ statements in loops of one variable name have the same indices: LU's `laswp A[k,
 `trsm_ll(A[k, k], A[k, j])` both move `A[k, k]` at the same `(k, j)` (#402). Both producers run
 the same program text, so the line is the same in both records.
 No two events in a record share a key. Among the events that name an action, no two share
-`(kind, action, row, beat)` either.
+`(kind, action, row, beat)` either. This is a requirement on the producer, checked by E2, not a
+property the key guarantees: a program that moved the same tile twice from one statement in one
+iteration, by the same process between the same layers, would give two events one key, now that
+L2's address is not in it. Such a record fails E2, and `dflow_diff.py` refuses a key it cannot
+join uniquely, so a collision is reported, never joined wrongly. No program the generator or the
+corpus writes has one.
 
 - **L2's and the accumulator's addresses are not part of the key** (#401, decided 2026-11-18): they
   are each producer's placement. (The occupancy viewer joins the same way, but only `dflow_diff.py`
@@ -275,7 +280,9 @@ Not modelled is `{"modelled": false, "why": "<reason>"}`.
 **A layer addressed by slot (6.2, #402).** L-T1 and an unbanked L-CA place tiles in L2 slots, a
 staged copy or an L2 accumulator's partial, and have no rows. They declare L2, the accumulator
 and L1 as `{"modelled": true, "slots": N}`, N ≥ 0. (A banked L-CA declares L2 by rows instead,
-and its L2 addresses are booked rows, not slots; its accumulator and L1 stay slotted.)
+and its L2 addresses are booked rows, not slots; its accumulator stays slotted. L1 is slotted,
+`slots: 0`, only when no PE array is declared; with one, any record declares L1 by the array's
+edge, `{"rows", "cols"}`.)
 
 - an event's address in such a layer is a slot, `< N`, or none. An unstaged tile's L2 address is
   none. A layer of 0 slots has no addresses: kpu-sim's accumulator (the PEs, or an L2 partial at

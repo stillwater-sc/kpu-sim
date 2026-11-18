@@ -338,9 +338,11 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
                 // The result ahead ran long because its rows waited for their banks (#401), and that
                 // held the operand: the operand took the lane the result freed (it started within a
                 // clock of the result's finish, after it was ready), so without the stalls it could
-                // have started sooner. An operand that started later waited on something else.
+                // have started sooner. An operand that started later, or on another lane, waited on
+                // something else.
                 const Rec& q = *p->second;
-                const bool held = q.finish > r->ready && r->start >= q.finish && r->start <= q.finish + 1;
+                const bool held = q.lane == r->lane && q.finish > r->ready && r->start >= q.finish &&
+                                  r->start <= q.finish + 1;
                 return q.bank_delay > 0 && held ? Cause::L2Bank : Cause::Result;
             }
             return explain(p->second, depth + 1);
@@ -373,8 +375,11 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
                 if (!src) return Cause::Unknown;
                 if (src->kind != Action::Kind::Load) {
                     into->chain.push_back(src->action);
-                    // A Writeback it waits for ran long at the L2 banks: its stalls delayed the data.
-                    return src->kind == Action::Kind::Writeback && src->bank_delay > 0 ? Cause::L2Bank : Cause::Result;
+                    // A Writeback it waits for ran long at the L2 banks, and its finish set the Move's
+                    // ready (no later credit did): its stalls delayed the data.
+                    const bool sets = src->finish >= r->ready;
+                    return src->kind == Action::Kind::Writeback && src->bank_delay > 0 && sets ? Cause::L2Bank
+                                                                                             : Cause::Result;
                 }
                 return explain(src, depth + 1);
             }
