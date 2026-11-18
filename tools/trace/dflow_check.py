@@ -1499,7 +1499,13 @@ def check_v6(m, T, bad):
         data_kinds = {v for d in TRANSACTION.values() for v in d.values()}
         for a in range(n):
             if S["kind"][a] in data_kinds and covered[a] != 1:
-                bad("E5", f"action {a} ({m['kinds'][S['kind'][a]]}) has {covered[a]} transaction events; it moves a tile once")
+                hint = ""
+                if covered[a] == 0 and m["kinds"][S["kind"][a]] == "LOAD" and not modelled[DRAM]:
+                    # #473: a standalone tile's operands are placed in L3 by the host, not loaded.
+                    hint = ("; DRAM is not modelled, so a tile the host placed in L3 before the run is an INHERIT "
+                            "step (it opens the residency with no transaction), not a LOAD")
+                bad("E5", f"action {a} ({m['kinds'][S['kind'][a]]}) has {covered[a]} transaction events; it moves a tile once"
+                          + hint)
 
     # X1, X2: element types, shapes and domains.
     dom_ok = []

@@ -716,6 +716,21 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(occupancy_viewer PROPERTIES FIXTURES_REQUIRED
             "dflow_timed_l2acc;dflow_rtl_sample;dflow_rtl_sample_addressed;dflow_matmul_48x48x48_t16;dflow_timed_sample;dflow_rtl_sample_abc"
             LABELS "program;csp;domainflow;viewer")
+        # A standalone tile (#473): operands the host placed in L3 (inherit), a result kept there
+        # (retain), nothing through DRAM. Its L-B and L-T1 records pass with DRAM not modelled, and a
+        # LOAD written for the host's placement is refused by E5, pointing to INHERIT.
+        add_test(NAME kpu_run_csp_dflow_standalone
+            COMMAND run --program ${_csp}/standalone_tile_8_t4.csp --deploy ${_deploy}/kpu_s1.json
+                    --level block-sequential --dflow ${CMAKE_CURRENT_BINARY_DIR}/standalone_lb.dflow
+                    --dflow-lt1 ${CMAKE_CURRENT_BINARY_DIR}/standalone_lt1.dflow)
+        set_tests_properties(kpu_run_csp_dflow_standalone PROPERTIES FIXTURES_SETUP dflow_standalone)
+        add_test(NAME dflow_standalone_selftest
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_dflow_standalone.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/standalone_lb.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/standalone_lt1.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/timed_linear_lt1.dflow)
+        set_tests_properties(dflow_standalone_selftest PROPERTIES
+            FIXTURES_REQUIRED "dflow_standalone;dflow_timed_linear" LABELS "program;csp;domainflow")
         # A timed record needs its level: --dflow-lca without L-CA is refused by name.
         add_test(NAME kpu_run_csp_dflow_timed_needs_its_level
             COMMAND ${CMAKE_COMMAND} -DCMD=$<TARGET_FILE:run>
