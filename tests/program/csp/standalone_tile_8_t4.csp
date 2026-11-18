@@ -1,0 +1,18 @@
+csp 1.0
+// A standalone tile (#473): the host places A and B in L3 before the run (inherit), and C stays in
+// L3 after it (retain). Nothing moves through DRAM, so its record may declare DRAM not modelled.
+program standalone machine flat(l3 = 12) {
+  tensor A[8,8] tile 4x4 in;
+  tensor B[8,8] tile 4x4 in;
+  tensor C[8,8] tile 4x4 out;
+  inherit A[:, :], B[:, :];
+  for i in 0..2 {
+    for j in 0..2 {
+      acc C[i, j] in fabric {
+        for k in 0..2 { call gemm(A[i, k], B[k, j]) +-> C[i, j]; }
+      }
+      retain C[i, j];
+    }
+  }
+  release A[:, :], B[:, :];
+}

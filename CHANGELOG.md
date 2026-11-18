@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A standalone tile's record: operands the host placed in L3** (#473). A compute tile with no DRAM
+  or DMA (systars' `SystolicTop`, an L2/L3 testbench) records the host's placement as an `INHERIT`
+  step: it opens the L3 residency at the program's start, with no transaction. A result left in L3
+  is a `RETAIN` step, and `geometry.dram` is declared not modelled. The format already had all of
+  it, so no format change was needed.
+  - `docs/plans/shared-tile-flow-record.md` §6.1 says so.
+  - `tests/program/csp/standalone_tile_8_t4.csp` is such a program, and its L-B and L-T1 records
+    pass with DRAM not modelled.
+  - A `LOAD` written for the host's placement is still refused by E5. With DRAM not modelled, E5's
+    message now points to `INHERIT`.
+
 - **L-CA's L2 is banked** (#401, slice 1; `docs/plans/banked-l2-at-lca.md`). A compute tile's L2 is
   banks of rows, row i in bank i mod N (#383; N a power of two, esg#14). Each bank serves 2 reads
   and 1 write per clock (esg#24), and reads return 4 clocks late (`timing/l2_banks.hpp`).

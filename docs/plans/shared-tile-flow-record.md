@@ -301,6 +301,27 @@ L-B moves whole tiles:
 - the accumulator's banks and rows (L-B holds the accumulator as a whole tile in the fabric);
 - the array's edge (L-B feeds whole tiles to the fabric).
 
+### 6.1 A standalone tile: operands the host placed in L3 (#473)
+
+A compute tile with no DRAM and no DMA behind it is one example: systars' `SystolicTop`, whose AXI
+port is L3. An L2 or L3 testbench, or a single-tile RTL bench, is another. The host writes the
+operands into L3 before the run, and leaves the results there after it. The format already says
+this, with no new kind:
+
+- **`INHERIT`** opens an L3 residency at the program's start: the tile is there before any action
+  runs. It has no process and no transaction, so E5 does not ask for one. In the CSP language it is
+  `inherit X`, at the top of the program (`docs/plans/csp-language.md`).
+- **`RETAIN`** keeps a result in L3 past the program's end, with no store (`retain y`).
+- **`geometry.dram`** is `{"modelled": false, "why": ...}`, and no event moves through DRAM (E1).
+
+The record's steps are still the CSP program's: `INHERIT`, then `MOVE` l3 → l2 for the operands,
+and so on. `tests/program/csp/standalone_tile_8_t4.csp` is such a program. Its records pass the
+checker with DRAM not modelled. So does its timed record, once the events a level with a DMA sends
+to it (a release's credit, a writeback's token) are absent, as they are in a standalone tile.
+
+Writing the host's placement as a `LOAD` with no transaction is refused (E5: a `LOAD` moves a tile
+once). With DRAM not modelled, E5's message points to `INHERIT`.
+
 ## 7. Values
 
 ### 7.1 Element types
