@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An onboarding guide for new developers** (`docs/ONBOARDING.md`). It covers:
+  - what kpu-sim is for;
+  - the design rules behind it: one program at several levels, values at every level, credits
+    not caches, deliberate reuse, placement as behavior, streams from the array's edges, the
+    record shared with the RTL;
+  - how the stack works;
+  - a seven-step guided path through the tools, each step saying what to look for.
+
+  `README.md` and `docs/README.md` now point to it first.
+
 ### Changed
 
 - **Two L-CA characterizations restated at the deployment's rates and banks** (#462). #458 pinned

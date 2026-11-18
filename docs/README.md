@@ -4,7 +4,8 @@ This documentation is organized by software development categories for the KPU (
 
 ## Quick Start
 
-**New to the project?** Start with these essential documents:
+**New to the project?** Start with **[the onboarding guide](ONBOARDING.md)**: what the simulator
+is for, the ideas behind it, how the stack works, and a guided path through examples. Then read:
 
 1. [KPU Execution Model](01-architecture/kpu-execution-model.md) - **MUST READ** - Credit-based dataflow model
 2. [Simulation Fidelity Framework](02-simulation/fidelity-framework.md) - Multi-fidelity simulation design
