@@ -62,6 +62,13 @@ regeneration, right after the tag**: the build takes its version from the tag, s
 is regenerated `test_loadable` fails on every fresh build, `main` included. (The L0 corpus masks its `PRODUCER` line instead:
 it is text, and the format's versions sit on the lines around it.)
 
+It was regenerated on 2026-11-18 for csp 1.1 (`docs/plans/slot-credits-at-lca.md`, #387): every
+program now declares its L2 slots (`l2 = N`), and every tile it copies into L2 has a slot the walker
+places. The embedded CSP text changed (its `csp 1.1` header, and `l2 = 6`), and so did its L0 text
+(the copies' `L2_STAGE` and `L2_RELEASE` ops, opset 1.3.0). The container format did not change. A
+reader of csp 1.1 refuses a csp 1.0 program by its version, with the reason; this fixture's older
+bytes are refused that way.
+
 `matmul_32_external.kpuld` is `write()` applied to the loadable that
 `tests/program/test_loadable.cpp` builds in `canonical_fixture()` — the test asserts that
 equality, so the two cannot drift. There is deliberately **no tool** that regenerates the

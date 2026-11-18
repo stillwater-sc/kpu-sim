@@ -238,7 +238,8 @@ TEST_CASE("the program's inputs are the operands it READS", "[program][driver][f
     // leaving a loaded LU kernel to factor a zero matrix and report success at every level. (The
     // trace's L3 transactions come first; they name their tile as out= too, and read nothing.)
     const TileProgram lu = trace_of(gen("lu", 32, 16));
-    const auto first = std::find_if(lu.ops().begin(), lu.ops().end(), [](const TileOp& op) { return !is_l3(op.kind); });
+    const auto first = std::find_if(lu.ops().begin(), lu.ops().end(),
+                                    [](const TileOp& op) { return !is_l3(op.kind) && !is_l2(op.kind); });
     REQUIRE(first != lu.ops().end());
     REQUIRE(first->kind == TileOpKind::LuDiagFactor);
     CHECK(program_inputs(lu) == std::vector<std::string>{"A"});

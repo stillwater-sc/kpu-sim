@@ -30,15 +30,23 @@
 // the Feed carries `seeds = Y` and records L0 ACC_INIT. `init Y` on its own accumulator hands the
 // residency to the fabric: its Move and Feed are followed by its Release.
 //
+// L2 placement (docs/plans/slot-credits-at-lca.md): every tile copied into L2 has a slot the walker
+// places, from the machine clause's `l2 = N`, in ring order (the next one after the last taken,
+// skipping live ones), so B-deep buffering is B rounds of the ring. An unstaged operand's copy is
+// a one-Feed staging: its Move writes a slot, its Feed reads it, an L2Release frees it. A fabric
+// accumulator's result takes a
+// slot at its first call; its store's Drain writes it, its Writeback reads it, an L2Release frees it.
+// A writing call's result takes one at the call, the same way.
+//
 // L2 staging (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3): `stage T in l2 { ... }`
-// copies each resident tile of T into an L2 slot the walker allocates (the lowest free one of
-// the machine clause's `l2 = N`), with one Move that carries the address. A call inside the
+// copies each resident tile of T into an L2 slot the walker allocates (the next in ring order),
+// with one Move that carries the address. A call inside the
 // block feeds the staged copy -- a Feed with the address, and no Move -- and the block's end
 // emits an L2Release per tile, which frees its slot. The L3 residency stays live for the whole
 // block (decided 2026-10-16): releasing a staged tile, or writing it, is refused there.
 //
 // L2 accumulators (#429, #430; docs/01-architecture/combiner.md): `acc T in l2 { ... }` reserves
-// an L2 slot per tile of T (the lowest free one, from the same `l2 = N` as the stages) as the
+// an L2 slot per tile of T (the next in ring order, from the same `l2 = N` as the stages) as the
 // block opens. Each call `+->` into one of its tiles feeds its operands, runs the gemm on a fresh
 // accumulator in the fabric (the call's partial; L0 MATMUL_MERGE), and Drains it into the slot
 // with the Combiner's merge: Overwrite for the tile's first call, which opens the slot (a staging
@@ -180,6 +188,7 @@ public:
         operands_ = declared_operands(ast_);
         for (const Decl& d : ast_.decls) if (d.is_vector) vectors_.insert(d.name);
         l2_live_.assign(static_cast<std::size_t>(ast_.l2), false);
+        l2_next_ = 0;
         frames_.push_back(Frame{&ast_.body, 0, Frame::Kind::Program, {}, 0, 0, {}});
     }
 
@@ -298,6 +307,30 @@ private:
     std::map<std::string, Partial> partial_;               // L2 accumulators' tiles, until stored
     std::vector<bool> l2_live_;                            // the L2's slots (cf 0), live or free
     std::size_t next_staging_ = 0;
+    std::size_t l2_next_ = 0;                              // the ring's next slot (cf 0)
+    // A fabric accumulator's result: the L2 slot its first call took (its staging is numbered at
+    // its Drain, where the slot opens).
+    struct ResultSlot { L2Address at; std::size_t id = 0; };
+    std::map<std::string, ResultSlot> results_;
+
+    // The next L2 slot in ring order: the first free one after the last taken. `what` names the
+    // copy, and `purpose` what the slot is for, for the error when every slot is held.
+    L2Address take_l2(int line, const std::string& what, const std::string& purpose = "") {
+        const std::size_t n = l2_live_.size();
+        if (n == 0)
+            throw CompileError(line, what + " needs an L2 slot, and the machine clause declares no L2: every tile a "
+                                     "call reads or writes is copied into an L2 slot the program places (write `l2 = N`)");
+        for (std::size_t d = 0; d < n; ++d) {
+            const std::size_t s = (l2_next_ + d) % n;
+            if (!l2_live_[s]) {
+                l2_live_[s] = true;
+                l2_next_ = (s + 1) % n;
+                return L2Address{0, static_cast<std::uint32_t>(s)};
+            }
+        }
+        throw CompileError(line, what + " needs an L2 slot" + purpose + ", and all " + std::to_string(n) + " are held");
+    }
+    void give_l2(const L2Address& at) { l2_live_.at(at.slot) = false; }
     std::size_t next_residency_ = 0;
     // Placement (ADR 0004 §5): every open residency's L3 address, and who holds each live slot.
     std::optional<L3Allocator> alloc_;
@@ -407,7 +440,18 @@ private:
         if (l2) {
             e.action.l2 = l2;
             e.action.staging = staging;
-            e.opens_staging = kind == Action::Kind::Move || e.action.merge == Merge::Overwrite;
+            e.action.copy = copy_;
+            // A result's Drain opens its slot as a staging Move does (an L2 partial's first merge
+            // opens its own, Overwrite).
+            const bool result_drain = kind == Action::Kind::Drain && e.action.merge == Merge::None;
+            e.opens_staging = kind == Action::Kind::Move || e.action.merge == Merge::Overwrite || result_drain;
+            if (result_drain) {             // the trace's slot bookkeeping: the result is in the slot
+                TileOp l2op;
+                l2op.kind = TileOpKind::L2Stage;
+                l2op.outputs = {t};
+                l2op.l2 = *l2;
+                (void)sink_.l0(l2op);
+            }
             if (kind == Action::Kind::Move || kind == Action::Kind::L2Release) {
                 // The trace records the L2 transaction after the L3 one: out of the L3 slot,
                 // into the L2 slot.
@@ -459,6 +503,7 @@ private:
     }
     std::set<std::size_t> pinned_;                          // residencies the program placed itself
     std::optional<TileCoord> seed_;                         // the accumulator the next Feed starts
+    bool copy_ = false;                                     // the actions being emitted are a placed copy
     Merge merge_ = Merge::None;                             // the next Drain's merge (an L2 accumulator's)
     std::map<std::string, Dataflow> dataflow_;              // an accumulator's tile -> its dataflow (#395)
     static Dataflow dataflow_of(const Stmt& s) {
@@ -755,8 +800,24 @@ private:
                  st->second.at, st->second.id);
             return;
         }
-        emit(Action::Kind::Move, t, it->second.id);
-        emit(Action::Kind::Feed, t, kNone, feed ? sink_.l0(*feed) : kNone);
+        // Unstaged: a copy for this Feed alone, in the next ring slot, freed after it.
+        copy_in(t, it->second.id, line, "call " + fn + "'s operand " + k, feed);
+    }
+    // An unstaged copy, a one-Feed staging: the Move writes a ring slot, the Feed reads it, and an
+    // L2Release frees it. The trace records the Feed's op (`feed`, then `init`) after the Move's
+    // transactions: out of L3, into L2, then fed.
+    void copy_in(const TileCoord& t, std::size_t residency, int line, const std::string& what, const TileOp* feed,
+                 const TileOp* init = nullptr) {
+        const L2Address at = take_l2(line, what);
+        const std::size_t id = next_staging_++;
+        copy_ = true;
+        emit(Action::Kind::Move, t, residency, kNone, nullptr, false, false, false, {}, at, id);
+        const std::size_t l0 = feed ? sink_.l0(*feed) : kNone;
+        if (init) (void)sink_.l0(*init);
+        emit(Action::Kind::Feed, t, kNone, l0, nullptr, false, false, false, {}, at, id);
+        emit(Action::Kind::L2Release, t, kNone, kNone, nullptr, false, false, false, {}, at, id);
+        copy_ = false;
+        give_l2(at);
     }
 
     // `acc y in fabric init x`: x streamed into the fabric as y's initial value. The checks are the
@@ -824,10 +885,7 @@ private:
             emit(Action::Kind::Feed, x, kNone, f, nullptr, false, false, false, {}, st->second.at, st->second.id);
             return;
         }
-        emit(Action::Kind::Move, x, it->second.id);
-        const std::size_t f = sink_.l0(feed);
-        (void)sink_.l0(init);
-        emit(Action::Kind::Feed, x, kNone, f);
+        copy_in(x, it->second.id, s.line, what, &feed, &init);
         if (self) {                             // the value lives in the fabric now: the slot is free
             emit(Action::Kind::Release, x, it->second.id);
             resident_.erase(it);
@@ -857,13 +915,8 @@ private:
                                            "starts in its L2 slot, so release it first");
             not_retained(s.line, k);
             if (acc_.count(k)) throw CompileError(s.line, "acc " + k + ": it already has an accumulator");
-            const auto free = std::find(l2_live_.begin(), l2_live_.end(), false);
-            if (free == l2_live_.end())
-                throw CompileError(s.line, "acc " + k + " in l2 needs an L2 slot for its partial, and all " +
-                                           std::to_string(l2_live_.size()) + " are held");
-            *free = true;
             Partial pt;
-            pt.at = L2Address{0, static_cast<std::uint32_t>(free - l2_live_.begin())};
+            pt.at = take_l2(s.line, "acc " + k + " in l2", " for its partial");
             pt.tile = y;
             partial_[k] = pt;
             if (s.init) {
@@ -1020,12 +1073,7 @@ private:
                     throw CompileError(s.line, "stage " + k + ": it is not resident; a stage copies a resident tile "
                                                "from L3");
                 if (staged_.count(k)) throw CompileError(s.line, "stage " + k + ": it is already staged in L2");
-                const auto free = std::find(l2_live_.begin(), l2_live_.end(), false);
-                if (free == l2_live_.end())
-                    throw CompileError(s.line, "stage " + k + " needs an L2 slot, and all " +
-                                               std::to_string(l2_live_.size()) + " are held");
-                *free = true;
-                const L2Address at{0, static_cast<std::uint32_t>(free - l2_live_.begin())};
+                const L2Address at = take_l2(s.line, "stage " + k);
                 const std::size_t id = next_staging_++;
                 staged_[k] = Staged{at, id, t};
                 keys.push_back(k);
@@ -1125,6 +1173,9 @@ private:
                 throw CompileError(s.line, "an accumulating call's result stays in the fabric; place its epilogue on "
                                            "its store");
             // An output-stationary chain: the operands are fed; the result accumulates in the fabric.
+            // Its first call takes the result's L2 slot (decision 1 of slot-credits-at-lca.md): the
+            // result has a home before any compute.
+            if (!results_.count(yk)) results_[yk] = ResultSlot{take_l2(s.line, "acc " + yk + "'s result"), 0};
             for (std::size_t i = 0; i < args.size(); ++i) {
                 TileOp feed;
                 feed.kind = TileOpKind::Feed;
@@ -1148,10 +1199,12 @@ private:
         if (std::none_of(args.begin(), args.end(), [&](const TileCoord& a) { return same(a, y); })) operands.push_back(y);
         for (const TileCoord& a : operands) deliver(a, s.line, s.fn);
         auto [drain_ctx, wb_ctx] = result_context(s, y);
+        // The result's L2 slot, taken at the call: its Drain writes it, its Writeback reads it.
+        const L2Address at = take_l2(s.line, "call " + s.fn + "'s result " + yk);
+        const std::size_t sid = next_staging_++;
         emit(Action::Kind::Call, y, kNone, sink_.l0(op), &op);
         record_stages(y, drain_ctx, wb_ctx);
-        emit(Action::Kind::Drain, y, kNone, kNone, nullptr, false, false, false, std::move(drain_ctx));
-        emit(Action::Kind::Writeback, y, resident_.at(yk).id, kNone, nullptr, false, false, false, std::move(wb_ctx));
+        result_out(y, kNone, resident_.at(yk).id, false, std::move(drain_ctx), std::move(wb_ctx), at, sid);
         resident_.at(yk).dirty = true;
     }
 
@@ -1214,13 +1267,27 @@ private:
         const std::size_t d = sink_.l0(drain);
         const std::size_t id = next_residency_++;
         place(id, y);
-        emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
-        emit(Action::Kind::Writeback, y, id, d, nullptr, true, false, false, std::move(wb_ctx));
+        const ResultSlot r = results_.at(k);
+        results_.erase(k);
+        // Its staging is numbered as its slot opens, at the Drain: stagings open in order.
+        result_out(y, d, id, true, std::move(drain_ctx), std::move(wb_ctx), r.at, next_staging_++);
         emit(Action::Kind::Store, y, id, d);
         emit(Action::Kind::Release, y, id, d);
         acc_.erase(k);
         acc_calls_.erase(k);
         dataflow_.erase(k);
+    }
+
+    // A result out of the fabric through its L2 slot: the Drain writes the slot (an L2Stage in the
+    // trace), the Writeback reads it into its L3 slot, and an L2Release frees it.
+    void result_out(const TileCoord& y, std::size_t d, std::size_t residency, bool opens, std::vector<csp::Stage> drain_ctx,
+                    std::vector<csp::Stage> wb_ctx, const L2Address& at, std::size_t sid) {
+        copy_ = true;
+        emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx), at, sid);
+        emit(Action::Kind::Writeback, y, residency, d, nullptr, opens, false, false, std::move(wb_ctx), at, sid);
+        emit(Action::Kind::L2Release, y, kNone, kNone, nullptr, false, false, false, {}, at, sid);
+        copy_ = false;
+        give_l2(at);
     }
 
     // `retain y`: the residency ends without a Release -- its slot and the tile outlive the
@@ -1296,6 +1363,7 @@ public:
                 st.place = *a.l2;
                 st.partial = a.merge != Merge::None;
                 st.merges = st.partial ? 1 : 0;
+                st.copy = a.copy;
                 p_.stagings.push_back(st);
             } else if (a.merge != Merge::None) {
                 ++p_.stagings.at(a.staging).merges;

@@ -34,7 +34,7 @@ namespace {
 
 // Row panels of A outer, column panels of B inner, one accumulator per C tile.
 std::string matmul(bool late, int l3 = 9) {
-    return std::string("csp 1.0\nprogram mm machine flat(l3 = ") + std::to_string(l3) + ") {\n"
+    return std::string("csp 1.1\nprogram mm machine flat(l3 = ") + std::to_string(l3) + ", l2 = 8) {\n"
            "  tensor A[64,64] tile 16x16 in;\n  tensor B[64,64] tile 16x16 in;\n  tensor C[64,64] tile 16x16 out;\n"
            "  for i in 0..4 {\n"
            "    resident A[i, :];\n"
@@ -108,11 +108,13 @@ TEST_CASE("store late: the results leave after the next accumulator's calls", "[
     CHECK(first(p, Action::Kind::Drain, "C[0,3]") > last(p, Action::Kind::Call, "C[1,0]"));
     // The last one at the end of the program.
     CHECK(last(p, Action::Kind::Release, "C[3,3]") == p.actions.size() - 1);
-    // Each store's four actions stay together, in order.
+    // Each store's five actions stay together, in order: the result leaves through its L2 slot
+    // (slot-credits-at-lca.md), which its L2Release frees before the Store.
     const std::size_t d = first(p, Action::Kind::Drain, "C[2,1]");
     CHECK(p.actions[d + 1].kind == Action::Kind::Writeback);
-    CHECK(p.actions[d + 2].kind == Action::Kind::Store);
-    CHECK(p.actions[d + 3].kind == Action::Kind::Release);
+    CHECK(p.actions[d + 2].kind == Action::Kind::L2Release);
+    CHECK(p.actions[d + 3].kind == Action::Kind::Store);
+    CHECK(p.actions[d + 4].kind == Action::Kind::Release);
 }
 
 TEST_CASE("store late: the actions carry the store's own line and loop indices", "[program][csp][lang][late]") {
@@ -152,7 +154,7 @@ TEST_CASE("store late: L-B computes the same values", "[program][csp][lang][late
 TEST_CASE("store late: naming the tile again lets it out first", "[program][csp][lang][late]") {
     // The second pass loads C[0,0] back: the late store must reach DRAM before that Load.
     const std::string src =
-        "csp 1.0\nprogram t machine flat(l3 = 4) {\n"
+        "csp 1.1\nprogram t machine flat(l3 = 4, l2 = 8) {\n"
         "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n  tensor C[16,16] tile 16x16 inout;\n"
         "  resident A[0, 0], B[0, 0];\n"
         "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
@@ -166,7 +168,7 @@ TEST_CASE("store late: naming the tile again lets it out first", "[program][csp]
 }
 
 TEST_CASE("store late: what it refuses, by line", "[program][csp][lang][late]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 3) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 3, l2 = 8) {\n"
                              "  tensor A[16,16] tile 16x16 inout;\n  tensor B[16,16] tile 16x16 in;\n"
                              "  tensor C[32,16] tile 16x16 out;\n  vector b[16] tile 16 in;\n";
     // A resident tile is stored where it is written.

@@ -27,8 +27,8 @@ namespace {
 
 // A CSP program as text, which is what an operator embeds -- verbatim, not re-encoded. What
 // kpu-csp-gen writes for a 32x32x32 GEMM in 16x16 tiles.
-const char* kMatmulCsp = R"(csp 1.0
-program matmul machine flat(l3 = 8) {
+const char* kMatmulCsp = R"(csp 1.1
+program matmul machine flat(l3 = 8, l2 = 8) {
   tensor A[32,32] tile 16x16 in;
   tensor B[32,32] tile 16x16 in;
   tensor C[32,32] tile 16x16 out;
@@ -294,7 +294,7 @@ TEST_CASE("a loadable that contradicts itself is refused", "[program][loadable]"
     }
     SECTION("an embedded CSP program that does not validate") {
         Loadable l = two_operator_model();
-        l.operators[0].csp_program = "csp 1.0\nprogram p machine flat(l3 = 1) {\n"
+        l.operators[0].csp_program = "csp 1.1\nprogram p machine flat(l3 = 1, l2 = 8) {\n"
                                      "  tensor A[32,32] tile 16x16 in;\n  resident A[:, :];\n}\n";
         CHECK(cause_of(write(l)) == LoadError::Cause::InconsistentRecord);
     }
@@ -346,7 +346,7 @@ TEST_CASE("the embedded programs are validated at load, not at first execution",
     }
     // The program itself, by the validator's reason: B[0,0] is never released.
     Loadable leaks = two_operator_model();
-    leaks.operators[1].csp_program = "csp 1.0\nprogram p machine flat(l3 = 4) {\n"
+    leaks.operators[1].csp_program = "csp 1.1\nprogram p machine flat(l3 = 4, l2 = 8) {\n"
                                      "  tensor A[32,32] tile 16x16 in;\n  resident A[0, 0];\n}\n";
     try {
         (void)read(write(leaks));

@@ -174,10 +174,10 @@ TEST_CASE("dependency diagnosis explains why an op is blocked", "[program][deps]
     }
 
     SECTION("a later op names its blockers, its edge kinds and its subjects") {
-        // The last compute op: the trace ends with L3 transactions, which this DAG gives no
+        // The last compute op: the trace ends with L3 and L2 transactions, which this DAG gives no
         // hazards (placement is L-T1's to time; docs/plans/l3-placement-at-lb.md step 5).
         std::size_t last = d.op_count() - 1;
-        while (last > 0 && is_l3(prog.ops()[last].kind)) --last;
+        while (last > 0 && (is_l3(prog.ops()[last].kind) || is_l2(prog.ops()[last].kind))) --last;
         const auto blockers = d.blocking_edges(last, completed);
         REQUIRE_FALSE(blockers.empty());
         const std::string why = d.explain_blocked(prog, last, completed);

@@ -126,7 +126,7 @@ std::size_t count(const CspProgram& p, Kind kind, const std::string& operand) {
     return n;
 }
 
-const char* const kHead = "csp 1.0\nprogram t machine flat(l3 = 6) {\n"
+const char* const kHead = "csp 1.1\nprogram t machine flat(l3 = 6, l2 = 8) {\n"
                           "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
                           "  tensor D[16,16] tile 16x16 in;\n  tensor E[16,32] tile 16x16 in;\n"
                           "  vector b[16] tile 16 in;\n  tensor C[16,16] tile 16x16 out;\n"
@@ -197,18 +197,20 @@ TEST_CASE("acc init: one more edge stream, before the accumulator's first call",
     const CspProgram row = lang::compile(gen::generate(matmul("bias-row")));
     CHECK(count(row, Kind::Move, "b") == 4);
     CHECK(count(row, Kind::Load, "b") == 2);
-    // Accumulating onto C: the fabric takes C's residency over, so its Release follows the Feed.
+    // Accumulating onto C: the fabric takes C's residency over, so its Release follows the Feed,
+    // after the L2Release that frees the Feed's copy (slot-credits-at-lca.md).
     const CspProgram acc = lang::compile(gen::generate(matmul("accumulate")));
     const std::size_t f = first(acc, Kind::Feed, "C[0,1]");
     REQUIRE(acc.actions[f].seeds);
-    CHECK(acc.actions[f + 1].kind == Kind::Release);
-    CHECK(acc.actions[f + 1].tile.to_string() == "C[0,1]");
+    CHECK(acc.actions[f + 1].kind == Kind::L2Release);
+    CHECK(acc.actions[f + 2].kind == Kind::Release);
+    CHECK(acc.actions[f + 2].tile.to_string() == "C[0,1]");
     CHECK(f < first(acc, Kind::Call, "C[0,1]"));
 }
 
 TEST_CASE("acc init: a staged init is fed from its L2 copy, which stays for the next", "[program][csp][init][l2]") {
     // One bias row b[0], staged once, starts two accumulators.
-    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 6, l2 = 1) {\n"
+    const std::string src = "csp 1.1\nprogram t machine flat(l3 = 6, l2 = 4) {\n"
                             "  tensor A[32,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
                             "  vector b[16] tile 16 in;\n  tensor C[32,16] tile 16x16 out;\n"
                             "  resident A[:, 0], B[0, 0], b[0];\n"
@@ -522,7 +524,7 @@ TEST_CASE("acc init: an L2 accumulator's init in the trace is MERGE_INIT (opset 
 }
 
 TEST_CASE("acc init: what an L2 accumulator's init refuses", "[program][csp][init][l2acc][refuse]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                              "  tensor A[8,8] tile 4x4 in;\n  tensor B[8,8] tile 4x4 in;\n"
                              "  tensor C[8,8] tile 4x4 out;\n  tensor D[8,8] tile 4x4 in;\n"
                              "  tensor E[8,8] int32 tile 4x4 in;\n  vector b[8] tile 4 in;\n";
@@ -564,7 +566,7 @@ TEST_CASE("acc init: an L2 init is checked where the walker checks it (#446's re
         try { (void)lang::validate(src); } catch (const std::exception& e) { v.second = e.what(); }
         return v;
     };
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 12, l2 = 7) {\n"
                              "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
                              "  tensor C[32,32] tile 16x16 out;\n  tensor D[32,32] tile 16x16 in;\n";
     // 1. Released before the first merge: resident at the acc statement is not enough.
@@ -600,7 +602,7 @@ TEST_CASE("acc init: an L2 init is checked where the walker checks it (#446's re
 TEST_CASE("acc init: L-T1's first merge waits for its init's Load (#446's review)", "[program][csp][init][l2acc][lt1]") {
     // One DMA engine, slow, and D loaded last: the gemm and its Drain would otherwise finish
     // before D is in L3.
-    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    const std::string src = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                             "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
                             "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
                             "  resident A[0, 0], B[0, 0], D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
@@ -643,7 +645,7 @@ TEST_CASE("acc init: each tile's first merge finds its init resident, and a vect
     // The second review of #446: C[0, 1]'s first merge comes after the init is released, in a
     // second call statement. Marking the whole family merged at the first call let it through.
     {
-        const auto v = verdicts("csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+        const auto v = verdicts("csp 1.1\nprogram t machine flat(l3 = 12, l2 = 7) {\n"
                                 "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
                                 "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n"
                                 "  resident D[0, :];\n  acc C[0, :] in l2 init D[0, :] {\n"
@@ -656,7 +658,7 @@ TEST_CASE("acc init: each tile's first merge finds its init resident, and a vect
     }
     // A tensor init on a vector accumulator: refused, not compared past the vector's one dimension.
     {
-        const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+        const std::string src = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                                 "  vector Y[16] tile 16 out;\n  tensor X[16,1] tile 16x1 in;\n"
                                 "  resident X[0, 0];\n  acc Y[0] in l2 init X[0, 0] { }\n  release X[0, 0];\n}\n";
         std::string sym = "accepted";
@@ -672,7 +674,7 @@ TEST_CASE("acc init: an in-place writeback of the init's tile waits for the merg
     // The streamer's in-order issue orders them already (D's Feed follows C's Drain); the in-place
     // Writeback's bound on the stages' reads, as Release and Retain have it, keeps this so if
     // that order ever loosens. The test pins the invariant.
-    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    const std::string src = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                             "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
                             "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 inout;\n"
                             "  resident A[0, 0], B[0, 0], D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
@@ -715,7 +717,7 @@ TEST_CASE("acc init: a first merge reads only its own tile's init, and a loop th
         try { (void)lang::validate(src); } catch (const std::exception& e) { v.second = e.what(); }
         return v;
     };
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 12, l2 = 4) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 12, l2 = 7) {\n"
                              "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
                              "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n";
     // 1. C[0, 1]'s first merge reads D[0, 1] alone: D[0, :] released and D[0, 1] made resident
@@ -763,7 +765,7 @@ TEST_CASE("acc init: an L2 credit that arrives before the init is not an L2 stal
     // engine: D[0, 1] loads last. The streamer's in-order issue already frees C[0, 0]'s slot
     // before C[0, 1]'s partial is ready, so this pins the invariant rather than reproducing a
     // failure: the stage inputs are applied before the credit comparison.
-    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 1) {\n"
+    const std::string src = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
                             "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
                             "  tensor C[16,32] tile 16x16 out;\n  tensor D[16,32] tile 16x16 in;\n"
                             "  resident A[0, 0], B[0, :];\n"
@@ -800,7 +802,7 @@ TEST_CASE("acc init: a Combiner that does not run add cannot take an init", "[pr
     // The fourth review of #446: the init is the Combiner's add on the first merge (L-CA runs it
     // as VectorStage AddInit), so a target whose Combiner lists no `add` refuses it, at the acc
     // statement, in both the walker and the validator. The same program without the init compiles.
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                              "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
                              "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
                              "  resident A[0, 0], B[0, 0], D[0, 0];\n";

@@ -88,8 +88,8 @@ BySlot lca(const driver::CspLevelOutcome& o) {
     return by;
 }
 
-const char* kStreamed = R"(csp 1.0
-program streamed machine flat(l3 = 5) {
+const char* kStreamed = R"(csp 1.1
+program streamed machine flat(l3 = 5, l2 = 8) {
   tensor A[32,256] tile 32x32 in;
   tensor B[256,32] tile 32x32 in;
   tensor C[32,32] tile 32x32 out;
@@ -266,7 +266,7 @@ namespace {
 // Row panels of A outer; staged, A's panel is copied into L2 once for the loop over B's panels
 // (test_csp_l2_staging.cpp's program).
 std::string staged_matmul(bool staged) {
-    std::string s = std::string("csp 1.0\nprogram mm machine flat(l3 = 9") + (staged ? ", l2 = 4" : "") + ") {\n"
+    std::string s = std::string("csp 1.1\nprogram mm machine flat(l3 = 9") + (staged ? ", l2 = 7" : ", l2 = 8") + ") {\n"
                     "  tensor A[64,64] tile 16x16 in;\n  tensor B[64,64] tile 16x16 in;\n  tensor C[64,64] tile 16x16 out;\n"
                     "  for i in 0..4 {\n"
                     "    resident A[i, :];\n";
@@ -289,8 +289,15 @@ std::string staged_matmul(bool staged) {
 TEST_CASE("L-CA executes the walker's L2 staging, the same slots as L-T1", "[csp][placement][lca][l2]") {
     const std::string text = staged_matmul(true);
     const CspProgram p = lang::compile(lang::parse(text));
+    // The program's stagings. The copies the walker places are not yet the timed levels' (slice 2's
+    // step 1, slot-credits-at-lca.md §4): they run unplaced there.
     BySlot w;
-    for (const Staging& st : p.stagings) w[st.place.slot].push_back(st.tile.to_string());
+    std::size_t staged = 0;
+    for (const Staging& st : p.stagings)
+        if (!st.copy) {
+            w[st.place.slot].push_back(st.tile.to_string());
+            ++staged;
+        }
     const auto t1 = run(ExecutionLevel::BlockSequential, text);
     std::map<std::uint32_t, std::vector<const TransactionalInterpreter::L2Slot*>> v;
     for (const auto& sl : t1.l2_slots) v[sl.place.slot].push_back(&sl);
@@ -300,7 +307,7 @@ TEST_CASE("L-CA executes the walker's L2 staging, the same slots as L-T1", "[csp
         for (auto* sl : ss) lt1_l2[slot].push_back(sl->tile.to_string());
     }
     const auto ca = run(ExecutionLevel::CycleAccurate, text);
-    REQUIRE(ca.l2_placement.size() == p.stagings.size());
+    REQUIRE(ca.l2_placement.size() == staged);
     BySlot lca_l2;
     for (const auto& [tile, slot] : ca.l2_placement) lca_l2[slot].push_back(tile.to_string());
     CHECK(show(lt1_l2) == show(w));

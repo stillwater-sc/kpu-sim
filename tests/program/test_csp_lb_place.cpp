@@ -279,14 +279,17 @@ TEST_CASE("the trace records every L3 transaction with its address", "[csp][plac
         std::size_t l3_ops = 0;
         for (const TileOp& op : trace.ops()) l3_ops += is_l3(op.kind) ? 1 : 0;
         CHECK(l3_ops == placed);
-        CHECK(serialize::opset_for(trace).str() == "1.2.0");
-        // A Feed follows the Move that took its tile out of L3. (LU's in-place calls record no
-        // Feed: only an accumulating call's operands are fed in the trace.)
+        // Every program places its L2 copies too (slot-credits-at-lca.md), so every trace is opset 1.3.
+        CHECK(serialize::opset_for(trace).str() == "1.3.0");
+        // A Feed follows its copy's stage into L2, which follows the Move that took the tile out of
+        // L3. (LU's in-place calls record no Feed: only an accumulating call's operands are fed.)
         if (std::string(algo) == "matmul") {
             const std::size_t feed = first_op(trace, TileOpKind::Feed);
-            REQUIRE(feed > 0);
-            CHECK(trace.ops()[feed - 1].kind == TileOpKind::L3Move);
+            REQUIRE(feed > 1);
+            CHECK(trace.ops()[feed - 1].kind == TileOpKind::L2Stage);
+            CHECK(trace.ops()[feed - 2].kind == TileOpKind::L3Move);
             CHECK(trace.ops()[feed - 1].outputs[0].to_string() == trace.ops()[feed].inputs[0].to_string());
+            CHECK(trace.ops()[feed - 2].outputs[0].to_string() == trace.ops()[feed].inputs[0].to_string());
         }
     }
 }

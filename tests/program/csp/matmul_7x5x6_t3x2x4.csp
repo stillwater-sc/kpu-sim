@@ -1,7 +1,7 @@
-csp 1.0
+csp 1.1
 // hand-written fixture: matmul C = A . B with rectangular tiles that do not divide the operands,
 // so every trailing tile clamps (7x5x6 in Ti=3, Tj=2, Tk=4). kpu-csp-gen writes square tiles only.
-program matmul_7x5x6 machine flat(l3 = 5) {
+program matmul_7x5x6 machine flat(l3 = 5, l2 = 8) {
   tensor A[7,6] tile 3x4 in;
   tensor B[6,5] tile 4x2 in;
   tensor C[7,5] tile 3x2 out;

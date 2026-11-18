@@ -80,7 +80,7 @@ TEST_CASE("CSP program: actions belong to their process, and a tile is fed only 
     for (std::size_t i = 0; i < p.actions.size(); ++i) {
         const Action& a = p.actions[i];
         CAPTURE(i, to_string(a.kind));
-        if (a.kind == Kind::Release) { CHECK(a.process == kNone); continue; }
+        if (a.kind == Kind::Release || a.kind == Kind::L2Release) { CHECK(a.process == kNone); continue; }
         const ProcessKind k = p.processes.at(a.process).kind;
         switch (a.kind) {
             case Kind::Load: case Kind::Store:         CHECK(k == ProcessKind::Dma); break;
@@ -89,7 +89,7 @@ TEST_CASE("CSP program: actions belong to their process, and a tile is fed only 
             case Kind::Call:                           CHECK(k == ProcessKind::Compute); break;
             default: break;
         }
-        if (a.kind == Kind::Feed) CHECK((i > 0 && p.actions[i - 1].kind == Kind::Move));
+        if (a.kind == Kind::Feed) CHECK((i > 0 && p.actions[i - 1].kind == Kind::Move));   // its own copy
     }
     // Each process's actions are in program order.
     for (const Process& proc : p.processes)

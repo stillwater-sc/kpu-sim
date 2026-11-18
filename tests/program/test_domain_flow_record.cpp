@@ -193,7 +193,7 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
     // #455: the staging an L2 accumulator's first Drain opens is a partial, merged into by every
     // Drain (overwrite, then accumulate) and never fed. Older records have no such columns, and
     // read as no partials.
-    const std::string text = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    const std::string text = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                              "  tensor A[16,32] tile 16x16 in;\n  tensor B[32,16] tile 16x16 in;\n"
                              "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
                              "  resident D[0, 0];\n  acc C[0, 0] in l2 dataflow ws init D[0, 0] {\n"
@@ -201,10 +201,13 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
                              "      call gemm(A[0, k], B[k, 0]) +-> C[0, 0];\n      release A[0, k], B[k, 0];\n    }\n  }\n"
                              "  release D[0, 0];\n  store C[0, 0];\n}\n";
     const DomainFlowRecord a = record_of(text).rec;
-    REQUIRE(a.stagings.size() == 1);
-    CHECK(a.stagings[0].partial == 1);
-    CHECK(a.stagings[0].merges == 2);
-    CHECK(a.stagings[0].feeds == 0);
+    // The partial, among the operands' copies (each a one-Feed staging; slot-credits-at-lca.md).
+    std::vector<const DomainFlowRecord::Staging*> partials;
+    for (const auto& st : a.stagings)
+        if (st.partial) partials.push_back(&st);
+    REQUIRE(partials.size() == 1);
+    CHECK(partials[0]->merges == 2);
+    CHECK(partials[0]->feeds == 0);
     std::vector<std::uint8_t> merges;
     for (const auto& st : a.steps)
         if (st.merge) merges.push_back(st.merge);
@@ -229,8 +232,10 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
     const auto dir = scratch("l2acc");
     record::write_dflow(a, dir.string());
     const DomainFlowRecord b = record::read_dflow(dir.string());
-    REQUIRE(b.stagings.size() == 1);
-    CHECK((b.stagings[0].partial == 1 && b.stagings[0].merges == 2));
+    // It round-trips: the same stagings, the partial among them.
+    REQUIRE(b.stagings.size() == a.stagings.size());
+    for (std::size_t g = 0; g < a.stagings.size(); ++g)
+        CHECK((b.stagings[g].partial == a.stagings[g].partial && b.stagings[g].merges == a.stagings[g].merges));
     REQUIRE(b.steps.size() == a.steps.size());
     for (std::size_t i = 0; i < a.steps.size(); ++i)
         CHECK((b.steps[i].merge == a.steps[i].merge && b.steps[i].stages == a.steps[i].stages &&
@@ -247,8 +252,8 @@ TEST_CASE("dflow: an L2 accumulator's partial is recorded, and round-trips", "[d
     }
     std::ofstream((dir / "manifest.json").string()) << m.dump();
     const DomainFlowRecord old = record::read_dflow(dir.string());
-    REQUIRE(old.stagings.size() == 1);
-    CHECK((old.stagings[0].partial == 0 && old.stagings[0].merges == 0));
+    REQUIRE(old.stagings.size() == a.stagings.size());
+    for (const auto& st : old.stagings) CHECK((st.partial == 0 && st.merges == 0));   // as before #455
     for (const auto& st : old.steps) CHECK(st.merge == 0);
     std::filesystem::remove_all(dir);
 }
@@ -399,8 +404,8 @@ TEST_CASE("dflow: a step limit cuts steps.bin, and only it", "[dflow][record]") 
 }
 
 TEST_CASE("dflow: a refused program is recorded up to its refusal", "[dflow][record]") {
-    const std::string text = R"(csp 1.0
-program bad machine flat(l3 = 2) {
+    const std::string text = R"(csp 1.1
+program bad machine flat(l3 = 2, l2 = 8) {
   tensor A[16,16] tile 16x16 in;
   resident A[0, 0];
   release A[0, 0];
@@ -563,7 +568,14 @@ TEST_CASE("dflow: the L-T1 overlay joins L-T1's legs on the action", "[dflow][re
             CHECK(l.start <= l.finish);
             latest = std::max(latest, l.finish);
         }
-        for (std::size_t a = 0; a < legs.size(); ++a) CHECK(legs[a] >= 1);
+        // Every action has a leg, but a copy's L2Release, which L-T1 does not yet time
+        // (slot-credits-at-lca.md §4).
+        for (std::size_t a = 0; a < legs.size(); ++a) {
+            const auto& st = o.rec.steps.at(a);
+            const bool copy_release = (st.flags & DomainFlowRecord::kCopy) &&
+                                      st.kind == static_cast<std::uint8_t>(csp::Action::Kind::L2Release);
+            CHECK(legs[a] >= (copy_release ? 0u : 1u));
+        }
         CHECK(latest == o.rec.lt1_makespan);
         // L-T1 refines L-B: every final tile within the bound (bit-identical by construction).
         CHECK(o.rec.lt1_pass);

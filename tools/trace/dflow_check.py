@@ -189,6 +189,7 @@ DATAFLOW_NAMES = {1: "os", 2: "ws", 3: "is"}
 DTYPES = {"u8": ("B", 1), "u16": ("H", 2), "u32": ("I", 4), "u64": ("Q", 8), "i64": ("q", 8),
           "f32": ("f", 4), "f64": ("d", 8)}
 OPENS, CLOSES, RETAINS, HAS_PLACE, PINNED, HAS_L2, STAGES = 1, 2, 4, 8, 16, 32, 64
+COPY = 128      # a copy the walker places in L2 (docs/plans/slot-credits-at-lca.md)
 RES_RETAINED = 4
 LOAD, STORE = 0, 1                                    # enum Action::Kind, in order
 CHANNELS = ["dram", "l3", "l2", "cf"]
@@ -1099,6 +1100,10 @@ def check_lt1(m, T, bad):
                 bad("L4", f"leg {g} ({kinds[k]}) waits {w} cycles on a slot; only a Load waits on its slot")
     for a in range(n):
         if a not in legs_of and m.get("refusal") is None:
+            # A copy's L2Release has none: L-T1 does not yet time the walker's copies
+            # (slot-credits-at-lca.md §4).
+            if a < S["rows"] and S["kind"][a] == L2_RELEASE_KIND and S["flags"][a] & COPY:
+                continue
             bad("L2", f"action {a} has no L-T1 leg")
     for a, ls in legs_of.items():
         if ls != list(range(len(ls))):

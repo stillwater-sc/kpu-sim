@@ -443,6 +443,13 @@ private:
                 check_call(*op);
             }
         }
+        // Slice 2's step 1 (slot-credits-at-lca.md §4): L-CA does not yet execute the copies the walker
+        // now places in L2. It runs them unplaced, as before, and a copy's L2Release has nothing to do.
+        if (a.copy && a.kind == Action::Kind::L2Release) {
+            ++pulled_;
+            return true;
+        }
+        a = program::csp::unplaced(a);
         if (keep_events_) handovers_.push_back({pulled_, a.kind, a.tile, exec_.current_cycle()});
         ++pulled_;
         TileDescriptor d = descriptor(a.tile);

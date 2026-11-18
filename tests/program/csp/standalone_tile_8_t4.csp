@@ -1,7 +1,7 @@
-csp 1.0
+csp 1.1
 // A standalone tile (#473): the host places A and B in L3 before the run (inherit), and C stays in
 // L3 after it (retain). Nothing moves through DRAM, so its record may declare DRAM not modelled.
-program standalone machine flat(l3 = 12) {
+program standalone machine flat(l3 = 12, l2 = 8) {
   tensor A[8,8] tile 4x4 in;
   tensor B[8,8] tile 4x4 in;
   tensor C[8,8] tile 4x4 out;

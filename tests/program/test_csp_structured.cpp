@@ -37,7 +37,7 @@ namespace {
 
 std::string matmul_all_a(int n_tiles, int tile, int l3) {
     const std::string N = std::to_string(n_tiles * tile), T = std::to_string(tile), n = std::to_string(n_tiles);
-    return "csp 1.0\nprogram matmul machine flat(l3 = " + std::to_string(l3) + ") {\n"
+    return "csp 1.1\nprogram matmul machine flat(l3 = " + std::to_string(l3) + ", l2 = 8) {\n"
            "  tensor A[" + N + "," + N + "] tile " + T + "x" + T + " in;\n"
            "  tensor B[" + N + "," + N + "] tile " + T + "x" + T + " in;\n"
            "  tensor C[" + N + "," + N + "] tile " + T + "x" + T + " out;\n"
@@ -57,7 +57,7 @@ std::string matmul_all_a(int n_tiles, int tile, int l3) {
 // One tile of A and of B at a time: L3 holds three tiles whatever the problem size.
 std::string matmul_streaming(long long size, int tile, int l3) {
     const std::string N = std::to_string(size), T = std::to_string(tile), n = std::to_string(size / tile);
-    return "csp 1.0\nprogram matmul machine flat(l3 = " + std::to_string(l3) + ") {\n"
+    return "csp 1.1\nprogram matmul machine flat(l3 = " + std::to_string(l3) + ", l2 = 8) {\n"
            "  tensor A[" + N + "," + N + "] tile " + T + "x" + T + " in;\n"
            "  tensor B[" + N + "," + N + "] tile " + T + "x" + T + " in;\n"
            "  tensor C[" + N + "," + N + "] tile " + T + "x" + T + " out;\n"
@@ -76,8 +76,8 @@ std::string matmul_streaming(long long size, int tile, int l3) {
            "}\n";
 }
 
-const char* kLu = R"(csp 1.0
-program lu machine flat(l3 = 16) {
+const char* kLu = R"(csp 1.1
+program lu machine flat(l3 = 16, l2 = 8) {
   tensor A[64,64] tile 16x16 inout;
   resident A[:, :];
   for k in 0..4 {
@@ -205,13 +205,13 @@ TEST_CASE("CSP structured: a 1M x 1M matmul validates and streams without unroll
         calls += e->action.kind == Action::Kind::Call;
         most_buffered = std::max(most_buffered, stream.buffered());
     }
-    CHECK(calls > 100'000);
+    CHECK(calls > 80'000);                  // a call is its operands' copies (Move, Feed, L2Release) and more
     CHECK(most_buffered <= 8);
 }
 
 TEST_CASE("CSP structured: the symbolic validator refuses by line, without executing",
           "[program][csp][lang][structured]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 8) {\n"
                              "  tensor A[128,128] tile 32x32 in;\n  tensor B[128,128] tile 32x32 in;\n"
                              "  tensor C[128,128] tile 32x32 out;\n";
     // An index that runs past the edge for some iteration.
@@ -230,7 +230,7 @@ TEST_CASE("CSP structured: the symbolic validator refuses by line, without execu
                                      "  store C[0, 0];\n  release A[0, :], B[:, 0];\n}\n"),
                ContainsSubstring("csp line 8: call gemm reads A[k, 0], which is not provably resident"));
     // Capacity, from family sizes: a 1M matmul's column panel of B is 32,768 tiles.
-    CHECK_THAT(symbolic_error("csp 1.0\nprogram t machine flat(l3 = 128) {\n"
+    CHECK_THAT(symbolic_error("csp 1.1\nprogram t machine flat(l3 = 128, l2 = 8) {\n"
                               "  tensor B[1048576,1048576] tile 32x32 in;\n"
                               "  for j in 0..32768 { resident B[:, j]; release B[:, j]; }\n}\n"),
                ContainsSubstring("csp line 4: resident B[:, j] needs 32768 L3 slots, and 128 of 128 are free"));
@@ -251,7 +251,7 @@ TEST_CASE("CSP structured: the symbolic validator refuses by line, without execu
                                      "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
                                      "  for i in 0..4 { store C[0, 0]; }\n  release A[0, 0], B[0, 0];\n}\n"),
                ContainsSubstring("csp line 8: the loop over i stores the accumulator C[0, 0], which it did not open"));
-    CHECK_THAT(symbolic_error("csp 1.0\nprogram t machine flat(l3 = 8) {\n  tensor A[128,128] tile 32x32 inout;\n"
+    CHECK_THAT(symbolic_error("csp 1.1\nprogram t machine flat(l3 = 8, l2 = 8) {\n  tensor A[128,128] tile 32x32 inout;\n"
                               "  resident A[0, 0];\n  call getrf(A[0, 0]) -> A[0, 0] pivot 0;\n"
                               "  for i in 0..4 { store A[0, 0]; }\n  release A[0, 0];\n}\n"),
                ContainsSubstring("csp line 6: the loop over i stores A[0, 0], written before it"));
@@ -261,8 +261,8 @@ TEST_CASE("CSP structured: cross-iteration residency runs, and is named as beyon
           "[program][csp][lang][structured]") {
     // Double buffering: the next k's tile is loaded before this one's is released. The walker
     // runs it (and its values are right); the symbolic validator says why it cannot prove it.
-    const std::string src = R"(csp 1.0
-program prefetch machine flat(l3 = 8) {
+    const std::string src = R"(csp 1.1
+program prefetch machine flat(l3 = 8, l2 = 8) {
   tensor A[128,128] tile 32x32 in;
   tensor B[128,128] tile 32x32 in;
   tensor C[128,128] tile 32x32 out;

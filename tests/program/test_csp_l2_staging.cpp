@@ -43,7 +43,7 @@ namespace {
 
 // Row panels of A outer; staged, A's panel is copied into L2 once for the loop over B's panels.
 std::string matmul(bool staged) {
-    std::string s = std::string("csp 1.0\nprogram mm machine flat(l3 = 9") + (staged ? ", l2 = 4" : "") + ") {\n"
+    std::string s = std::string("csp 1.1\nprogram mm machine flat(l3 = 9") + (staged ? ", l2 = 7" : ", l2 = 8") + ") {\n"
                     "  tensor A[64,64] tile 16x16 in;\n  tensor B[64,64] tile 16x16 in;\n  tensor C[64,64] tile 16x16 out;\n"
                     "  for i in 0..4 {\n"
                     "    resident A[i, :];\n";
@@ -103,15 +103,17 @@ std::size_t index_of(const CspProgram& p, Action::Kind k, const std::string& til
 
 TEST_CASE("L2 staging: parsed, formatted and validated", "[program][csp][lang][l2]") {
     const lang::Program ast = lang::parse(matmul(true));
-    CHECK(ast.l2 == 4);
+    CHECK(ast.l2 == 7);                     // the staged panel (4), a copy, the results
     const std::string text = lang::format(ast);
-    CHECK_THAT(text, ContainsSubstring("machine flat(l3 = 9, l2 = 4)"));
+    CHECK_THAT(text, ContainsSubstring("machine flat(l3 = 9, l2 = 7)"));
     CHECK_THAT(text, ContainsSubstring("stage A[i, :] in l2 {"));
     CHECK(lang::format(lang::parse(text)) == text);
+    // Every L2 copy has a slot (slot-credits-at-lca.md): the staged panel's 4, plus a result's and
+    // one copy's; unstaged, just those two.
     const lang::Validation v = lang::validate(matmul(true));
-    CHECK(v.peak_l2 == 4);
+    CHECK(v.peak_l2 == 6);
     CHECK(v.peak_l3 == lang::validate(matmul(false)).peak_l3);   // staging takes no L3 slot
-    CHECK(lang::validate(matmul(false)).peak_l2 == 0);
+    CHECK(lang::validate(matmul(false)).peak_l2 == 2);
 }
 
 TEST_CASE("L2 staging: one Move per tile per stage, and Feeds of the copy", "[program][csp][lang][l2]") {
@@ -122,10 +124,12 @@ TEST_CASE("L2 staging: one Move per tile per stage, and Feeds of the copy", "[pr
     CHECK(rs.moves == 80);
     CHECK(rs.stagings == 16);
     CHECK(rs.staged_feeds == 64);
-    CHECK(rs.peak_l2 == 4);
+    CHECK(rs.peak_l2 == 5);                 // the panel and a copy; a result's slot fills at its Drain
     CHECK(rs.loads == ru.loads);
-    REQUIRE(s.stagings.size() == 16);
+    // The program's 16 stagings; the rest are the copies the walker places, B's and the results'.
+    REQUIRE(std::count_if(s.stagings.begin(), s.stagings.end(), [](const Staging& st) { return !st.copy; }) == 16);
     for (const Staging& st : s.stagings) {
+        if (st.copy) continue;
         CHECK(st.feeds == 4);                            // each A tile feeds the four C tiles of its row
         CHECK(st.release != kNone);
         CHECK(s.actions[st.open].kind == Action::Kind::Move);
@@ -164,7 +168,10 @@ TEST_CASE("L2 staging: the stream yields the trace's actions", "[program][csp][l
         CHECK(e->action.l2.has_value() == t.l2.has_value());
         if (t.l2) CHECK(*e->action.l2 == *t.l2);
         CHECK(e->action.staging == t.staging);
-        CHECK(e->opens_staging == (t.kind == Action::Kind::Move && t.l2.has_value()));
+        // A Move opens a staging; so does a result's Drain (its one merge into its slot).
+        const bool opens = t.l2.has_value() && (t.kind == Action::Kind::Move ||
+                                                (t.kind == Action::Kind::Drain && t.merge == Merge::None));
+        CHECK(e->opens_staging == opens);
         ++i;
     }
     CHECK(i == trace.actions.size());
@@ -175,7 +182,9 @@ TEST_CASE("L2 staging: L-B computes what the unstaged program does, bit for bit"
     const auto sum = s.run(with_inputs(matmul(true)));
     u.run(with_inputs(matmul(false)));
     CHECK(s.result().operand("C").values == u.result().operand("C").values);
-    CHECK(sum.peak_l2 == 4);
+    // The panel and a copy: L-B fills a result's slot at its Drain, after the copies are freed
+    // (the validator, which reserves it from the first call, counts 6).
+    CHECK(sum.peak_l2 == 5);
     CHECK(sum.staged_feeds == 64);
     CHECK(s.l2_contents().empty());
 }
@@ -187,8 +196,9 @@ TEST_CASE("L2 staging: the trace's replay checks the L2 transactions", "[program
     CHECK(ref.replay_mismatch.empty());
     TileProgram replay = *ref.trace;
     const auto sum = TileProgramReference().run(replay);
-    CHECK(sum.l2_ops == 32);                             // 16 stages, 16 releases
-    CHECK(sum.peak_l2 == 4);
+    // 16 stages and 16 releases; B's 64 copies, a stage and a release each; C's 16 results, the same.
+    CHECK(sum.l2_ops == 192);
+    CHECK(sum.peak_l2 == 5);                // as L-B
     // Opset 1.3, and a round trip keeps the addresses.
     std::ostringstream os;
     serialize::write_l0(os, *ref.trace);
@@ -196,7 +206,7 @@ TEST_CASE("L2 staging: the trace's replay checks the L2 transactions", "[program
     CHECK_THAT(os.str(), ContainsSubstring("L2_STAGE"));
     std::istringstream is(os.str());
     TileProgram back = serialize::read_l0(is);
-    CHECK(TileProgramReference().run(back).l2_ops == 32);
+    CHECK(TileProgramReference().run(back).l2_ops == 192);
     // A stage into a live slot is refused by the replay.
     TileProgram bad = *ref.trace;
     std::vector<TileOp> ops = bad.ops();
@@ -225,8 +235,8 @@ TEST_CASE("L2 staging: L-B refuses a broken staging, by name", "[program][csp][l
     }
     {   // A stage outside the program's L2.
         CspProgram p = good;
-        p.actions[index_of(p, Action::Kind::Move, "A[0,1]", true)].l2->slot = 4;
-        CHECK_THAT(lb_error(p), ContainsSubstring("l2[0]:4 is outside the L2's 4 slots"));
+        p.actions[index_of(p, Action::Kind::Move, "A[0,1]", true)].l2->slot = 7;
+        CHECK_THAT(lb_error(p), ContainsSubstring("l2[0]:7 is outside the L2's 7 slots"));
     }
     {   // A program that ends with a tile staged.
         CspProgram p = good;
@@ -237,7 +247,7 @@ TEST_CASE("L2 staging: L-B refuses a broken staging, by name", "[program][csp][l
 }
 
 TEST_CASE("L2 staging: what the language refuses, by line", "[program][csp][lang][l2]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
                              "  tensor A[32,32] tile 16x16 inout;\n  tensor B[32,32] tile 16x16 in;\n"
                              "  tensor C[32,32] tile 16x16 out;\n";
     auto both = [&](const std::string& body, const std::string& walk, const std::string& symbolic) {
@@ -245,7 +255,7 @@ TEST_CASE("L2 staging: what the language refuses, by line", "[program][csp][lang
         CHECK_THAT(error_of(head + body, true), ContainsSubstring(symbolic));
     };
     // No L2 declared.
-    const std::string no_l2 = "csp 1.0\nprogram t machine flat(l3 = 8) {\n  tensor A[32,32] tile 16x16 in;\n"
+    const std::string no_l2 = "csp 1.1\nprogram t machine flat(l3 = 8) {\n  tensor A[32,32] tile 16x16 in;\n"
                               "  resident A[0, 0];\n  stage A[0, 0] in l2 { }\n  release A[0, 0];\n}\n";
     CHECK_THAT(error_of(no_l2, false), ContainsSubstring("csp line 5: stage ... in l2: the machine clause declares no L2"));
     CHECK_THAT(error_of(no_l2, true), ContainsSubstring("csp line 5: stage ... in l2: the machine clause declares no L2"));
@@ -338,7 +348,7 @@ TEST_CASE("L2 staging: L-T1 holds an L2 credit per slot, stage Move to L2Release
 TEST_CASE("L2 staging: the trace prints as a program with its stage blocks", "[program][csp][lang][l2]") {
     const CspProgram p = lang::compile(matmul(true));
     const std::string text = lang::print(p);
-    CHECK_THAT(text, ContainsSubstring("l2 = 4"));
+    CHECK_THAT(text, ContainsSubstring("l2 = 7"));
     CHECK_THAT(text, ContainsSubstring("stage A[0, 0], A[0, 1], A[0, 2], A[0, 3] in l2 {"));
     const CspProgram again = lang::compile(text);
     REQUIRE(again.actions.size() == p.actions.size());
@@ -359,7 +369,7 @@ TEST_CASE("L2 staging: kpu-csp-gen --stage-a stages A's row panel", "[program][c
     const std::string plain = gen::generate(o);
     o.stage_a = true;
     const std::string staged = gen::generate(o);
-    CHECK_THAT(staged, ContainsSubstring("machine flat(l3 = 9, l2 = 4)"));
+    CHECK_THAT(staged, ContainsSubstring("machine flat(l3 = 9, l2 = 10)"));   // the panel (4), and 2 rounds of a call's 3
     CHECK_THAT(staged, ContainsSubstring("stage A[i, :] in l2 {"));
     const ReuseReport s = lang::compile(staged).reuse(), u = lang::compile(plain).reuse();
     CHECK(u.moves - s.moves == 64 - 16);                 // A: once per tile per row, not per call

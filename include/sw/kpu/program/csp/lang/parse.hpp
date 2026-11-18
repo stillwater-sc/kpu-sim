@@ -2,8 +2,8 @@
 // include/sw/kpu/program/csp/lang/parse.hpp
 // The CSP language: its AST and parser (docs/plans/csp-language.md §3; ADR 0004).
 //
-//   csp 1.0
-//   program matmul machine flat(l3 = 128) {
+//   csp 1.1
+//   program matmul machine flat(l3 = 128, l2 = 8) {
 //     tensor A[256,256] tile 32x32 in;
 //     ...
 //     for j in 0..8 {
@@ -51,7 +51,9 @@
 
 namespace sw::kpu::program::csp::lang {
 
-inline constexpr const char* kVersion = "1.0";
+// csp 1.1 (2026-11-18, slot-credits-at-lca.md): every program declares its L2 slots (`l2 = N`),
+// since every tile it copies into L2 has a slot the walker places. csp 1.1 did not.
+inline constexpr const char* kVersion = "1.1";
 
 class SyntaxError : public std::runtime_error {
 public:
@@ -249,6 +251,10 @@ public:
         Program p;
         expect_word("csp");
         p.version = take_version();
+        if (p.version == "1.0")
+            throw SyntaxError(line(), "this reader reads csp " + std::string(kVersion) + ", not 1.0: csp 1.1 places "
+                                      "every tile a program copies into L2, so its machine clause declares the L2's "
+                                      "slots; add `l2 = N` and write `csp 1.1` (docs/plans/slot-credits-at-lca.md)");
         if (p.version != kVersion)
             throw SyntaxError(line(), "this reader reads csp " + std::string(kVersion) + ", not " + p.version);
         expect_word("program");

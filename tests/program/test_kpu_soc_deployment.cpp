@@ -110,7 +110,7 @@ TEST_CASE("kpu_soc_2x2: every level reports the systolic block as not modelled",
 TEST_CASE("kpu_soc_2x2: an int8 program runs on the generator's tile at every level", "[program][deploy][kpu_soc]") {
     const auto spec = platform::read_spec_file(kPath);
     const std::string text =
-        "csp 1.0\nprogram mm8 machine flat(l3 = 12) {\n"
+        "csp 1.1\nprogram mm8 machine flat(l3 = 12, l2 = 8) {\n"
         "  tensor A[8,8] int8 tile 4x4 in;\n  tensor B[8,8] int8 tile 4x4 in;\n  tensor C[8,8] int32 tile 4x4 out;\n"
         "  resident A[:, :], B[:, :];\n"
         "  for i in 0..2 {\n    for j in 0..2 {\n"

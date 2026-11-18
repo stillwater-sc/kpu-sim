@@ -42,8 +42,8 @@ using sw::kpu::program::platform::VirtualPlatform;
 inline std::string gemm_csp(const char* name, const char* b_mode) {
     const std::string mode = b_mode;
     const bool cold = mode == "cold";
-    std::string t = "csp 1.0\nprogram " + std::string(name) + " machine flat(l3 = " +
-                    (cold ? "5" : "7") + ") {\n"
+    std::string t = "csp 1.1\nprogram " + std::string(name) + " machine flat(l3 = " +
+                    (cold ? "5" : "7") + ", l2 = 8) {\n"
                     "  tensor A[32,32] tile 16x16 in;\n"
                     "  tensor B[32,32] tile 16x16 in;\n"
                     "  tensor C[32,32] tile 16x16 out;\n";

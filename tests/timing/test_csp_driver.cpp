@@ -65,8 +65,8 @@ void check_c(const TileProgram& lca, const TileProgram& lb) {
 
 // A written matmul (docs/plans/csp-language.md step 1), 128^3 in 32 x 32 tiles: A held whole,
 // B's column panel per j -- 16 + 16 loads.
-const char* kWrittenMatmul = R"(csp 1.0
-program matmul machine flat(l3 = 128) {
+const char* kWrittenMatmul = R"(csp 1.1
+program matmul machine flat(l3 = 128, l2 = 8) {
   tensor A[128,128] tile 32x32 in;
   tensor B[128,128] tile 32x32 in;
   tensor C[128,128] tile 32x32 out;

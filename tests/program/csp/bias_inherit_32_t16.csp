@@ -1,8 +1,8 @@
-csp 1.0
+csp 1.1
 // The second operator of a chain (kpu-run-csp-programs step 4d): C arrives resident from the
 // operator before it (`inherit`: no Load, its slots held from the start), takes a bias in place,
 // and is stored -- the store the chain owes the tiles the first operator retained.
-program bias_inherit machine flat(l3 = 16) {
+program bias_inherit machine flat(l3 = 16, l2 = 8) {
   tensor C[32,32] tile 16x16 inout;
   vector b[32] tile 16 in;
   inherit C[:, :];

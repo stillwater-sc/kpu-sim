@@ -109,8 +109,8 @@ TEST_CASE("L-T1: a slot reused early serializes on it", "[csp][placement][lt1]")
     // Four slots, two tiles at a time. With the policy, each k-step's tiles land in the slots freed
     // longest ago, so their Loads wait on nothing. Pinned to slots 0 and 1, each k-step's Loads
     // wait for the Releases of the step before, though two other slots stand free.
-    const std::string base = R"(csp 1.0
-program streamed machine flat(l3 = 5) {
+    const std::string base = R"(csp 1.1
+program streamed machine flat(l3 = 5, l2 = 8) {
   tensor A[32,256] tile 32x32 in;
   tensor B[256,32] tile 32x32 in;
   tensor C[32,32] tile 32x32 out;

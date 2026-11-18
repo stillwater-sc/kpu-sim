@@ -160,8 +160,8 @@ TEST_CASE("CSP run: a level that cannot run this program on this machine says wh
     const auto d = s1();
     CHECK_THAT(*csp_level_supported(ExecutionLevel::CycleAccurate, lang::parse(gen::generate(o)), &d),
                ContainsSubstring("written for an L3 of 200 tiles; the machine's holds 128"));
-    const std::string renamed = R"(csp 1.0
-program t machine flat(l3 = 8) {
+    const std::string renamed = R"(csp 1.1
+program t machine flat(l3 = 8, l2 = 8) {
   tensor X[32,32] tile 32x32 in;
   tensor W[32,32] tile 32x32 in;
   tensor Y[32,32] tile 32x32 out;
@@ -242,8 +242,8 @@ TEST_CASE("CSP run: L-T1's credits are the program's -- a Load waits for the Rel
           "[program][csp][run][lt1]") {
     // Two slots. Each k-step loads A[0,k] and B[k,0] and releases them, so every Load after the
     // first two waits for a Release: L-T1 takes credits only from the program's Releases.
-    const std::string text = R"(csp 1.0
-program streamed machine flat(l3 = 3) {
+    const std::string text = R"(csp 1.1
+program streamed machine flat(l3 = 3, l2 = 8) {
   tensor A[32,128] tile 32x32 in;
   tensor B[128,32] tile 32x32 in;
   tensor C[32,32] tile 32x32 out;

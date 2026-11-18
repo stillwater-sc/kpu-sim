@@ -96,10 +96,25 @@ struct Options {
     // requant per channel (#427): each column's multiplier and shift from the int32 vectors qm and
     // qs, resident with B's panel as a linear's b is -- scale(qm[j], qs[j]) @ combiner.
     bool requant_channels = false;
+    // Every program declares its L2 slots (docs/plans/slot-credits-at-lca.md): enough for this
+    // many rounds of what one call holds at once. 1 is single buffering, 2 double.
+    int l2_buffers = 2;
 };
 
 // Tiles along one dimension.
 inline Dim tiles(const Options& o) { return o.tile ? (o.size + o.tile - 1) / o.tile : 0; }
+
+// The program's `l2 = N`: what its blocks hold for their lifetime (a staged panel, an L2
+// accumulator's partials and its staged tile), plus l2_buffers rounds of what a call holds at once
+// (each operand's copy, and the result's slot). The walker allocates the ring over all of them.
+inline long long l2_slots(const Options& o) {
+    const long long b = std::max(1, o.l2_buffers), t = static_cast<long long>(tiles(o));
+    if (o.algo == "lu") return 4 * b;                       // up to three operands and the result
+    if (o.dataflow != "os") return t + 1 + 2 * b;           // partials, the staged tile; a copy, an init
+    const long long per_call = o.algo == "linear" ? 4 : 3;  // A, B, the result (and the bias, linear)
+    return (o.stage_a ? t : 0) + per_call * b;
+}
+inline std::string l2_clause(const Options& o) { return ", l2 = " + std::to_string(l2_slots(o)); }
 
 // The L3 slots the operator's schedule needs at its peak.
 // The accumulator a gemm on `in` is registered with (numeric::mac_pairs); empty: none.
@@ -413,8 +428,7 @@ inline std::string matmul(const Options& o) {
                                       ", C's partials merged by the Combiner in L2" +
                                       (o.requant ? std::string(", requantized into ") + o.dtype + " on each final merge"
                                                  : std::string()));
-        s += "program matmul machine flat(l3 = " + std::to_string(o.l3) + ", l2 = " + std::to_string(tiles(o) + 1) +
-             ") {\n";
+        s += "program matmul machine flat(l3 = " + std::to_string(o.l3) + l2_clause(o) + ") {\n";
         const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
         s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype);
         if (o.init == "bias") s += tensor("D", o, "in", acc);
@@ -434,8 +448,7 @@ inline std::string matmul(const Options& o) {
                                   (o.stage_a ? std::string(", A's row panel staged in L2") : std::string()) +
                                   (o.init != "none" ? ", the accumulator's init streamed in" : std::string()) +
                                   (o.requant ? ", requantized into " + o.dtype + " on the Combiner" : std::string()));
-    s += "program matmul machine flat(l3 = " + std::to_string(o.l3) +
-         (o.stage_a ? ", l2 = " + std::to_string(tiles(o)) : std::string()) + ") {\n";
+    s += "program matmul machine flat(l3 = " + std::to_string(o.l3) + l2_clause(o) + ") {\n";
     const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
     s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype);
     if (o.init == "bias") s += tensor("D", o, "in", acc);
@@ -460,8 +473,7 @@ inline std::string linear(const Options& o) {
                                   (o.format != "none" ? ", into " + o.format : std::string()) +
                                   (o.dataflow != "os" && o.place == "combiner" ? " on each tile's final merge"
                                                                                : std::string()));
-    s += "program linear machine flat(l3 = " + std::to_string(o.l3) +
-         (o.dataflow != "os" ? ", l2 = " + std::to_string(tiles(o) + 1) : std::string()) + ") {\n";
+    s += "program linear machine flat(l3 = " + std::to_string(o.l3) + l2_clause(o) + ") {\n";
     // Requantized (#427): A and B in the dtype, b and C's accumulator in its gemm's accumulator.
     const std::string acc = o.dtype == "fp32" ? std::string("fp32") : accumulator_of(o.dtype);
     s += tensor("A", o, "in", o.dtype) + tensor("B", o, "in", o.dtype);
@@ -491,7 +503,7 @@ inline std::string linear(const Options& o) {
 inline std::string lu(const Options& o) {
     const std::string nt = std::to_string(tiles(o));
     std::string s = header(o, "LU (right-looking, in place), A resident whole");
-    s += "program lu machine flat(l3 = " + std::to_string(o.l3) + ") {\n";
+    s += "program lu machine flat(l3 = " + std::to_string(o.l3) + l2_clause(o) + ") {\n";
     s += tensor("A", o, "inout");
     s += "  resident A[:, :];\n";
     s += "  for k in 0.." + nt + " {\n";

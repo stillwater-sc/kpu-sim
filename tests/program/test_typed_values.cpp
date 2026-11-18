@@ -117,7 +117,7 @@ std::string error_of(const std::string& src, bool symbolic) {
     return "accepted";
 }
 
-const char* const kHead = "csp 1.0\nprogram t machine flat(l3 = 6) {\n"
+const char* const kHead = "csp 1.1\nprogram t machine flat(l3 = 6, l2 = 8) {\n"
                           "  tensor A[4,4] int8 tile 4x4 in;\n  tensor B[4,4] int8 tile 4x4 in;\n"
                           "  tensor F[4,4] tile 4x4 in;\n  tensor C[4,4] int32 tile 4x4 out;\n"
                           "  tensor G[4,4] tile 4x4 out;\n  vector b[4] int32 tile 4 in;\n";

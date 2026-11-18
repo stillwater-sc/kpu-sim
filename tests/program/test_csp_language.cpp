@@ -31,9 +31,9 @@ using Catch::Matchers::ContainsSubstring;
 namespace {
 
 // matmul 256^3 / 32^3, written: A resident for the whole run, B's column panel per j.
-const char* kMatmulAllA = R"(csp 1.0
+const char* kMatmulAllA = R"(csp 1.1
 // matmul, A held whole: every tile loads once
-program matmul machine flat(l3 = 128) {
+program matmul machine flat(l3 = 128, l2 = 8) {
   tensor A[256,256] tile 32x32 in;
   tensor B[256,256] tile 32x32 in;
   tensor C[256,256] tile 32x32 out;
@@ -56,8 +56,8 @@ program matmul machine flat(l3 = 128) {
 )";
 
 // The same product, with A's row panel reloaded for every column panel of B.
-const char* kMatmulPanels = R"(csp 1.0
-program matmul machine flat(l3 = 128) {
+const char* kMatmulPanels = R"(csp 1.1
+program matmul machine flat(l3 = 128, l2 = 8) {
   tensor A[256,256] tile 32x32 in;
   tensor B[256,256] tile 32x32 in;
   tensor C[256,256] tile 32x32 out;
@@ -77,8 +77,8 @@ program matmul machine flat(l3 = 128) {
 )";
 
 // Right-looking LU, 64^2 / 16^2, the whole matrix resident.
-const char* kLu = R"(csp 1.0
-program lu machine flat(l3 = 16) {
+const char* kLu = R"(csp 1.1
+program lu machine flat(l3 = 16, l2 = 8) {
   tensor A[64,64] tile 16x16 inout;
   resident A[:, :];
   for k in 0..4 {
@@ -146,7 +146,7 @@ std::string compile_error(const std::string& body, const std::string& decls =
                               "  tensor C[64,64] tile 32x32 out;\n",
                           int l3 = 4) {
     try {
-        lang::compile("csp 1.0\nprogram t machine flat(l3 = " + std::to_string(l3) + ") {\n" + decls + body + "}\n");
+        lang::compile("csp 1.1\nprogram t machine flat(l3 = " + std::to_string(l3) + ", l2 = 8) {\n" + decls + body + "}\n");
     } catch (const lang::CompileError& e) {
         return e.what();
     } catch (const lang::SyntaxError& e) {
@@ -232,7 +232,7 @@ TEST_CASE("CSP language: review fixes -- loop bounds from variables, empty accum
     const std::string decls = "  tensor A[64,64] tile 16x16 in;\n  tensor B[64,64] tile 16x16 in;\n"
                               "  tensor C[64,64] tile 16x16 out;\n";
     auto program = [&](const std::string& body) {
-        return "csp 1.0\nprogram t machine flat(l3 = 40) {\n" + decls + body + "}\n";
+        return "csp 1.1\nprogram t machine flat(l3 = 40, l2 = 8) {\n" + decls + body + "}\n";
     };
     // A loop whose bounds are both variables: `i..k`, `k..k+2`.
     const CspProgram tri = lang::compile(program(
@@ -282,7 +282,7 @@ TEST_CASE("CSP language: review fixes -- loop bounds from variables, empty accum
     // alpha reads back to the same float, exponents included.
     for (float a : {0.1f, -1.0f / 3.0f, 1e-7f, 6.02e23f}) {
         CAPTURE(a);
-        const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8) {\n  tensor A[16,16] tile 16x16 inout;\n"
+        const std::string src = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 8) {\n  tensor A[16,16] tile 16x16 inout;\n"
                                 "  tensor B[16,16] tile 16x16 in;\n  resident A[0, 0], B[0, 0];\n"
                                 "  call gemm(B[0, 0], B[0, 0]) +-> A[0, 0] alpha " + lang::alpha_text(a) + ";\n"
                                 "  store A[0, 0];\n  release A[0, 0], B[0, 0];\n}\n";

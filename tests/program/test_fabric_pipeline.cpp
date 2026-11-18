@@ -56,7 +56,7 @@ std::string matmul(int m, int n, int k, int tm, int tn, int tk, Store store = St
     const int ni = m / tm, nj = n / tn, nk = k / tk;
     auto s = [](int v) { return std::to_string(v); };
     const bool each = store != Store::Deferred;
-    std::string p = "csp 1.0\nprogram mm machine flat(l3 = " + s(2 * nk + 2) + ") {\n"
+    std::string p = "csp 1.1\nprogram mm machine flat(l3 = " + s(2 * nk + 2) + ", l2 = 8) {\n"
            "  tensor A[" + s(m) + "," + s(k) + "] tile " + s(tm) + "x" + s(tk) + " in;\n"
            "  tensor B[" + s(k) + "," + s(n) + "] tile " + s(tk) + "x" + s(tn) + " in;\n"
            "  tensor C[" + s(m) + "," + s(n) + "] tile " + s(tm) + "x" + s(tn) + " out;\n"
@@ -247,7 +247,7 @@ TEST_CASE("an in-place gemm and a C tile larger than the array stay one leg", "[
     CHECK(big.stats.one_leg.count("C tile larger than the array"));
     // C resident in L3 and updated in place: its preload into the array has no stream design.
     const std::string in_place =
-        "csp 1.0\nprogram ip machine flat(l3 = 4) {\n"
+        "csp 1.1\nprogram ip machine flat(l3 = 4, l2 = 8) {\n"
         "  tensor A[32,32] tile 32x32 in;\n  tensor B[32,32] tile 32x32 in;\n  tensor C[32,32] tile 32x32 inout;\n"
         "  resident A[0, 0], B[0, 0], C[0, 0];\n  call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n"
         "  store C[0, 0];\n  release A[0, 0], B[0, 0], C[0, 0];\n}\n";
