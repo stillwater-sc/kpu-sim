@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A plan for a blocked linear-algebra test set** (`docs/plans/blocked-linear-algebra-test-set.md`;
+  epic #479, steps #480–#492):
+  - a GEMM schedule space: rectangular shapes, blocks per level, loop order, partial-C carriage,
+    and a choice by shape with a search;
+  - ten operators chosen for what they validate in the language, the lowering, the runtime and
+    the data path: TRSM, SYRK, Cholesky, out-of-core LU, QR and TSQR, GEMV and GER, batched GEMM,
+    SYMM and TRMM, Hessenberg and Schur.
+
 - **An onboarding guide for new developers** (`docs/ONBOARDING.md`). It covers:
   - what kpu-sim is for;
   - the design rules behind it: one program at several levels, values at every level, credits
