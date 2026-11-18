@@ -10,8 +10,11 @@ Usage: python3 test_dflow_check_v6.py <rtl-sample.dflow> <lb.dflow> [<rtl-sample
 The third bundle is the sample's version-6.1 form (dflow_rtl_sample.py --addressed; #398): the
 accumulator stores straight to L3, and L3 is word-addressed.
 
-The fourth is a timed kpu-sim record, version 6.2 (kpu-run --dflow-lca; #402): L-CA's events with
-their cycles, L2 and the accumulator addressed by slot.
+The fourth is a timed kpu-sim record, version 6.2 (kpu-run --dflow-lca; #402), of a deployment with
+a banked L2 (l2.banks_per_tile, or systolic's sp_banks; #401), such as
+tests/program/deploy/kpu_s1_combiner.json: L-CA's events with their cycles, L2 by banks and rows
+with its transfers' row events, and the accumulator by slot. An unbanked deployment's L-CA record
+has L2 by slot and no row events, and fails these checks.
 
 The RTL sample is the hand-written timed record (dflow_rtl_sample.py): L2, accumulator and L1
 geometry, a cycle column, progress events, credits and tokens, int8 and int32 values with expected

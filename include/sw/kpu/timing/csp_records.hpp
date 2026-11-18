@@ -336,6 +336,7 @@ inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& ha
             const bool out_of = k == Action::Kind::Writeback || k == Action::Kind::Feed;
             if (!into && !out_of) continue;
             if (k == Action::Kind::Writeback && l.leg != 0) continue;
+            if (!l.started) continue;       // a handed-over leg that never started booked nothing
             const auto it = wait.find(key(l.rec.tile, l.rec.proc, l.rec.start, into));
             if (it != wait.end()) l.rec.bank_wait = it->second;
         }

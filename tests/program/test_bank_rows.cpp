@@ -18,7 +18,9 @@
 #include <sw/kpu/program/record/domain_flow_record.hpp>
 #include <sw/kpu/program/record/timed_record.hpp>
 
+#include <cstdint>
 #include <filesystem>
+#include <random>
 #include <map>
 #include <string>
 
@@ -91,22 +93,30 @@ TEST_CASE("Bank rows: a banked L-CA record has L2 by rows, and its transfers' ro
         CHECK(p.action == e.action);
         CHECK(p.tile == e.tile);
         CHECK(p.cycle <= e.cycle);
+        CHECK(p.lane == e.lane);                // its transaction's process instance
         CHECK(e.end <= p.end);
         // Its L2 address is a row: its transfer's first row, plus its own.
         const std::uint64_t mine = e.src == ev::L2 ? e.src_addr : e.dst_addr;
         const std::uint64_t first = p.src == ev::L2 ? p.src_addr : p.dst_addr;
-        CHECK(mine == first + e.row);
+        CHECK(mine == x.lca.l2_geometry->row(first, e.row));
         CHECK(mine < r.l2_rows->rows);
         ++under;
     }
     CHECK(rows > 0);
     CHECK(under == rows);
     // Round trip: the rows form survives the bundle.
-    const std::string dir = (std::filesystem::temp_directory_path() / "kpu_bank_rows_rt.dflow").string();
-    std::filesystem::remove_all(dir);
+    struct Scratch {
+        std::filesystem::path p;
+        ~Scratch() {
+            std::error_code ec;
+            std::filesystem::remove_all(p, ec);
+        }
+    } tmp{std::filesystem::temp_directory_path() /
+          ("kpu_bank_rows_rt_" + std::to_string(std::random_device{}()) + "_" +
+           std::to_string(reinterpret_cast<std::uintptr_t>(&r)) + ".dflow")};
+    const std::string dir = tmp.p.string();
     record::write_dflow(r, dir);
     const DomainFlowRecord back = record::read_dflow(dir);
-    std::filesystem::remove_all(dir);
     REQUIRE(back.l2_rows);
     CHECK(back.l2_rows->rows == r.l2_rows->rows);
     CHECK(back.events.size() == r.events.size());
@@ -162,4 +172,69 @@ TEST_CASE("Bank rows: a feed whose rows waited for their bank is the bubble's ca
         }
     CHECK(found);
     CHECK(std::string(csp::BubbleReport::to_string(Cause::L2Bank)) == "L2 bank ports");
+}
+
+TEST_CASE("Bank rows: a fixed-size L2 wraps a transfer's rows, walking the banks in order", "[program][timing][banks]") {
+    sw::kpu::timing::L2Banks::Geometry g;
+    g.banks = 4;
+    g.rows_per_bank = 1;                    // four rows
+    CHECK(g.row(3, 0) == 3);
+    CHECK(g.row(3, 1) == 0);
+    CHECK(g.row(3, 2) == 1);
+    g.rows_per_bank = 0;                    // as many as the slots need: no wrap
+    CHECK(g.row(3, 2) == 5);
+}
+
+TEST_CASE("Bank rows: a staged copy's L2 credit names its rows", "[program][record][timed][banks]") {
+    // An L2Release frees a staged copy: the banked record's credit names the copy's first row, as
+    // the slotted one names its slot.
+    const Run x = run();
+    const auto banked = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values, 0, 0, &x.lca.l2_bookings,
+                                             &*x.lca.l2_geometry);
+    const auto slotted = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values);
+    auto releases = [](const DomainFlowRecord& r, bool addressed) {
+        std::size_t n = 0;
+        for (const auto& e : r.events)
+            if (e.kind == ev::Credit && e.src == ev::L2 && static_cast<K>(r.steps.at(e.action).kind) == K::L2Release)
+                n += !addressed || e.src_addr != record::kNone64;
+        return n;
+    };
+    CHECK(releases(slotted, false) > 0);
+    CHECK(releases(banked, true) == releases(slotted, true));
+    CHECK(releases(banked, true) == releases(banked, false));
+}
+
+TEST_CASE("Bank rows: a result ahead whose rows waited for their banks is the bubble's cause", "[program][csp][bubbles][banks]") {
+    // A ready Feed held on the streamer behind a Drain whose rows waited for their bank: the
+    // result's way out ran long, at the L2 bank ports.
+    using P = csp::TransactionalInterpreter::Proc;
+    auto rec = [](std::size_t action, K kind, P proc, const char* op, std::uint64_t ready, std::uint64_t start,
+                  std::uint64_t finish) {
+        Rec r;
+        r.action = action;
+        r.kind = kind;
+        r.tile = TileCoord{op, 0, 0};
+        r.proc = proc;
+        r.ready = ready;
+        r.start = start;
+        r.finish = finish;
+        return r;
+    };
+    std::vector<Rec> rs = {rec(0, K::Move, P::Bm, "A", 0, 0, 4),   rec(1, K::Feed, P::Str, "A", 4, 4, 8),
+                           rec(2, K::Call, P::Cf, "C", 8, 8, 18),  rec(3, K::Drain, P::Str, "C", 18, 18, 60),
+                           rec(4, K::Move, P::Bm, "B", 4, 4, 8),   rec(5, K::Feed, P::Str, "B", 8, 60, 64),
+                           rec(6, K::Call, P::Cf, "D", 64, 64, 74)};
+    rs[3].bank_wait = 30;                   // the Drain's rows waited for their bank
+    std::map<std::string, std::uint64_t> busy{{"bm", 8}, {"str", 50}, {"cf", 20}};
+    std::map<std::string, std::size_t> lanes{{"dma", 1}, {"bm", 1}, {"str", 2}, {"cf", 1}};
+    using Cause = csp::BubbleReport::Cause;
+    auto cause_of = [&](const std::vector<Rec>& v) {
+        const auto rep = csp::bubble_report(v, 74, busy, lanes);
+        for (const auto& b : rep.bubbles)
+            if (b.call == 6) return b.cause;
+        return Cause::Unknown;
+    };
+    CHECK(cause_of(rs) == Cause::L2Bank);
+    rs[3].bank_wait = 0;                    // without the bank wait: the result ahead
+    CHECK(cause_of(rs) == Cause::Result);
 }

@@ -164,6 +164,7 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
             rows_used = std::max<std::uint64_t>(rows_used, b.first_row + b.rows.size());
         }
     std::vector<std::pair<std::uint64_t, const timing::L2Banks::Booking*>> with_rows;   // action -> its booking
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::uint64_t> staged_row;      // (cf, L2 slot) -> first row
     // Each tile's last transaction out of a layer, in program order, and whether it was a Store: a
     // Release's credit follows its own tile's last move out of L3 (an L2Release's, out of L2).
     struct Out { std::uint64_t end = 0; bool store = false; };
@@ -211,8 +212,13 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
             if (into || out_of) {
                 const auto it = booked.find(bkey(r.tile_name(st.tile), k == K::Move || k == K::Writeback, s.start, into));
                 if (it != booked.end()) bk = it->second;
+                l2 = bk ? bk->first_row : kNone64;
+                // A staged copy or a partial: its rows, for the L2Release that frees them.
+                if (bk && into && staged) staged_row[{st.l2_cf, st.l2_slot}] = bk->first_row;
+            } else if (k == K::L2Release) {
+                const auto it = staged_row.find({st.l2_cf, st.l2_slot});
+                l2 = it != staged_row.end() ? it->second : kNone64;
             }
-            l2 = bk ? bk->first_row : kNone64;
         }
         if (bk) with_rows.push_back({st.action, bk});
         const std::uint64_t t0 = s.start, t1 = s.finish;
@@ -302,7 +308,7 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
                 e.process = proc;
                 e.src = src;
                 e.dst = dst;
-                const std::uint64_t row = bk->first_row + q;
+                const std::uint64_t row = l2g->row(bk->first_row, q);
                 e.src_addr = src == ev::L2 ? row : src == ev::L3 ? slot : kNone64;
                 e.dst_addr = dst == ev::L2 ? row : dst == ev::L3 ? slot : kNone64;
                 e.row = static_cast<std::uint32_t>(q);
@@ -333,7 +339,10 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
         for (std::size_t i = 0; i < r.events.size(); ++i)
             if (r.events[i].kind <= ev::Drain) tx_of.emplace(r.events[i].action, i);
         for (auto& e : r.events)
-            if (e.kind >= ev::BmRow) e.parent = tx_of.at(e.parent);
+            if (e.kind >= ev::BmRow) {
+                e.parent = tx_of.at(e.parent);
+                e.lane = r.events[e.parent].lane;      // its transaction's process instance
+            }
     }
     r.cycles = 0;
     for (const auto& e : r.events) r.cycles = std::max(r.cycles, e.end);

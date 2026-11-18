@@ -135,10 +135,10 @@ emit (with identities), typed element values, operand domains, expected values a
     E1 references             an event's id is its row; its kind, process, layers, tile, action,
                               position and parent exist; its layers are modelled and its addresses
                               inside them; a transaction moves between the layers its kind names
-    E2 identities             no two events share a key (kind, process, tile, layers, the L3 and
-                              DRAM addresses -- L2's and the accumulator's are placement, not
-                              identity -- the position's program line and loop indices, row, beat),
-                              and none shares (kind, action, row, beat)
+    E2 identities             no two events share a key (kind, process, tile, layers, their
+                              addresses except L2's and the accumulator's, which are placement,
+                              not identity; the position's program line and loop indices, row,
+                              beat), and none shares (kind, action, row, beat)
     E3 progress               a row event (BM_ROW, STR_ROW, DRAIN_ROW) is a child of a transaction
                               of its kind, of the same tile and action, its row inside the tile, and
                               (timed) inside its parent's [cycle, end]; only row events have rows

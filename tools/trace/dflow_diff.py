@@ -14,7 +14,9 @@ where a tile is its operand name and tile coordinates, a process and a layer are
 the loop indices are (variable name, value) pairs, so the key reads the same in both records. L2's
 and the accumulator's addresses are each producer's placement, not identity (§5.3; #401): they are
 left out of the key, and a matched event whose L2 or accumulator address differs is reported as
-placed differently. Another layer whose addresses have different forms in the two records (6.1's
+placed differently, once per event, with each endpoint that differs. Only addresses both records
+give, in the same form, are compared: an address one record leaves out, or slots against rows, is
+not a difference, so a count of zero does not mean every placement agrees. Another layer whose addresses have different forms in the two records (6.1's
 words against slots) has its addresses left out of the key too, and said so.
 
 It reports:
@@ -166,12 +168,15 @@ def diff(a, b, tolerance=0, show=5):
     placed = []
     for k in matched:
         x, y = ia[k], ib[k]
-        for side, lyr in (("src", "src"), ("dst", "dst")):
-            layer = a.E[lyr][x]
+        ends = []                                   # each endpoint placed differently
+        for side in ("src", "dst"):
+            layer = a.E[side][x]
             if layer < len(dc.LAYERS) and dc.LAYERS[layer] in ("l2", "acc"):
                 pa, pb = a.E[f"{side}_addr"][x], b.E[f"{side}_addr"][y]
                 if pa != pb and dc.NONE64 not in (pa, pb) and form(ga, dc.LAYERS[layer]) == form(gb, dc.LAYERS[layer]):
-                    placed.append({"key": label(k), "layer": dc.LAYERS[layer], "a": pa, "b": pb})
+                    ends.append({"layer": dc.LAYERS[layer], "a": pa, "b": pb})
+        if ends:
+            placed.append({"key": label(k), "ends": ends})
     out = {"a": a.describe(), "b": b.describe(), "dropped_addresses": drop,
            "placement": {"count": len(placed), "first": placed[:show]},
            "matched": len(matched),
@@ -207,7 +212,7 @@ def report(o, tolerance):
     if pl["count"]:
         print(f"placed differently: {pl['count']} matched events' L2 or accumulator addresses differ")
         for x in pl["first"]:
-            print(f"    {x['key']}: {x['layer']} A {x['a']}, B {x['b']}")
+            print(f"    {x['key']}: " + "; ".join(f"{e['layer']} A {e['a']}, B {e['b']}" for e in x["ends"]))
     for side in ("a", "b"):
         s = o[f"only_{side}"]
         if not s["count"]:

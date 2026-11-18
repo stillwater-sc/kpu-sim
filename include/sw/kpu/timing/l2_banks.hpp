@@ -42,6 +42,11 @@ public:
         std::uint32_t row_bytes = 256;
         Cycle read_latency = 4;
         std::uint32_t read_ports = 2, write_ports = 1;
+        // Row k of a transfer whose first row is `first`: a fixed-size L2 wraps at its last row, so
+        // the transfer keeps walking the banks in order (banks divide the rows).
+        [[nodiscard]] std::uint64_t row(std::uint64_t first, std::uint64_t k) const {
+            return rows_per_bank ? (first + k) % (std::uint64_t(rows_per_bank) * banks) : first + k;
+        }
     };
     enum class Access : std::uint8_t { Read, Write, ReadModifyWrite };
     enum class Client : std::uint8_t { BlockMover, Streamer, Drain, Combiner };
@@ -69,8 +74,9 @@ public:
     };
 
     // One transfer's booking, kept when the log is on (keep_log): its tile, client and access, the
-    // clock it was booked at (`now`, its leg's start) and the first row's turn (`start`), its rows
-    // and the clock each was served, and the clocks they waited for their banks. The timed record
+    // clock it was booked at (`now`, its leg's start), the earliest clock its first row was asked
+    // for (`start`), its rows and the clock each was served (rows.front() is later than `start`
+    // when the first row waited for its bank), and the clocks they waited for their banks. The timed record
     // writes these as the transfer's row events, and csp_records as its bank wait (#401).
     struct Booking {
         TileID tile;
@@ -151,7 +157,7 @@ public:
         }
         Cycle at = start, last = start;
         for (std::uint64_t k = 0; k < n; ++k) {
-            const std::uint32_t b = bank_of(r0 + k);
+            const std::uint32_t b = bank_of(g_.row(r0, k));
             Cycle t = std::max(at, start + k * per_row);
             for (;; ++t) {
                 auto& use = cal[t];

@@ -77,6 +77,7 @@ class Diff(unittest.TestCase):
         # joined transaction.
         self.assertEqual(o["only_a"]["count"], 0)
         rows = sum(o["only_b"]["by_kind"].get(k, 0) for k in ("BM_ROW", "STR_ROW", "DRAIN_ROW"))
+        self.assertGreater(rows, 0, "the banked L-CA record has its transfers' rows")
         self.assertEqual(o["only_b"]["count"], rows)
         self.assertEqual(o["only_b"]["rows_under_matched_transactions"], rows)
         self.assertGreater(o["matched_transactions"], 0)

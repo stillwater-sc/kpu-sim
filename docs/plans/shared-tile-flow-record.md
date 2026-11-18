@@ -225,7 +225,8 @@ No two events in a record share a key. Among the events that name an action, no 
 `(kind, action, row, beat)` either.
 
 - **L2's and the accumulator's addresses are not part of the key** (#401, decided 2026-11-18): they
-  are each producer's placement. kpu-sim's banked L2 puts a tile at its slot's rows, and the RTL at
+  are each producer's placement. (The occupancy viewer joins the same way, but only `dflow_diff.py`
+  reports placement.) kpu-sim's banked L2 puts a tile at its slot's rows, and the RTL at
   rows its own allocator chooses, so the same transfer has different rows in the two records. L3's
   and DRAM's addresses stay in the key, since the program places them. `dflow_diff.py` compares L2
   and accumulator addresses on the matched events, and reports those that differ as *placed
@@ -282,7 +283,9 @@ and L1 as `{"modelled": true, "slots": N}`, N ≥ 0:
 
 A banked kpu-sim L-CA record (#401) declares L2 in the rows form instead, like the RTL: an event's L2
 address is its transfer's first row, and each transfer's rows are row events (BM_ROW, STR_ROW,
-DRAIN_ROW: row r of the transfer, beat 0, at the clock the bank served it). Either way, L2 and
+DRAIN_ROW: row r of the transfer, beat 0, at the clock the bank served it). A transfer that takes
+more L2 rows than its tile has rows keeps its transaction but has no row events, since a row event
+is a row of its tile (E3); the record's notes count those. Either way, L2 and
 accumulator addresses are placement, not identity (§5.3), so records join on the rest of the key.
 
 **A word-addressed L3 (6.1, #398).** The RTL's L3 is a flat, word-addressed memory cell per site,
