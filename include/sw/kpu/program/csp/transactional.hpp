@@ -167,6 +167,11 @@ public:
         Cycle l2_wait = 0;              // a stage Move or a first merge whose L2 slot decided its start: the same
         Cycle bank_wait = 0;            // L-CA, banked (#401): the clocks its L2 rows waited for their banks' ports
         Cycle bank_delay = 0;           //   and the clocks those waits added to its finish (<= bank_wait)
+        // What set `ready`: its inputs (the data it reads), a credit (an L3 or L2 slot's), or its
+        // handover (L-CA's driver window: the program's issue order). The bubble walk reads it
+        // rather than inferring it from the clocks (#401).
+        enum class ReadyBy : std::uint8_t { Input, Credit, Handover };
+        ReadyBy ready_by = ReadyBy::Input;
         std::uint32_t chain = kNoChain; // a Call in a stream chain: its index in chains()
         std::uint32_t chain_pos = 0;    //   and its place in it, from 1
     };
@@ -324,6 +329,7 @@ public:
                 Residency& r = residency_[k];
                 Cycle ready = r.current;
                 Cycle l2_wait = 0;
+                bool credit_set = false;                    // the L2 slot's credit set `ready`
                 if (a.l2) {                                 // a stage: after ITS L2 slot's L2Release
                     const Cycle credit = get_l2(*a.l2);
                     if (credit > ready) {
@@ -336,10 +342,12 @@ public:
                             l2_wait = credit - other;
                         }
                         ready = credit;
+                        credit_set = true;
                     }
                 }
                 const Cycle f = run(Proc::Bm, ready, transfer(Proc::Bm, bytes), a);
                 records_.back().l2_wait = l2_wait;
+                if (credit_set) records_.back().ready_by = Record::ReadyBy::Credit;
                 r.readers = std::max(r.readers, f);
                 moved_[k] = f;
                 if (a.l2) {

@@ -376,10 +376,11 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
                 if (!src) return Cause::Unknown;
                 if (src->kind != Action::Kind::Load) {
                     into->chain.push_back(src->action);
-                    // A source that finished after the Move was ready did not set its ready. A credit
-                    // stall would have set l2_wait (L2Slot, above), so what did is the Move's
-                    // handover: the program's issue order (at L-CA, the driver's window).
-                    if (src->finish < r->ready) return Cause::Issue;
+                    // The source set the Move's ready only if nothing later did: a credit (its L2
+                    // slot's), or its handover (the program's issue order; at L-CA, the window).
+                    using ReadyBy = TransactionalInterpreter::Record::ReadyBy;
+                    if (r->ready_by == ReadyBy::Credit) return Cause::L2Slot;
+                    if (r->ready_by == ReadyBy::Handover) return Cause::Issue;
                     // A Writeback it waits for ran long at the L2 banks: its stalls delayed the data.
                     return src->kind == Action::Kind::Writeback && src->bank_delay > 0 ? Cause::L2Bank : Cause::Result;
                 }

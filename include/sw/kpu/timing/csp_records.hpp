@@ -301,6 +301,10 @@ inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& ha
                     if (!first_credit) first_credit = c;
                 }
             std::uint64_t ready = std::max<std::uint64_t>(l.at, in);
+            // What set it: the inputs, the handover (later than the inputs), or a credit after both.
+            using ReadyBy = Rec::ReadyBy;
+            r.ready_by = l.at > in ? ReadyBy::Handover : ReadyBy::Input;
+            if (last_credit && *last_credit + 1 > ready) r.ready_by = ReadyBy::Credit;
             if (last_credit) ready = std::max<std::uint64_t>(ready, *last_credit + 1);
             // A process sees a completion on its next tick: starting one cycle after its inputs
             // is starting when they were there, not a wait.

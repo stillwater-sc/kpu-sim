@@ -418,8 +418,17 @@ TEST_CASE("Bank rows: a move whose writeback ran long at the banks names them", 
     CHECK(cause_of(rs) == Cause::Result);
     rs[1].bank_wait = rs[1].bank_delay = 8;
     CHECK(cause_of(rs) == Cause::L2Bank);
-    // Something later than the Writeback set the Move's ready (no credit stall, so its handover):
-    // the stalls did not delay it, and the walk names the issue order.
+    // L-CA's one-tick convention: a Move that starts the cycle after its Writeback finished has
+    // ready = start, one past the finish. The Writeback still set it.
+    rs[2].ready = rs[2].start = 31;
+    rs[2].finish = 35;
+    CHECK(cause_of(rs) == Cause::L2Bank);
+    // A later credit set the Move's ready (at L-T1 it can do so without an l2_wait, when a lane
+    // was as late): the slot, not the banks.
+    rs[2].ready_by = Rec::ReadyBy::Credit;
+    CHECK(cause_of(rs) == Cause::L2Slot);
+    // Its handover set it (the program's issue order): the stalls did not delay it.
+    rs[2].ready_by = Rec::ReadyBy::Handover;
     rs[2].ready = rs[2].start = 32;         // ready, and started, at its handover
     rs[2].finish = 36;
     rs[3].ready = rs[3].start = 36;
@@ -427,4 +436,28 @@ TEST_CASE("Bank rows: a move whose writeback ran long at the banks names them", 
     rs[4].ready = rs[4].start = 40;
     rs[4].finish = 50;
     CHECK(cause_of(rs) == Cause::Issue);
+}
+
+TEST_CASE("Bank rows: each level records what set a step's ready", "[program][csp][bubbles][banks]") {
+    // L-T1: a staged Move made ready by its L2 slot's credit says so. L-CA: a step's handover or a
+    // credit stall later than its inputs says so; the rest are their inputs'.
+    gen::Options o;
+    o.algo = "matmul";
+    o.size = 64;
+    o.tile = 16;
+    o.l3 = 32;
+    o.dataflow = "ws";
+    const std::string text = gen::generate(o);
+    const csp::lang::Program ast = csp::lang::parse(text);
+    auto d = platform::read_spec_file("tests/program/deploy/kpu_s1_combiner.json").device(0);
+    const auto lt1 = driver::csp_run_level(ExecutionLevel::BlockSequential, ast, &d, driver::csp_inputs(ast), 256, true);
+    REQUIRE_FALSE(lt1.skipped);
+    std::size_t credit = 0;
+    for (const Rec& r : lt1.records) credit += r.kind == K::Move && r.ready_by == Rec::ReadyBy::Credit;
+    CHECK(credit > 0);
+    const Run x = run();
+    std::map<Rec::ReadyBy, std::size_t> by;
+    for (const Rec& r : x.lca.records) ++by[r.ready_by];
+    CHECK(by[Rec::ReadyBy::Input] > 0);
+    CHECK(by[Rec::ReadyBy::Handover] + by[Rec::ReadyBy::Credit] > 0);
 }
