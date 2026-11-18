@@ -33,6 +33,8 @@
 
 #include <sw/kpu/program/csp/transactional.hpp>
 #include <sw/kpu/program/record/domain_flow_record.hpp>
+#include <sw/kpu/timing/csp_driver.hpp>
+#include <sw/kpu/timing/l2_banks.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -45,7 +47,7 @@ namespace sw::kpu::program::record {
 
 // The shared record's enums (§3), by index: event_kinds, layers and processes.
 namespace ev {
-enum Kind : std::uint8_t { Dma, BlockMove, Stream, Compute, Drain, Credit, Token };
+enum Kind : std::uint8_t { Dma, BlockMove, Stream, Compute, Drain, Credit, Token, BmRow, StrRow, DrainRow };
 enum Layer : std::uint8_t { Dram, L3, L2, Acc, L1 };
 enum Process : std::uint8_t { PDma, PBm, PStr, PCf };
 }  // namespace ev
@@ -54,7 +56,9 @@ enum Process : std::uint8_t { PDma, PBm, PStr, PCf };
 // `values` its final values. `pe_rows` x `pe_cols` is the array's edge, when the deployment gives it.
 inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::string& level,
                                      const std::vector<csp::TransactionalInterpreter::Record>& records,
-                                     const TileProgram& values, std::uint32_t pe_rows = 0, std::uint32_t pe_cols = 0) {
+                                     const TileProgram& values, std::uint32_t pe_rows = 0, std::uint32_t pe_cols = 0,
+                                     const std::vector<timing::CspDriver::Result::L2Booking>* bookings = nullptr,
+                                     const timing::L2Banks::Geometry* l2g = nullptr) {
     using DFR = DomainFlowRecord;
     using K = csp::Action::Kind;
     if (lb.cut) throw RecordError("record: a timed record needs every step; L-B's was cut at --dflow-limit");
@@ -146,6 +150,20 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
         r.events.push_back(e);
     };
     const std::uint8_t none = kNone8;
+    // A banked L2's bookings, by tile, mover or streamer, the clock the leg started and direction.
+    const bool banked = bookings && l2g && !bookings->empty();
+    auto bkey = [](const std::string& tile, bool mover, std::uint64_t at, bool into) {
+        return tile + (mover ? "/bm/" : "/str/") + std::to_string(at) + (into ? "/w" : "/r");
+    };
+    std::map<std::string, const timing::L2Banks::Booking*> booked;
+    std::uint64_t rows_used = 1;
+    if (banked)
+        for (const auto& [t, b] : *bookings) {
+            std::string name = t.operand + "[" + std::to_string(t.ti) + "," + std::to_string(t.tj) + "]";
+            booked[bkey(name, b.who == timing::L2Banks::Client::BlockMover, b.now, b.kind != timing::L2Banks::Access::Read)] = &b;
+            rows_used = std::max<std::uint64_t>(rows_used, b.first_row + b.rows.size());
+        }
+    std::vector<std::pair<std::uint64_t, const timing::L2Banks::Booking*>> with_rows;   // action -> its booking
     // Each tile's last transaction out of a layer, in program order, and whether it was a Store: a
     // Release's credit follows its own tile's last move out of L3 (an L2Release's, out of L2).
     struct Out { std::uint64_t end = 0; bool store = false; };
@@ -183,7 +201,20 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
             continue;
         }
         const std::uint64_t slot = (st.flags & DFR::kHasPlace) ? std::uint64_t(st.slot) : kNone64;
-        const std::uint64_t l2 = (st.flags & DFR::kHasL2) ? std::uint64_t(st.l2_slot) : kNone64;
+        // A staged copy or a partial: the step's own, whatever address a banked L2 gives it.
+        const bool staged = (st.flags & DFR::kHasL2) != 0;
+        std::uint64_t l2 = staged ? std::uint64_t(st.l2_slot) : kNone64;
+        // A banked L2 (#401): the transfer's booking gives its L2 address, the first row it took.
+        const timing::L2Banks::Booking* bk = nullptr;
+        if (banked) {
+            const bool into = k == K::Move || k == K::Drain, out_of = k == K::Feed || k == K::Writeback;
+            if (into || out_of) {
+                const auto it = booked.find(bkey(r.tile_name(st.tile), k == K::Move || k == K::Writeback, s.start, into));
+                if (it != booked.end()) bk = it->second;
+            }
+            l2 = bk ? bk->first_row : kNone64;
+        }
+        if (bk) with_rows.push_back({st.action, bk});
         const std::uint64_t t0 = s.start, t1 = s.finish;
         const std::uint32_t lane = s.lane;          // a token or credit is its process's, on its lane
         auto out_of = [&](std::uint8_t layer, bool store = false) { last_out[{st.tile, layer}] = {t1, store}; };
@@ -199,7 +230,7 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
                 break;
             case K::Feed:
                 add(st, ev::Stream, ev::PStr, ev::L2, ev::L1, l2, kNone64, t0, t1, lane);
-                if (l2 == kNone64) add(st, ev::Credit, ev::PStr, ev::L2, ev::L3, kNone64, kNone64, t1, t1, lane);
+                if (!staged) add(st, ev::Credit, ev::PStr, ev::L2, ev::L3, l2, kNone64, t1, t1, lane);
                 out_of(ev::L2);
                 break;
             case K::Call:
@@ -240,9 +271,70 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
         r.level_notes.push_back(std::to_string(in_place) + " credits left out: their tiles were read in place "
                                 "(the Combiner's init, bias and scale vectors, read from L3), which the record has "
                                 "no transaction for");
-    // Row order is event order: by cycle, then as emitted (a transaction before its token).
-    std::stable_sort(r.events.begin(), r.events.end(),
-                     [](const DFR::Event& a, const DFR::Event& b) { return a.cycle < b.cycle; });
+    // A banked L2 (#401): the geometry in rows, and each transfer's rows as row events under it.
+    std::size_t too_tall = 0;
+    if (banked) {
+        DFR::L2Rows g;
+        g.banks = l2g->banks;
+        g.row_bytes = l2g->row_bytes;
+        const std::uint64_t total = l2g->rows_per_bank ? std::uint64_t(l2g->rows_per_bank) * l2g->banks
+                                                       : (rows_used + l2g->banks - 1) / l2g->banks * l2g->banks;
+        g.rows = static_cast<std::uint32_t>(std::max<std::uint64_t>(1, total));
+        r.l2_rows = g;
+        for (const auto& [action, bk] : with_rows) {
+            const DFR::Step& st = r.steps.at(action);
+            const K k = static_cast<K>(st.kind);
+            const std::uint8_t kind = k == K::Feed ? ev::StrRow : k == K::Drain ? ev::DrainRow : ev::BmRow;
+            const std::uint8_t proc = k == K::Move || k == K::Writeback ? ev::PBm : ev::PStr;
+            const auto& tl = r.tiles.at(st.tile);
+            const auto& op = r.operands.at(tl.operand);
+            const std::uint64_t tile_rows = std::min<std::uint64_t>(op.tile_rows, op.rows - tl.ti * op.tile_rows);
+            if (bk->rows.size() > tile_rows) { ++too_tall; continue; }      // E3: a row inside the tile
+            const std::uint8_t src = k == K::Move ? ev::L3 : k == K::Drain ? ev::Acc : ev::L2;
+            const std::uint8_t dst = k == K::Move || k == K::Drain ? ev::L2 : k == K::Feed ? ev::L1 : ev::L3;
+            const std::uint64_t slot = (st.flags & DFR::kHasPlace) ? std::uint64_t(st.slot) : kNone64;
+            for (std::size_t q = 0; q < bk->rows.size(); ++q) {
+                DFR::Event e;
+                e.action = st.action;
+                e.where = st.where;
+                e.tile = st.tile;
+                e.kind = kind;
+                e.process = proc;
+                e.src = src;
+                e.dst = dst;
+                const std::uint64_t row = bk->first_row + q;
+                e.src_addr = src == ev::L2 ? row : src == ev::L3 ? slot : kNone64;
+                e.dst_addr = dst == ev::L2 ? row : dst == ev::L3 ? slot : kNone64;
+                e.row = static_cast<std::uint32_t>(q);
+                e.beat = 0;
+                e.cycle = bk->rows[q];
+                e.end = bk->rows[q] + bk->per_row;
+                e.parent = action;                  // the action, until the transaction's row is known
+                r.events.push_back(e);
+            }
+        }
+        r.level_notes[0] = "row progress: each L2 transfer's rows as " + level + " booked them on the banks' ports "
+                           "(BM_ROW, STR_ROW, DRAIN_ROW: row r of the transfer, beat 0, [its clock, + its row's clocks))";
+        r.level_notes[1] = "L2 by banks and rows (row-mod-banks): an event's L2 address is its transfer's first row, "
+                           "which is the producer's own placement (§5.3); the accumulator's and the array edge's, none";
+        if (too_tall)
+            r.level_notes.push_back(std::to_string(too_tall) + " transfers have more L2 rows than their tile has rows; "
+                                    "their row events are left out (a row event is a row of its tile, E3)");
+    }
+    // Row order is event order: by cycle, then as emitted (a transaction before its token, a
+    // transaction before its rows).
+    std::stable_sort(r.events.begin(), r.events.end(), [](const DFR::Event& a, const DFR::Event& b) {
+        const bool ra = a.kind >= ev::BmRow, rb = b.kind >= ev::BmRow;
+        return a.cycle != b.cycle ? a.cycle < b.cycle : (!ra && rb);
+    });
+    // A row event's parent: its action's transaction, by its final row.
+    if (banked) {
+        std::map<std::uint64_t, std::uint64_t> tx_of;
+        for (std::size_t i = 0; i < r.events.size(); ++i)
+            if (r.events[i].kind <= ev::Drain) tx_of.emplace(r.events[i].action, i);
+        for (auto& e : r.events)
+            if (e.kind >= ev::BmRow) e.parent = tx_of.at(e.parent);
+    }
     r.cycles = 0;
     for (const auto& e : r.events) r.cycles = std::max(r.cycles, e.end);
     return r;

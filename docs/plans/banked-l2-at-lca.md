@@ -68,7 +68,7 @@ In this PR:
 - `level_models` reports `l2.banks_per_tile` as modelled at L-CA. Its `unmapped` notes name the
   defaults it leaves, and the parts of the `systolic` block it doesn't use.
 
-Next, in the slice's second PR:
+In the slice's second PR (done):
 
 - **The bubble report:** a transfer's bank stalls as a wait cause.
 - **The `.dflow` record (6.2):** L2 becomes `{"modelled": true, "banks", "rows", "row_bytes",

@@ -114,7 +114,7 @@ inline Proc proc_of(Action::Kind k) {
 // The streamers' lanes are the streamers the events name.
 inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& handovers,
                               const std::vector<CspDriver::ProtocolEvent>& events, std::size_t dma, std::size_t bm,
-                              std::size_t cf) {
+                              std::size_t cf, const std::vector<CspDriver::Result::L2Booking>* bookings = nullptr) {
     using namespace detail;
     using Rec = program::csp::TransactionalInterpreter::Record;
     using program::csp::TransactionalInterpreter;
@@ -319,6 +319,27 @@ inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& ha
         if (r.kind == Action::Kind::Call) feeds_since_call.clear();
     }
 
+    // A banked L2's bookings (#401): each L2 leg's rows and the clocks they waited for their banks,
+    // matched by tile, process, the clock the leg started at and its direction into or out of L2.
+    if (bookings && !bookings->empty()) {
+        auto key = [](const program::TileCoord& t, Proc p, std::uint64_t at, bool into) {
+            return t.to_string() + "/" + std::to_string(static_cast<int>(p)) + "/" + std::to_string(at) + (into ? "/w" : "/r");
+        };
+        std::map<std::string, Cycle> wait;
+        for (const auto& [t, b] : *bookings) {
+            const Proc p = b.who == L2Banks::Client::BlockMover ? Proc::Bm : Proc::Str;
+            wait[key(t, p, b.now, b.kind != L2Banks::Access::Read)] += b.stalls;
+        }
+        for (Leg& l : legs) {
+            const Action::Kind k = l.rec.kind;
+            const bool into = k == Action::Kind::Move || k == Action::Kind::Drain;
+            const bool out_of = k == Action::Kind::Writeback || k == Action::Kind::Feed;
+            if (!into && !out_of) continue;
+            if (k == Action::Kind::Writeback && l.leg != 0) continue;
+            const auto it = wait.find(key(l.rec.tile, l.rec.proc, l.rec.start, into));
+            if (it != wait.end()) l.rec.bank_wait = it->second;
+        }
+    }
     for (const Leg& l : legs) {
         if (has_process(l.rec.kind)) out.busy[TransactionalInterpreter::name(l.rec.proc)] += l.rec.finish - l.rec.start;
         out.records.push_back(l.rec);

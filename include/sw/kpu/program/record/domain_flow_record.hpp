@@ -271,6 +271,10 @@ struct DomainFlowRecord {
     std::vector<Event> events;
     std::uint64_t cycles = 0;                       // a timed record's cycles to result: its latest end
     std::vector<std::string> level_notes;           // what a timed level does not model (not_modelled)
+    // A banked L2 (#401): banks of rows, row i in bank i mod banks. Set, a timed record declares L2
+    // in the rows form, its events' L2 addresses are rows, and its transfers have row events.
+    struct L2Rows { std::uint32_t banks = 1, rows = 1, row_bytes = 1; };
+    std::optional<L2Rows> l2_rows;
     bool timed() const { return level != "L-B"; }
 
     std::string tile_name(std::uint32_t t) const {

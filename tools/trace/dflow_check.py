@@ -135,9 +135,10 @@ emit (with identities), typed element values, operand domains, expected values a
     E1 references             an event's id is its row; its kind, process, layers, tile, action,
                               position and parent exist; its layers are modelled and its addresses
                               inside them; a transaction moves between the layers its kind names
-    E2 identities             no two events share a key (kind, process, tile, layers and addresses,
-                              the position's program line and loop indices, row, beat), and none
-                              shares (kind, action, row, beat)
+    E2 identities             no two events share a key (kind, process, tile, layers, the L3 and
+                              DRAM addresses -- L2's and the accumulator's are placement, not
+                              identity -- the position's program line and loop indices, row, beat),
+                              and none shares (kind, action, row, beat)
     E3 progress               a row event (BM_ROW, STR_ROW, DRAIN_ROW) is a child of a transaction
                               of its kind, of the same tile and action, its row inside the tile, and
                               (timed) inside its parent's [cycle, end]; only row events have rows
@@ -1378,8 +1379,11 @@ def check_v6(m, T, bad):
     for e in range(ne):
         if not good[e]:
             continue
-        key = (E["kind"][e], E["process"][e], E["tile"][e], E["src"][e], E["src_addr"][e], E["dst"][e],
-               E["dst_addr"][e], line_of(E["where"][e]), loops_of(E["where"][e]), E["row"][e], E["beat"][e])
+        # L2 and accumulator addresses are each producer's placement, not identity (§5.3; #401).
+        place = lambda layer, a: NONE64 if layer in (L2, ACC) else a
+        key = (E["kind"][e], E["process"][e], E["tile"][e], E["src"][e], place(E["src"][e], E["src_addr"][e]), E["dst"][e],
+               place(E["dst"][e], E["dst_addr"][e]), line_of(E["where"][e]), loops_of(E["where"][e]), E["row"][e],
+               E["beat"][e])
         if key in keys:
             bad("E2", f"events {keys[key]} and {e} ({EVENT_KINDS[E['kind'][e]]}) share an identity")
         keys.setdefault(key, e)

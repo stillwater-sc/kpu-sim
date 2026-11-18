@@ -44,7 +44,9 @@ class Diff(unittest.TestCase):
         self.assertEqual(code, 0, o)
         self.assertEqual((o["only_a"]["count"], o["only_b"]["count"]), (0, 0))
         self.assertIsNone(o["first_divergence"])
-        self.assertEqual(o["dropped_addresses"], [])
+        # L2's and the accumulator's addresses are placement, never identity (#401).
+        self.assertEqual(o["dropped_addresses"], ["acc", "l2"])
+        self.assertEqual(o["placement"]["count"], 0)
 
     def test_a_shifted_event_is_the_first_divergence(self):
         b = Bundle(LCA)
@@ -70,7 +72,13 @@ class Diff(unittest.TestCase):
     def test_the_levels_join_every_event_and_diverge(self):
         code, o = run(LT1, LCA)
         self.assertEqual(code, 1, o)
-        self.assertEqual((o["only_a"]["count"], o["only_b"]["count"]), (0, 0))
+        # Every transaction, token and credit joins. L-CA's banked L2 adds its transfers' rows
+        # (#401), which L-T1, timing a tile move whole, does not have: one-sided, each under a
+        # joined transaction.
+        self.assertEqual(o["only_a"]["count"], 0)
+        rows = sum(o["only_b"]["by_kind"].get(k, 0) for k in ("BM_ROW", "STR_ROW", "DRAIN_ROW"))
+        self.assertEqual(o["only_b"]["count"], rows)
+        self.assertEqual(o["only_b"]["rows_under_matched_transactions"], rows)
         self.assertGreater(o["matched_transactions"], 0)
         self.assertIsNotNone(o["first_divergence"])
         self.assertNotEqual(o["cycles"][0], o["cycles"][1])

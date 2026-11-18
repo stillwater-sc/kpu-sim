@@ -208,7 +208,8 @@ globalThis.OccCore = (() => {
   // are joined without their addresses. The first divergence: the earliest of A's matched events
   // whose start or duration differs.
   function join(A, B) {
-    const drop = new Set(LAYERS.filter(l => form(A.geometry, l) !== form(B.geometry, l)));
+    // L2's and the accumulator's addresses are placement, not identity (§5.3; #401), as in dflow_diff.py.
+    const drop = new Set(["l2", "acc", ...LAYERS.filter(l => form(A.geometry, l) !== form(B.geometry, l))]);
     // Distinct in its own record, a key can coincide with another once addresses are dropped: an
     // ambiguous join is refused, as dflow_diff.py refuses it, rather than matched to either.
     for (const [side, R] of [["A", A], ["B", B]]) {
@@ -269,7 +270,7 @@ globalThis.OccCore = (() => {
     // refused overlay leaves A alone, with no trace of the B before it (#472's review).
     if (J) {
       $("joined").textContent = `B joined: ${J.matched} events matched, ${J.onlyA} only in A, ${J.onlyB} only in B` +
-        (J.drop.length ? `; ${J.drop.join(", ")} addresses left out (their forms differ)` : "");
+        `; ${J.drop.join(", ")} addresses left out (L2's and the accumulator's are placement)`;
       $("first").disabled = J.first < 0;
     } else { $("joined").textContent = ""; $("first").disabled = true; }
     if (A) { header(); draw(); }

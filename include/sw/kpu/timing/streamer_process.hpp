@@ -281,7 +281,7 @@ private:
         if (cf < 0) cf = t.cf_tile;
         return config_.startup_latency +
                b.book(cf < 0 ? 0 : static_cast<std::size_t>(cf), slot, t.size_bytes, a, who, std::max(now, start),
-                      b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz), now);
+                      b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz), now, &t.tile_id);
     }
 
     /**

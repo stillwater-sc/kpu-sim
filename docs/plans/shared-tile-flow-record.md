@@ -224,6 +224,12 @@ the same program text, so the line is the same in both records.
 No two events in a record share a key. Among the events that name an action, no two share
 `(kind, action, row, beat)` either.
 
+- **L2's and the accumulator's addresses are not part of the key** (#401, decided 2026-11-18): they
+  are each producer's placement. kpu-sim's banked L2 puts a tile at its slot's rows, and the RTL at
+  rows its own allocator chooses, so the same transfer has different rows in the two records. L3's
+  and DRAM's addresses stay in the key, since the program places them. `dflow_diff.py` compares L2
+  and accumulator addresses on the matched events, and reports those that differ as *placed
+  differently*. E2 checks uniqueness with the same key.
 - The key is built from **what the event is**: which tile it moves, from where to where, in which
   iteration, and which row. It is not built from when the event happened or which engine instance
   ran it. So it is the same in a kpu-sim record and in an RTL record of the same schedule.
@@ -274,9 +280,10 @@ and L1 as `{"modelled": true, "slots": N}`, N ≥ 0:
 - a layer declared both ways, `slots` together with `banks`, `rows`, `row_bytes`, `interleave`
   or `cols`, is refused (G1).
 
-Two records whose L2 forms differ, a slotted kpu-sim record and the RTL's rows, still name the same
-transactions. Their L2 and accumulator addresses differ, so a comparison has to join them on the
-rest of the key (§5.3).
+A banked kpu-sim L-CA record (#401) declares L2 in the rows form instead, like the RTL: an event's L2
+address is its transfer's first row, and each transfer's rows are row events (BM_ROW, STR_ROW,
+DRAIN_ROW: row r of the transfer, beat 0, at the clock the bank served it). Either way, L2 and
+accumulator addresses are placement, not identity (§5.3), so records join on the rest of the key.
 
 **A word-addressed L3 (6.1, #398).** The RTL's L3 is a flat, word-addressed memory cell per site,
 placed by the host or `plan_gemm`, with no slots and no L3 credits (credits exist for its L2 and
@@ -540,8 +547,9 @@ what it reads with `dflow_check`.
 
 ## 11. Not in this version
 
-- **kpu-sim's row events.** L-T1 and L-CA write their events from 6.2 (§9.2, #402), without row
-  progress. Rows come with a level that models them (the L2 banks, #388; the PE grid, #401).
+- **kpu-sim's L-T1 row events.** L-CA writes them, from its banked L2's bookings (#401). L-T1 times
+  a tile move whole, so its record has none. The PE grid's rows (#401's wavefront slice) are not
+  yet events either.
 - **Golden event traces.** Ruled out by D3, as CI references. Event comparison between two records
   is a debugging tool, joined on the identity key (§5.3).
 

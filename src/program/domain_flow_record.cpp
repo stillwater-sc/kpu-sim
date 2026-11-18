@@ -88,7 +88,9 @@ void write_dflow(const DFR& rec, const std::string& dir) {
             {"l3", json{{"modelled", true}, {"slots", rec.l3}, {"banks", rec.banks}}},
             // By slot (6.2): the program's L2 slots, where a staged copy or a partial is; an
             // unstaged tile's L2 address is none. The accumulator and the edge have none.
-            {"l2", json{{"modelled", true}, {"slots", rec.l2}}},
+            {"l2", rec.l2_rows ? json{{"modelled", true}, {"banks", rec.l2_rows->banks}, {"rows", rec.l2_rows->rows},
+                                      {"row_bytes", rec.l2_rows->row_bytes}, {"interleave", "row-mod-banks"}}
+                               : json{{"modelled", true}, {"slots", rec.l2}}},
             {"acc", json{{"modelled", true}, {"slots", 0}}},
             {"l1", rec.pe_rows ? json{{"modelled", true}, {"rows", rec.pe_rows}, {"cols", rec.pe_cols}}
                                : json{{"modelled", true}, {"slots", 0}}}};
@@ -416,6 +418,11 @@ DFR read_dflow(const std::string& dir) {
             if (!m.at("time").is_null()) rec.cycles = m.at("time").at("cycles").get<std::uint64_t>();
             if (rec.timed()) {
                 for (const json& s : m.at("not_modelled")) rec.level_notes.push_back(s.get<std::string>());
+                // A banked L2's rows (#401), when the record declares them.
+                const json& l2 = m.at("geometry").at("l2");
+                if (l2.contains("rows"))
+                    rec.l2_rows = DFR::L2Rows{l2.at("banks").get<std::uint32_t>(), l2.at("rows").get<std::uint32_t>(),
+                                              l2.at("row_bytes").get<std::uint32_t>()};
                 // A timed record's array edge is its geometry's (it has no L-T1 overlay to carry it).
                 const json& l1 = m.at("geometry").at("l1");
                 if (l1.contains("rows")) {

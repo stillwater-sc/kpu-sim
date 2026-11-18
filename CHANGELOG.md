@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **L-CA's banked L2 in its records** (#401, slice 1's second part; closes #402's last item).
+  - **Timed record:** an L-CA record of a banked L2 declares it in the rows form (banks, rows, row
+    width, row-mod-banks), like the RTL's. An event's L2 address is its transfer's first row. Each
+    transfer's rows are row events (BM_ROW, STR_ROW, DRAIN_ROW), at the clocks the banks served
+    them.
+  - **Bookings:** the calendar keeps each transfer's booking when L-CA keeps its events.
+  - **Bubble report:** each L-CA leg carries its bank wait (`bank_wait`), and the report blames
+    "L2 bank ports" when an operand's transfer ran long because its rows waited for their banks.
+  - **Identity (§5.3, decided 2026-11-18):** L2's and the accumulator's addresses are each
+    producer's placement, not part of the identity key. `dflow_diff.py` and the occupancy viewer
+    join without them and report matched events placed differently, and E2 checks uniqueness with
+    the same key. So a banked L-CA record still joins the RTL's.
+
 ### Changed
 
 - **Two L-CA characterizations restated at the deployment's rates and banks** (#462). #458 pinned

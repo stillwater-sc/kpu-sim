@@ -695,6 +695,8 @@ public:
     [[nodiscard]] CreditPool& l2_credits() { return l2_credits_; }
     /// The banked L2's calendar and its counts (#401); null when L2 is pooled.
     [[nodiscard]] const L2Banks* l2_banks() const { return l2_banks_.get(); }
+    /// Keep each L2 transfer's booking (its rows' clocks; L2Banks::log) for the run's record.
+    void keep_l2_log(bool keep) { if (l2_banks_) l2_banks_->keep_log(keep); }
     [[nodiscard]] TagCAM& l3_tag_cam() { return l3_tile_tag_cam(single_l3_tile("l3_tag_cam")); }
     [[nodiscard]] size_t l3_tiles() const { return l3_tile_credits_.size(); }
     /// The compute fabric: its tiles (0 = the legacy unbounded model) and each one's busy cycles.
