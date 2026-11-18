@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-CA's L2 is banked** (#401, slice 1; `docs/plans/banked-l2-at-lca.md`). A compute tile's L2 is
+  banks of rows, row i in bank i mod N (#383; N a power of two, esg#14). Each bank serves 2 reads
+  and 1 write per clock (esg#24), and reads return 4 clocks late (`timing/l2_banks.hpp`).
+  - Every L2 transfer (a block move, a writeback, a feed, a drain, a Combiner merge as a
+    read-modify-write) books its rows on their banks' ports. A row that finds them taken waits a
+    clock, counted by client and by bank.
+  - **Geometry:** the deployment's `systolic` scratchpad when it declares one; otherwise
+    `l2.banks_per_tile`, with a row of the array's columns and the RTL's latency. The defaults are
+    named. With neither, L2 is pooled as before.
+  - The deployment validator refuses a bank count that isn't a power of two. `kpu-run` prints the
+    banks' row accesses and stalls.
+  - **Re-baselined:** values never change. The Streamer's reads never stall under os, where it is
+    the only reader; under ws and is the Combiner's read-modify-write competes for the read ports.
+    Makespans move by the read latency. The window rule of `test_csp_driver` is pinned to the
+    pooled L2 for #462 to restate.
+
 - **The resource-occupancy viewer** (#390, MVP; `tools/visualization/occupancy/`). It puts a timed
   `.dflow` record on one clock axis.
   - **Lanes:** one per process instance (each DMA engine, BlockMover, Streamer and compute tile),

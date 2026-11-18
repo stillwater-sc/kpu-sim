@@ -72,6 +72,15 @@ set_tests_properties(test_block_mover_process PROPERTIES
 )
 
 # StreamerProcess tests
+# The banked L2 at L-CA (#401 slice 1): rows walk the banks, 2 reads and 1 write per bank per clock
+kpu_add_component_test(test_l2_banks "timing"
+    test_l2_banks.cpp
+)
+
+set_tests_properties(test_l2_banks PROPERTIES
+    LABELS "timing;l2;v0.10"
+)
+
 kpu_add_component_test(test_streamer_process "timing"
     test_streamer_process.cpp
 )

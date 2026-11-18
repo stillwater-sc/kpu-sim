@@ -118,7 +118,7 @@ TEST_CASE("the map's domain is exactly what the deployment declares",
 
     // Declaring the fields makes the names resolve, and nothing else changed.
     spec.device(0).l3.tiles = 2;
-    spec.device(0).l2.banks_per_tile = 3;
+    spec.device(0).l2.banks_per_tile = 4;       // a power of two: a row's bank is its low bits (#401)
     spec.device(0).l1.vectors = 2;
     const ResourceMap declared(spec);
     CHECK(declared.exists(parse_resource_name("dev0/l3[1]")));
@@ -127,8 +127,8 @@ TEST_CASE("the map's domain is exactly what the deployment declares",
     // Banks are still undeclared, so an L3 bank still names nothing even though L3 modules
     // now exist. Declaring one level does not imply the next.
     CHECK_FALSE(declared.exists(parse_resource_name("dev0/l3[1]/bank[0]")));
-    // 1 dram + 2 l3 + 2 cf + 2 regs + 2*3 l2 + 2*2 l1 = 17
-    CHECK(declared.size() == 17);
+    // 1 dram + 2 l3 + 2 cf + 2 regs + 2*4 l2 + 2*2 l1 = 19
+    CHECK(declared.size() == 19);
 }
 
 TEST_CASE("the map enumerates every declared resource and nothing twice",

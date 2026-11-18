@@ -367,10 +367,12 @@ TEST_CASE("L-CA: a staged copy is moved once and holds its L2 slot until its L2R
     };
     CHECK(transfers(staged) == 80);
     // Unstaged, every Move transfers (#424): the reuse is the program's to state, and the mover
-    // finds none of its own. So staging is what saves L-CA the 48 transfers, as at L-T1, and the
-    // staged program is the faster one.
+    // finds none of its own. So staging is what saves L-CA the 48 transfers, as at L-T1: the
+    // BlockMover's time. The staged program is no slower; with S1's banked L2 (#401) both runs are
+    // DMA-bound and a staged feed pays the read latency, so the makespans are within a few cycles
+    // (3856 against 3865 on gcc and clang, equal on MSVC, whose DMA timing differs by a cycle or two).
     CHECK(transfers(plain) == 128);
-    CHECK(staged.r.cycles < plain.r.cycles);
+    CHECK(staged.r.cycles <= plain.r.cycles);
     CHECK(staged.stats.bm_busy_cycles < plain.stats.bm_busy_cycles);
     std::printf("L-CA L2 staging: unstaged makespan %llu (bm busy %.0f, dma busy %.0f, cf busy %llu), "
                 "staged %llu (bm busy %.0f, dma busy %.0f, cf busy %llu)\n",

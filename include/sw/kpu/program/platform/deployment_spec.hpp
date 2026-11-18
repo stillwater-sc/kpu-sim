@@ -508,6 +508,10 @@ inline std::string DeploymentSpec::validate() const {
         if (d.l3.tiles && *d.l3.tiles == 0) return where + ": l3.tiles declared as zero";
         if (d.l2.banks_per_tile && *d.l2.banks_per_tile == 0)
             return where + ": l2.banks_per_tile declared as zero";
+        // The RTL's banks are a power of two: a row's bank is its low bits (#383, esg#14).
+        if (d.l2.banks_per_tile && !power_of_two(*d.l2.banks_per_tile))
+            return where + ": l2.banks_per_tile is " + std::to_string(*d.l2.banks_per_tile) +
+                   "; a row's bank is its low bits, so the count must be a power of two (esg#14)";
         if (d.l1.vectors && *d.l1.vectors == 0) return where + ": l1.vectors declared as zero";
         if (d.dma.burst_bytes && *d.dma.burst_bytes == 0)
             return where + ": dma.burst_bytes declared as zero";
@@ -546,6 +550,17 @@ inline std::string DeploymentSpec::validate() const {
                   std::pair{"sp_banks", y.sp_banks}, std::pair{"sp_rows_per_bank", y.sp_rows_per_bank},
                   std::pair{"acc_banks", y.acc_banks}, std::pair{"acc_rows_per_bank", y.acc_rows_per_bank}})
                 if (v == 0) return where + ": systolic." + name + " must be non-zero";
+            // A row's bank is its low bits (#383, esg#14): the bank counts are powers of two.
+            for (const auto& [name, v] : {std::pair{"sp_banks", y.sp_banks}, std::pair{"acc_banks", y.acc_banks}})
+                if (!power_of_two(v))
+                    return where + ": systolic." + name + " is " + std::to_string(v) +
+                           "; a row's bank is its low bits, so the count must be a power of two (esg#14)";
+            // L-CA's banked L2 takes the scratchpad's banks when both are declared (#401): a
+            // different l2.banks_per_tile would be declared and silently not modelled.
+            if (d.l2.banks_per_tile && *d.l2.banks_per_tile != y.sp_banks)
+                return where + ": l2.banks_per_tile is " + std::to_string(*d.l2.banks_per_tile) +
+                       " but systolic.sp_banks is " + std::to_string(y.sp_banks) +
+                       "; L2's banks are the scratchpad's, so declare one, or the same count";
             if (y.sp_macro.empty() || y.acc_macro.empty())
                 return where + ": systolic.sp_macro and systolic.acc_macro name the memories' circuit class";
             // The grouping is the fabric: one PE does one MAC a cycle.
