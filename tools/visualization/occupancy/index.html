@@ -256,20 +256,24 @@ globalThis.OccCore = (() => {
 
   function fail(msg) { $("err").textContent = msg; }
   function load(files, which) {
-    try {
-      const R = C.parse(files);
-      fail("");
-      // A new A drops the old overlay and its join before anything draws.
-      if (which === "b") { B = R; J = null; } else { A = R; B = null; J = null; sel = -1; fit(); }
-      if (A && B) {
-        try { J = C.join(A, B); } catch (e) { B = null; J = null; throw e; }
-        $("joined").textContent = `B joined: ${J.matched} events matched, ${J.onlyA} only in A, ${J.onlyB} only in B` +
-          (J.drop.length ? `; ${J.drop.join(", ")} addresses left out (their forms differ)` : "");
-        $("first").disabled = J.first < 0;
-      } else { J = null; $("joined").textContent = ""; $("first").disabled = true; }
-      header();
-      draw();
-    } catch (e) { fail("Cannot read this bundle: " + e.message); }
+    let R;
+    try { R = C.parse(files); } catch (e) { fail("Cannot read this bundle: " + e.message); return; }
+    fail("");
+    // A new A drops the old overlay and its join before anything draws.
+    if (which === "b") { B = R; J = null; } else { A = R; B = null; J = null; sel = -1; fit(); }
+    let refused = "";
+    if (A && B) {
+      try { J = C.join(A, B); } catch (e) { B = null; J = null; refused = e.message; }
+    }
+    // The comparison controls, the header and the canvas always describe the state now held: a
+    // refused overlay leaves A alone, with no trace of the B before it (#472's review).
+    if (J) {
+      $("joined").textContent = `B joined: ${J.matched} events matched, ${J.onlyA} only in A, ${J.onlyB} only in B` +
+        (J.drop.length ? `; ${J.drop.join(", ")} addresses left out (their forms differ)` : "");
+      $("first").disabled = J.first < 0;
+    } else { $("joined").textContent = ""; $("first").disabled = true; }
+    if (A) { header(); draw(); }
+    if (refused) fail("The overlay was refused: " + refused);
   }
   function header() {
     const R = A;

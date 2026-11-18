@@ -36,11 +36,12 @@ def bundle(path):
         raise ValueError(f"{path}: a {m.get('level', '?')} record with no time; occupancy needs a timed "
                          "level's record (kpu-run --dflow-lt1 or --dflow-lca)")
     # The size first, from the files' sizes, before reading or encoding any of them.
-    files = [d / t["file"] for t in m["tables"].values()]
-    total = sum(f.stat().st_size for f in files)
+    # Keyed by the manifest's own path for each table, which the page looks up exactly.
+    names = [t["file"] for t in m["tables"].values()]
+    total = sum((d / n).stat().st_size for n in names)
     if total > MAX_BYTES:
         raise ValueError(f"{path}: the columns are {total} bytes; view it from its folder instead")
-    bins = {f.name: base64.b64encode(f.read_bytes()).decode("ascii") for f in files}
+    bins = {n: base64.b64encode((d / n).read_bytes()).decode("ascii") for n in names}
     return {"manifest": manifest, "bins": bins}, m
 
 

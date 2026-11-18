@@ -109,6 +109,7 @@ class Viewer(unittest.TestCase):
         dst = cls.tmp / "ambiguous.dflow"
         shutil.copytree(b.dir, dst)
         b.close()
+        cls.ambiguous_copy_path = dst
         return dst
 
     @classmethod
@@ -223,6 +224,21 @@ class Viewer(unittest.TestCase):
         embedded = (self.tmp / "odd.html").read_text(encoding="utf-8").split("window.OCC_EMBED = ", 1)[1].split(";</script>", 1)[0]
         self.assertNotIn("<", embedded)
         self.assertIn("<!--<script>", json.loads(embedded)["a"]["manifest"])
+        # A table's file in a directory is embedded under the manifest's own path (#472's review).
+        nested = self.tmp / "nested.dflow"
+        shutil.copytree(A, nested)
+        mf = json.loads((nested / "manifest.json").read_text(encoding="utf-8"))
+        (nested / "cols").mkdir()
+        ev = mf["tables"]["events"]["file"]
+        shutil.move(str(nested / ev), str(nested / "cols" / ev))
+        mf["tables"]["events"]["file"] = f"cols/{ev}"
+        (nested / "manifest.json").write_text(json.dumps(mf), encoding="utf-8")
+        p = subprocess.run([sys.executable, str(HERE / "pack.py"), str(nested), "-o", str(self.tmp / "nested.html")],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        payload = json.loads((self.tmp / "nested.html").read_text(encoding="utf-8")
+                             .split("window.OCC_EMBED = ", 1)[1].split(";</script>", 1)[0])
+        self.assertIn(f"cols/{ev}", payload["a"]["bins"])
         p = subprocess.run([sys.executable, str(HERE / "pack.py"), str(LB), "-o", str(self.tmp / "x.html")],
                            capture_output=True, text=True)
         self.assertEqual(p.returncode, 2)
@@ -265,6 +281,16 @@ class Viewer(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertEqual(page.inner_text("#joined"), "")
                 self.assertTrue(page.is_disabled("#first"))
+                # A refused overlay leaves A alone and says so; nothing of an earlier B remains.
+                if AMBIGUOUS:
+                    page.set_input_files("#pick", str(AMBIGUOUS[0]))
+                    page.wait_for_timeout(300)
+                    page.set_input_files("#pickb", str(self.ambiguous_copy_path))
+                    page.wait_for_timeout(500)
+                    self.assertEqual(errors, [])
+                    self.assertIn("overlay was refused", page.inner_text("#err"))
+                    self.assertEqual(page.inner_text("#joined"), "")
+                    self.assertNotIn("B:", page.inner_text("#meta"))
                 browser.close()
         except Exception as e:                       # no browser binary: skip, as the other viewers do
             if "Executable doesn't exist" in str(e) or "BrowserType.launch" in str(e):
