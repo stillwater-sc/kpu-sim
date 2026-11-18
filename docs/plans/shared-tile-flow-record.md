@@ -409,6 +409,33 @@ A test pins that: renumbering every row event's beats keeps the result byte for 
 The digest is per element type, so an fp32 L-B run and an int8 RTL run of the same schedule are
 compared through their expected values (X3), not through each other's digests.
 
+### 8.3 Comparing two records: `dflow_diff.py` (#402)
+
+```bash
+python3 tools/trace/dflow_diff.py <a.dflow> <b.dflow> [--json] [--tolerance N] [--show K]
+```
+
+It joins two records of the same program on the identity key (§5.3). The key is spelled the same
+in both: a tile by its operand name and coordinates, a process and a layer by name, a loop by its
+variable's name. A layer whose addresses take different forms in the two records (6.2's slots
+against the RTL's rows, 6.1's words against slots) is joined without its addresses, and the
+report says which layers those are. It reports:
+
+- the events only one record has, by kind, each row event under its transaction, and whether that
+  transaction joined;
+- with both records timed, the first divergence: the earliest event, in A's cycles, whose start or
+  duration differs by more than `--tolerance`. Then the largest divergences of start and of duration.
+
+It is a debugging tool, not a CI gate (D3). It exits 0 when the two join with nothing one-sided and
+no divergence, 1 when they differ, and 2 when either cannot be read, fails the checker, or has no
+events (L-B's).
+
+The RTL sample's matrix is named L. L-CA maps a program's matrices onto A, B and C, so
+`dflow_rtl_sample.py --names A,B,C --program-out p.csp` writes the same sample under those names,
+with its program. L-CA's record of that program joins every one of the sample's transactions. The
+sample's row events are one-sided, under joined transactions. The first divergence is the first
+load.
+
 ## 9. Producers
 
 | Producer | Level | Writes |
@@ -506,5 +533,8 @@ python3 tools/trace/dflow_check.py --result rtl_sample.dflow            # cycles
 build/tools/kpu-run/kpu-run --program p.csp --level behavioral --dflow lb.dflow
 python3 tools/trace/dflow_rtl_sample.py --addressed -o rtl_addr.dflow  # 6.1: acc -> l3, word-addressed L3
 python3 tools/trace/test_dflow_check_v6.py rtl_sample.dflow lb.dflow rtl_addr.dflow   # every invariant bites
+python3 tools/trace/dflow_rtl_sample.py --names A,B,C --program-out s.csp -o rtl_abc.dflow
+build/tools/kpu-run/kpu-run --program s.csp --deploy tests/program/deploy/kpu_s1.json --level all --dflow-lca lca.dflow
+python3 tools/trace/dflow_diff.py lca.dflow rtl_abc.dflow                  # joins; names the first divergence
 cd build && ctest -L domainflow --output-on-failure
 ```

@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resource Occupancy</title>
+<!--
+  tools/visualization/occupancy/index.html -- the resource-occupancy viewer (#390, MVP).
+
+  A timed .dflow record (version 6; kpu-run --dflow-lt1 / --dflow-lca, or the RTL's) on one clock
+  axis: a lane per process instance (each DMA engine, BlockMover, Streamer and compute tile) holding
+  its transactions, and a lane per L3 and L2 slot holding the tiles in it, from the transaction that
+  fills it to the credit that frees it. Select a tile to light its whole life across every lane;
+  overlay a second record of the same program, joined event by event on the shared identity key
+  (docs/plans/shared-tile-flow-record.md §5.3, as tools/trace/dflow_diff.py joins them), and jump to
+  the first divergence.
+
+  Lanes the record does not model are not drawn: L2 banks, L1 stream buffers and the fabric's edges
+  arrive with the levels that model them (#401). Open a bundle folder, or a page pack.py built.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+:root {
+  --bg: #fbfaf7; --fg: #1d1d1b; --muted: #6b6a66; --line: #dedbd3; --panel: #f2f0ea;
+  --dma: #3a6ea5; --bm: #4f8a4a; --str: #b7792b; --cf: #8a4f8a; --credit: #a33; --token: #2a8a8a;
+  --l3: #5d6b8a; --l2: #6b8a5d; --sel: #e0a000; --b: #111;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161614; --fg: #e9e7e1; --muted: #9d9b94; --line: #34332f; --panel: #1f1e1b;
+    --dma: #6c9fd6; --bm: #7cbf76; --str: #e0a35a; --cf: #c58ac5; --credit: #e06a6a; --token: #5cc4c4;
+    --l3: #8f9dbd; --l2: #9dbd8f; --sel: #ffcc33; --b: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161614; --fg: #e9e7e1; --muted: #9d9b94; --line: #34332f; --panel: #1f1e1b;
+  --dma: #6c9fd6; --bm: #7cbf76; --str: #e0a35a; --cf: #c58ac5; --credit: #e06a6a; --token: #5cc4c4;
+  --l3: #8f9dbd; --l2: #9dbd8f; --sel: #ffcc33; --b: #f2f2f2;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+header, #controls, #inspector, #notes { padding: 8px 16px; }
+header h1 { font-size: 17px; margin: 0 0 2px; }
+#meta { color: var(--muted); font-size: 13px; }
+#controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; border-block: 1px solid var(--line); background: var(--panel); }
+#controls label { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+button, select, input { font: inherit; font-size: 13px; }
+#wrap { position: relative; overflow: hidden; }
+canvas { display: block; width: 100%; touch-action: none; cursor: grab; }
+#inspector { min-height: 3.5em; font-size: 13px; border-top: 1px solid var(--line); white-space: pre-wrap; font-family: ui-monospace, monospace; }
+#notes { color: var(--muted); font-size: 12.5px; white-space: pre-line; }
+#loader[hidden], .hide { display: none; }
+#err { color: var(--credit); padding: 0 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Resource occupancy</h1>
+  <div id="meta">Open a timed .dflow bundle (kpu-run --dflow-lt1 or --dflow-lca), or a page pack.py built.</div>
+</header>
+<div id="controls">
+  <span id="loader"><label>Bundle folder <input id="pick" type="file" webkitdirectory multiple></label></span>
+  <label>Overlay (B) <input id="pickb" type="file" webkitdirectory multiple></label>
+  <label>Tile <select id="tile"><option value="-1">none</option></select></label>
+  <button id="fit" type="button">Fit</button>
+  <button id="first" type="button" disabled>First divergence</button>
+  <span id="joined"></span>
+</div>
+<div id="err"></div>
+<div id="wrap"><canvas id="cv" height="400"></canvas></div>
+<div id="inspector">Click an interval to inspect it. Wheel to zoom, drag to pan.</div>
+<div id="notes"></div>
+<!--OCC_EMBED-->
+
+<!-- The data layer: no DOM, so test_viewer.py runs it in Node. -->
+<script id="occ-core">
+"use strict";
+globalThis.OccCore = (() => {
+  const LAYERS = ["dram", "l3", "l2", "acc", "l1"];
+  const KINDS = ["DMA", "BLOCK_MOVE", "STREAM", "COMPUTE", "DRAIN", "CREDIT", "TOKEN", "BM_ROW", "STR_ROW", "DRAIN_ROW"];
+  const TX = new Set([0, 1, 2, 3, 4]);
+  const ROWS = new Set([7, 8, 9]);
+  const L3 = 1, L2 = 2, DRAM = 0;
+  const NONE8 = 255, NONE32 = 0xFFFFFFFF;
+  const TYPED = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, u64: BigUint64Array, i64: BigInt64Array, f32: Float32Array, f64: Float64Array };
+  const NONE64 = 0xFFFFFFFFFFFFFFFFn;
+  function column(buf, t, name) {
+    const c = t.columns.find(x => x.name === name);
+    if (!c) throw new Error(`table has no column ${name}`);
+    const T = TYPED[c.dtype];
+    if (!T) throw new Error(`column ${name}: unknown dtype ${c.dtype}`);
+    if (c.offset + t.rows * T.BYTES_PER_ELEMENT > buf.byteLength) throw new Error(`column ${name} runs past the end of ${t.file}`);
+    const a = new T(buf, c.offset, t.rows);
+    if (c.dtype !== "u64" && c.dtype !== "i64") return a;
+    const out = new Float64Array(t.rows);
+    for (let i = 0; i < t.rows; i++) out[i] = a[i] === NONE64 && c.dtype === "u64" ? -1 : Number(a[i]);
+    return out;
+  }
+  function table(files, m, name) {
+    const t = m.tables[name];
+    if (!t) throw new Error("no table " + name);
+    const buf = files[t.file];
+    if (!buf) throw new Error("missing " + t.file);
+    const out = { rows: t.rows };
+    for (const c of t.columns) out[c.name] = column(buf, t, c.name);
+    return out;
+  }
+  // How a layer's addresses are spelled (as dflow_diff.form): slots, rows, words, edge, any, none.
+  function form(g, layer) {
+    const x = g ? g[layer] : null;
+    if (!x || !x.modelled) return "none";
+    if (layer === "dram") return "any";
+    if ("words" in x) return "words";
+    if ("slots" in x) return "slots";
+    if (layer === "l1") return "edge";
+    return "rows";
+  }
+
+  // files: { "manifest.json": text, "<table>.bin": ArrayBuffer }. A timed version-6 record.
+  function parse(files) {
+    const m = JSON.parse(files["manifest.json"]);
+    if (m.format !== "kpu-dflow") throw new Error("not a .dflow bundle");
+    if (m.version !== 6) throw new Error(`a version-${m.version} record: occupancy needs version 6's events`);
+    if (!m.time) throw new Error(`a ${m.level} record has no time: occupancy needs a timed level (L-T1, L-CA, RTL)`);
+    const R = { m, level: m.level, producer: m.producer, cycles: m.time.cycles };
+    const E = table(files, m, "events");
+    if (!E.cycle) throw new Error("the events have no cycle column");
+    R.E = E;
+    R.n = E.rows;
+    const T = table(files, m, "tiles"), W = table(files, m, "where"), L = table(files, m, "loops");
+    const ops = m.operands.map(o => o.name);
+    R.tileName = t => (t >= 0 && t < T.rows && t !== NONE32) ? `${ops[T.operand[t]]}[${T.ti[t]},${T.tj[t]}]` : "-";
+    R.tiles = T.rows;
+    const vars = m.vars || [];
+    R.where = w => {
+      if (w < 0 || w >= W.rows) return { line: null, loops: [] };
+      const f = W.loop_first[w], k = W.loop_count[w], loops = [];
+      for (let d = 0; d < k; d++) loops.push([vars[L.var[f + d]] ?? String(L.var[f + d]), L.value[f + d]]);
+      return { line: W.line[w], loops };
+    };
+    R.procs = m.processes || [];
+    // Lanes: one per process instance with transactions, then one per L3 slot and L2 slot used.
+    const lanes = new Map(), laneOf = new Int32Array(R.n).fill(-1);
+    const laneKey = (e) => `${R.procs[E.process[e]] ?? "?"}[${E.lane[e]}]`;
+    const order = { dma: 0, bm: 1, str: 2, cf: 3 };
+    for (let e = 0; e < R.n; e++) {
+      if (!TX.has(E.kind[e]) || E.process[e] === NONE8) continue;
+      const k = laneKey(e);
+      if (!lanes.has(k)) lanes.set(k, { name: k, kind: "process", proc: R.procs[E.process[e]], items: [] });
+      lanes.get(k).items.push(e);
+      laneOf[e] = 0;
+    }
+    const procLanes = [...lanes.values()].sort((a, b) => (order[a.proc] ?? 9) - (order[b.proc] ?? 9) || a.name.localeCompare(b.name, "en", { numeric: true }));
+    // Slot holdings, in a layer addressed by slot (not a word-addressed L3, not the RTL's L2 rows):
+    // each transaction that lands a tile in a slot opens a holding at its end; a credit that frees
+    // the slot (its source address) closes the open holding of its own tile there, else the oldest
+    // open one. A holding still open at the record's end is held to it.
+    const slotted = [form(m.geometry, "l3") === "slots", form(m.geometry, "l2") === "slots"];
+    const isSlot = (layer, addr) => addr >= 0 && ((layer === L3 && slotted[0]) || (layer === L2 && slotted[1]));
+    const holds = [];
+    const open = new Map();                 // "layer/slot" -> open holdings, oldest first
+    for (let e = 0; e < R.n; e++) {
+      const k = E.kind[e];
+      if (TX.has(k) && isSlot(E.dst[e], E.dst_addr[e])) {
+        const key = `${E.dst[e]}/${E.dst_addr[e]}`;
+        if (!open.has(key)) open.set(key, []);
+        open.get(key).push({ layer: E.dst[e], slot: E.dst_addr[e], tile: E.tile[e], from: E.end[e], ev: e });
+      } else if (k === 5 && isSlot(E.src[e], E.src_addr[e])) {
+        const list = open.get(`${E.src[e]}/${E.src_addr[e]}`);
+        if (!list || !list.length) continue;
+        let i = list.findIndex(o => o.tile === E.tile[e]);
+        if (i < 0) i = 0;
+        holds.push({ ...list[i], to: E.cycle[e], credit: e });
+        list.splice(i, 1);
+      }
+    }
+    for (const list of open.values()) for (const o of list) holds.push({ ...o, to: R.cycles, credit: -1 });
+    const slotLanes = new Map();
+    for (const h of holds) {
+      const name = `${LAYERS[h.layer]} slot ${h.slot}`;
+      if (!slotLanes.has(name)) slotLanes.set(name, { name, kind: LAYERS[h.layer], slot: h.slot, layer: h.layer, items: [] });
+      slotLanes.get(name).items.push(h);
+    }
+    const slots = [...slotLanes.values()].sort((a, b) => a.layer - b.layer || a.slot - b.slot);
+    R.lanes = [...procLanes, ...slots];
+    R.holds = holds;
+    R.geometry = m.geometry || {};
+    return R;
+  }
+
+  // An event's identity key (§5.3), spelled the same in any record: kind, process, tile by name,
+  // layers by name, addresses (but not a layer in `drop`), the position's line and loop indices,
+  // row, beat. As dflow_diff.py builds it.
+  function key(R, e, drop) {
+    const E = R.E;
+    const ln = l => l < LAYERS.length ? LAYERS[l] : null;
+    const addr = (l, a) => (a < 0 || drop.has(ln(l))) ? "" : String(a);
+    const w = R.where(E.where[e]);
+    return [KINDS[E.kind[e]], E.process[e] === NONE8 ? "" : (R.procs[E.process[e]] ?? ""), R.tileName(E.tile[e]),
+            ln(E.src[e]), addr(E.src[e], E.src_addr[e]), ln(E.dst[e]), addr(E.dst[e], E.dst_addr[e]),
+            w.line ?? "", w.loops.map(x => x.join("=")).join(" "),
+            E.row[e] === NONE32 ? "" : E.row[e], E.beat[e] === NONE32 ? "" : E.beat[e]].join("|");
+  }
+
+  // Join B onto A: each of A's events to B's of the same key. Layers whose address forms differ
+  // are joined without their addresses. The first divergence: the earliest of A's matched events
+  // whose start or duration differs.
+  function join(A, B) {
+    const drop = new Set(LAYERS.filter(l => form(A.geometry, l) !== form(B.geometry, l)));
+    // Distinct in its own record, a key can coincide with another once addresses are dropped: an
+    // ambiguous join is refused, as dflow_diff.py refuses it, rather than matched to either.
+    for (const [side, R] of [["A", A], ["B", B]]) {
+      const seen = new Map();
+      for (let e = 0; e < R.n; e++) {
+        const k = key(R, e, drop);
+        if (seen.has(k))
+          throw new Error(`${side}: events ${seen.get(k)} and ${e} share one identity once ${[...drop].join(", ") || "no layer"}'s ` +
+                          "addresses are left out, so the two records cannot be joined unambiguously");
+        seen.set(k, e);
+      }
+    }
+    const kb = new Map();
+    for (let e = 0; e < B.n; e++) kb.set(key(B, e, drop), e);
+    const match = new Int32Array(A.n).fill(-1);
+    let matched = 0, onlyA = 0, first = -1;
+    for (let e = 0; e < A.n; e++) {
+      const b = kb.get(key(A, e, drop));
+      if (b === undefined) { onlyA++; continue; }
+      match[e] = b;
+      kb.delete(key(A, e, drop));
+      matched++;
+      const ds = B.E.cycle[b] - A.E.cycle[e], dd = (B.E.end[b] - B.E.cycle[b]) - (A.E.end[e] - A.E.cycle[e]);
+      if ((ds || dd) && (first < 0 || A.E.cycle[e] < A.E.cycle[first] ||
+                         (A.E.cycle[e] === A.E.cycle[first] && A.E.end[e] < A.E.end[first]))) first = e;
+    }
+    return { drop: [...drop], match, matched, onlyA, onlyB: kb.size, first };
+  }
+
+  return { parse, join, key, form, LAYERS, KINDS, TX, ROWS };
+})();
+</script>
+
+<!-- The page. -->
+<script>
+"use strict";
+(() => {
+  const C = globalThis.OccCore;
+  const $ = id => document.getElementById(id);
+  const cv = $("cv"), ctx = cv.getContext("2d");
+  let A = null, B = null, J = null, sel = -1, view = { t0: 0, t1: 1 }, hit = [];
+  const LANE_H = 18, GUTTER = 150, TOP = 22;
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const color = proc => css({ dma: "--dma", bm: "--bm", str: "--str", cf: "--cf" }[proc] || "--muted");
+
+  function fail(msg) { $("err").textContent = msg; }
+  function load(files, which) {
+    let R;
+    try { R = C.parse(files); } catch (e) { fail("Cannot read this bundle: " + e.message); return; }
+    fail("");
+    // A new A drops the old overlay and its join before anything draws.
+    if (which === "b") { B = R; J = null; } else { A = R; B = null; J = null; sel = -1; fit(); }
+    let refused = "";
+    if (A && B) {
+      try { J = C.join(A, B); } catch (e) { B = null; J = null; refused = e.message; }
+    }
+    // The comparison controls, the header and the canvas always describe the state now held: a
+    // refused overlay leaves A alone, with no trace of the B before it (#472's review).
+    if (J) {
+      $("joined").textContent = `B joined: ${J.matched} events matched, ${J.onlyA} only in A, ${J.onlyB} only in B` +
+        (J.drop.length ? `; ${J.drop.join(", ")} addresses left out (their forms differ)` : "");
+      $("first").disabled = J.first < 0;
+    } else { $("joined").textContent = ""; $("first").disabled = true; }
+    if (A) { header(); draw(); }
+    if (refused) fail("The overlay was refused: " + refused);
+  }
+  function header() {
+    const R = A;
+    $("meta").textContent = `${R.level} · ${R.producer} · program ${R.m.program.name} · ${R.cycles.toLocaleString("en")} cycles to result · ` +
+      `${R.n.toLocaleString("en")} events · ${R.lanes.length} lanes` + (B ? `   |   B: ${B.level}, ${B.cycles.toLocaleString("en")} cycles` : "");
+    const s = $("tile");
+    s.replaceChildren(new Option("none", "-1"));
+    for (let t = 0; t < R.tiles; t++) s.append(new Option(R.tileName(t), String(t)));
+    s.value = String(sel);
+    const nm = (R.m.not_modelled || []).map(x => "· " + x);
+    $("notes").textContent = nm.length ? "Not modelled by this record:\n" + nm.join("\n") : "";
+  }
+  function fit() { if (A) view = { t0: 0, t1: Math.max(1, A.cycles) }; draw(); }
+  const X = t => GUTTER + (t - view.t0) / (view.t1 - view.t0) * (cv.clientWidth - GUTTER - 8);
+  function draw() {
+    if (!A) return;
+    const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = TOP + A.lanes.length * LANE_H + 8;
+    cv.style.height = h + "px";
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = css("--bg"); ctx.fillRect(0, 0, w, h);
+    ctx.font = "12px system-ui"; ctx.textBaseline = "middle";
+    // The clock axis.
+    ctx.fillStyle = css("--muted");
+    const span = view.t1 - view.t0, step = Math.pow(10, Math.floor(Math.log10(Math.max(1, span / 6))));
+    for (let t = Math.ceil(view.t0 / step) * step; t <= view.t1; t += step) {
+      const x = X(t);
+      ctx.fillRect(x, TOP - 4, 1, 4);
+      ctx.fillText(String(t), x + 2, 9);
+    }
+    hit = [];
+    const E = A.E;
+    // The first divergence's cycle, marked across the lanes: it may be a credit or token, which
+    // has no bar of its own.
+    if (J && J.first >= 0) {
+      const xf = X(E.cycle[J.first]);
+      if (xf >= GUTTER && xf <= w) { ctx.fillStyle = css("--credit"); ctx.fillRect(xf, TOP, 1, h - TOP); }
+    }
+    const lit = t => sel >= 0 && t === sel;
+    A.lanes.forEach((ln, i) => {
+      const y = TOP + i * LANE_H;
+      ctx.fillStyle = css("--line"); ctx.fillRect(0, y + LANE_H - 1, w, 1);
+      ctx.fillStyle = css("--fg"); ctx.fillText(ln.name, 6, y + LANE_H / 2);
+      if (ln.kind === "process") {
+        for (const e of ln.items) {
+          const x0 = X(E.cycle[e]), x1 = Math.max(x0 + 1, X(E.end[e]));
+          if (!(x1 < GUTTER || x0 > w)) {
+            ctx.fillStyle = lit(E.tile[e]) ? css("--sel") : color(ln.proc);
+            ctx.globalAlpha = sel >= 0 && !lit(E.tile[e]) ? 0.35 : 1;
+            ctx.fillRect(Math.max(GUTTER, x0), y + 3, x1 - Math.max(GUTTER, x0), LANE_H - 7);
+            ctx.globalAlpha = 1;
+            hit.push({ x0, x1, y, e });
+          }
+          // B's joined event, as an outline on the same lane: culled on its own interval.
+          if (J && B && J.match[e] >= 0) {
+            const b = J.match[e], bx0 = X(B.E.cycle[b]), bx1 = Math.max(bx0 + 1, X(B.E.end[b]));
+            if (bx1 < GUTTER || bx0 > w) continue;
+            ctx.strokeStyle = e === J.first ? css("--credit") : css("--b");
+            ctx.lineWidth = e === J.first ? 2 : 1;
+            ctx.strokeRect(Math.max(GUTTER, bx0) + 0.5, y + 1.5, Math.max(1, bx1 - Math.max(GUTTER, bx0)) - 1, LANE_H - 3);
+          }
+        }
+      } else {
+        for (const hd of ln.items) {
+          const x0 = X(hd.from), x1 = Math.max(x0 + 1, X(hd.to));
+          if (x1 < GUTTER || x0 > w) continue;
+          ctx.fillStyle = lit(hd.tile) ? css("--sel") : css(ln.kind === "l3" ? "--l3" : "--l2");
+          ctx.globalAlpha = sel >= 0 && !lit(hd.tile) ? 0.3 : 0.85;
+          ctx.fillRect(Math.max(GUTTER, x0), y + 4, x1 - Math.max(GUTTER, x0), LANE_H - 9);
+          ctx.globalAlpha = 1;
+          hit.push({ x0, x1, y, hold: hd });
+        }
+      }
+    });
+  }
+  function inspect(px, py) {
+    const h = hit.find(r => px >= r.x0 - 1 && px <= r.x1 + 1 && py >= r.y && py < r.y + LANE_H);
+    if (!h) return;
+    if (h.hold) inspectHold(h.hold); else inspectEvent(h.e);
+  }
+  function inspectHold(hd) {
+    {
+      sel = hd.tile;
+      $("inspector").textContent = `${C.LAYERS[hd.layer]} slot ${hd.slot}: ${A.tileName(hd.tile)}, held [${hd.from}, ${hd.to})` +
+        (hd.credit < 0 ? ", to the record's end" : `, freed by event ${hd.credit}`);
+    }
+    $("tile").value = String(sel);
+    draw();
+  }
+  function inspectEvent(e) {
+    const E = A.E;
+    {
+      const w = A.where(E.where[e]);
+      sel = E.tile[e];
+      let s = `event ${e}: ${C.KINDS[E.kind[e]]} ${A.tileName(E.tile[e])} ${C.LAYERS[E.src[e]]}` +
+        (E.src_addr[e] >= 0 ? `@${E.src_addr[e]}` : "") + ` -> ${C.LAYERS[E.dst[e]]}` + (E.dst_addr[e] >= 0 ? `@${E.dst_addr[e]}` : "") +
+        `  [${E.cycle[e]}, ${E.end[e]})  ${A.procs[E.process[e]] ?? "-"}[${E.lane[e]}]  action ${E.action[e]}` +
+        (w.line !== null ? `  line ${w.line}` : "") + (w.loops.length ? "  " + w.loops.map(x => x.join("=")).join(" ") : "");
+      if (J) {
+        const b = J.match[e];
+        s += b < 0 ? "\nB: no event of this identity" :
+          `\nB: event ${b} [${B.E.cycle[b]}, ${B.E.end[b]})  start ${B.E.cycle[b] - E.cycle[e] >= 0 ? "+" : ""}${B.E.cycle[b] - E.cycle[e]}, ` +
+          `duration ${(B.E.end[b] - B.E.cycle[b]) - (E.end[e] - E.cycle[e]) >= 0 ? "+" : ""}${(B.E.end[b] - B.E.cycle[b]) - (E.end[e] - E.cycle[e])}`;
+      }
+      $("inspector").textContent = s;
+    }
+    $("tile").value = String(sel);
+    draw();
+  }
+
+  // Zoom (wheel, about the pointer) and pan (drag).
+  cv.addEventListener("wheel", ev => {
+    if (!A) return;
+    ev.preventDefault();
+    const r = cv.getBoundingClientRect(), px = ev.clientX - r.left;
+    const t = view.t0 + (px - GUTTER) / (cv.clientWidth - GUTTER - 8) * (view.t1 - view.t0);
+    const k = ev.deltaY > 0 ? 1.25 : 0.8, span = Math.max(4, (view.t1 - view.t0) * k);
+    view = { t0: t - (t - view.t0) * span / (view.t1 - view.t0), t1: 0 };
+    view.t1 = view.t0 + span;
+    draw();
+  }, { passive: false });
+  let drag = null;
+  cv.addEventListener("pointerdown", ev => { drag = { x: ev.clientX, t0: view.t0, t1: view.t1, moved: false }; cv.setPointerCapture(ev.pointerId); });
+  cv.addEventListener("pointermove", ev => {
+    if (!drag) return;
+    const dx = ev.clientX - drag.x;
+    if (Math.abs(dx) > 2) drag.moved = true;
+    const dt = -dx / (cv.clientWidth - GUTTER - 8) * (drag.t1 - drag.t0);
+    view = { t0: drag.t0 + dt, t1: drag.t1 + dt };
+    draw();
+  });
+  cv.addEventListener("pointerup", ev => {
+    const r = cv.getBoundingClientRect();
+    if (drag && !drag.moved) inspect(ev.clientX - r.left, ev.clientY - r.top);
+    drag = null;
+  });
+  $("fit").onclick = fit;
+  $("tile").onchange = () => { sel = Number($("tile").value); draw(); };
+  $("first").onclick = () => {
+    if (!J || J.first < 0) return;
+    const e = J.first, c = A.E.cycle[e], span = Math.max(40, (A.E.end[e] - c) * 8);
+    const t0 = Math.max(0, c - span / 2);
+    view = { t0, t1: t0 + span };
+    sel = A.E.tile[e];
+    inspectEvent(e);                        // a transaction, or a credit or token with no bar
+  };
+  addEventListener("resize", draw);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+  // A folder read finishing after a newer pick is stale: each pick has a generation, and a new A
+  // makes any overlay read in flight stale too.
+  const gen = { a: 0, b: 0 };
+  async function pick(ev, which) {
+    const g = which === "a" ? (gen.b++, ++gen.a) : ++gen.b, ga = gen.a;
+    // Each file under its path in the chosen folder (its root left off), which is how the manifest
+    // names a table's file, a nested one included (#472's review).
+    const files = {};
+    for (const f of ev.target.files) {
+      const rel = f.webkitRelativePath ? f.webkitRelativePath.split("/").slice(1).join("/") : f.name;
+      if (rel === "manifest.json") files[rel] = await f.text();
+      else if (rel.endsWith(".bin")) files[rel] = await f.arrayBuffer();
+    }
+    if (!files["manifest.json"]) { fail("That folder has no manifest.json: choose a .dflow bundle folder."); return; }
+    if (which === "b" && !A) { fail("Open a record (A) first, then its overlay (B)."); return; }
+    if ((which === "a" && g !== gen.a) || (which === "b" && (g !== gen.b || ga !== gen.a))) return;   // stale
+    load(files, which);
+  }
+  $("pick").onchange = ev => pick(ev, "a");
+  $("pickb").onchange = ev => pick(ev, "b");
+  // Bundles pack.py embedded: A, and optionally B.
+  const b64 = s => { const bin = atob(s), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; };
+  const unpack = E => { const files = { "manifest.json": E.manifest }; for (const [n, d] of Object.entries(E.bins)) files[n] = b64(d); return files; };
+  if (window.OCC_EMBED) {
+    $("loader").hidden = true;
+    load(unpack(window.OCC_EMBED.a), "a");
+    if (window.OCC_EMBED.b) load(unpack(window.OCC_EMBED.b), "b");
+  }
+})();
+</script>
+</body>
+</html>

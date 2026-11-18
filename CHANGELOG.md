@@ -24,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Makespans move by the read latency. The window rule of `test_csp_driver` is pinned to the
     pooled L2 for #462 to restate.
 
+- **The resource-occupancy viewer** (#390, MVP; `tools/visualization/occupancy/`). It puts a timed
+  `.dflow` record on one clock axis.
+  - **Lanes:** one per process instance (each DMA engine, BlockMover, Streamer and compute tile),
+    with its transactions; and one per L3 and L2 slot, with the tiles it holds, from the
+    transaction that lands each tile to the credit that frees it.
+  - **Interaction:** selecting a tile lights its whole life. A second record of the same program
+    overlays the first, joined event by event on the identity key as `dflow_diff.py` joins them,
+    with a jump to the first divergence. Canvas-rendered, with zoom and pan.
+  - `pack.py` embeds a record and its overlay in one page.
+  - The test runs the page's data layer in Node against `dflow_check`, and its join against
+    `dflow_diff.py`.
+  - Bank, L1-buffer and fabric-edge lanes arrive with the levels that model them (#401, #389, #385).
+
 - **The timed levels write their own domain-flow records** (#402, part 1 of 2). `kpu-run
   --dflow-lt1 <dir>` and `--dflow-lca <dir>` write L-T1's and L-CA's runs as `.dflow` 6.2 records.
   - **Contents:** L-B's steps, the level's events with their cycles, and the level's own final
@@ -39,7 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     freed at its ejection, before the DRAM write ends (its credit is stamped at the store's end);
     the Combiner's in-place reads of an init, a bias or a scale's vectors (their credits are left
     out). The record counts each.
-  - Next: `dflow_diff.py`, which joins two records event by event.
+  - **`tools/trace/dflow_diff.py`** (part 2) joins two records of one program on the identity key.
+    It reports the events only one record has (row events under their transactions) and, with both
+    timed, the first and the largest divergences of start and duration. A layer whose addresses
+    differ in form (slots against rows) is joined without them. It is a debugging tool, not a CI
+    gate. `dflow_rtl_sample.py --names A,B,C --program-out` writes the sample under names L-CA runs.
+    L-CA's record of its program joins every one of the sample's transactions, and the diff names
+    the first divergence: the first load's DMA.
 
 - **The full int8 epilogue, generated** (#395). `kpu-csp-gen --dtype int8 --requant m,shift
   --init bias|bias-row` (with or without `--requant-channels`) now writes C = scale(A . B + D)

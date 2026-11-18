@@ -25,6 +25,11 @@ times a fixed pitch (the host's placement, invented here).
 Usage:
     python3 dflow_rtl_sample.py -o rtl_sample.dflow
     python3 dflow_rtl_sample.py --addressed -o rtl_sample_addressed.dflow
+    python3 dflow_rtl_sample.py --names A,B,C --program-out s.csp -o rtl_sample_abc.dflow
+
+--names gives the operands other names, the same record otherwise (#402): L-CA maps a program's
+matrices onto A, B and C, so under A,B,C it runs the sample's program (--program-out), and
+dflow_diff.py joins its record with the sample's.
 
 Standard library only.
 
@@ -33,6 +38,7 @@ Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -420,13 +426,40 @@ def build(addressed=False):
     return manifest, tabs
 
 
+def rename(manifest, names):
+    """The same record under other operand names: tiles name their operand by index, so only the
+    manifest's operands and the program text change. Names are whole words in the program."""
+    old = [o[0] for o in OPERANDS]
+    if names == old:
+        return
+    for o, n in zip(manifest["operands"], names):
+        o["name"] = n
+    text = manifest["program"]["text"]
+    tmp = {o: f"\x00{i}\x00" for i, o in enumerate(old)}
+    for o in old:
+        text = re.sub(rf"\b{o}\b(?=\[| |,|\))", tmp[o], text)
+    for o, n in zip(old, names):
+        text = text.replace(tmp[o], n)
+    manifest["program"]["text"] = text
+
+
 def main():
     ap = argparse.ArgumentParser(description="Write the hand-written RTL-level .dflow sample.")
     ap.add_argument("-o", "--output", required=True)
     ap.add_argument("--addressed", action="store_true",
                     help="version 6.1: the accumulator stores straight to L3, and L3 is word-addressed")
+    ap.add_argument("--names", default="L,B,C",
+                    help="the operands' names, in place of L,B,C (#402: L-CA maps a program's matrices onto A, "
+                         "B and C, so A,B,C gives a program L-CA runs)")
+    ap.add_argument("--program-out", help="also write the sample's CSP program, under --names, to this file")
     a = ap.parse_args()
+    names = a.names.split(",")
+    if len(names) != len(OPERANDS) or len(set(names)) != len(names) or not all(n.isidentifier() for n in names):
+        ap.error(f"--names takes {len(OPERANDS)} distinct names, for {','.join(o[0] for o in OPERANDS)}")
     manifest, tables = build(a.addressed)
+    rename(manifest, names)
+    if a.program_out:
+        Path(a.program_out).write_text(manifest["program"]["text"])
     d = write_bundle(a.output, manifest, tables)
     ev = next(t for t in tables if t.name == "events")
     print(f"wrote {d} (RTL sample: {manifest['totals']['actions']} actions, {ev.rows} events, "
