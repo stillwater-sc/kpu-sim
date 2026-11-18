@@ -179,8 +179,9 @@ inline std::optional<CspDeviceConfig> csp_config_from(
         L2Banks::Geometry g;
         g.banks = static_cast<std::uint32_t>(y.sp_banks);
         g.rows_per_bank = static_cast<std::uint32_t>(y.sp_rows_per_bank);
-        g.row_bytes = static_cast<std::uint32_t>(
-            std::max<program::Dim>(1, y.grid_cols * y.tile_cols * std::max<program::Dim>(1, y.input_bits / 8)));
+        // The whole row's bits, rounded up to bytes: 4-bit inputs pack two to a byte (#471's review).
+        const std::uint64_t bits = std::uint64_t(y.grid_cols) * y.tile_cols * y.input_bits;
+        g.row_bytes = static_cast<std::uint32_t>(std::max<std::uint64_t>(1, (bits + 7) / 8));
         g.read_latency = static_cast<Cycle>(y.spad_read_delay);
         c.l2_banks = g;
         out.unmapped.push_back("systolic: L2 is banked from its scratchpad (sp_banks, sp_rows_per_bank, a row of "

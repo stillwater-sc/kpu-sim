@@ -84,6 +84,25 @@ TEST_CASE("Banked L2: the RTL's systolic block gives the scratchpad's geometry",
     CHECK(lists(cfg->unmapped, "systolic: L2 is banked from its scratchpad"));
 }
 
+TEST_CASE("Banked L2: 4-bit inputs pack two to a byte in a row (#471's review)", "[program][lca][l2][banks]") {
+    auto d = read_spec_file("tests/program/deploy/kpu_soc_2x2.json").device(0);
+    REQUIRE(d.systolic);
+    d.systolic->input_bits = 4;
+    const auto cfg = timing::csp_config_from(d);
+    REQUIRE(cfg);
+    REQUIRE(cfg->config.l2_banks);
+    CHECK(cfg->config.l2_banks->row_bytes == (d.systolic->grid_cols * d.systolic->tile_cols * 4 + 7) / 8);
+}
+
+TEST_CASE("Banked L2: l2.banks_per_tile and the scratchpad's banks agree, or are refused", "[program][lca][l2][banks]") {
+    auto soc = read_spec_file("tests/program/deploy/kpu_soc_2x2.json");
+    auto& d = soc.devices[0];
+    d.l2.banks_per_tile = d.systolic->sp_banks;
+    CHECK(soc.validate().empty());
+    d.l2.banks_per_tile = d.systolic->sp_banks * 2;
+    CHECK_THAT(soc.validate(), ContainsSubstring("L2's banks are the scratchpad's"));
+}
+
 TEST_CASE("Banked L2: a bank count that is not a power of two is refused (#383, esg#14)", "[program][lca][l2][banks]") {
     auto spec = read_spec_file("tests/program/deploy/kpu_s1.json");
     spec.devices[0].l2.banks_per_tile = 3;

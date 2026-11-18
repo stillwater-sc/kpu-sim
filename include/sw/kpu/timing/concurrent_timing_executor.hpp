@@ -1161,6 +1161,10 @@ inline void ConcurrentTimingExecutor::create_components() {
     for (size_t i = 0; i < config_.num_row_streamers; ++i) {
         StreamerProcess::Config str_config;
         str_config.l2_banks = l2_banks_.get();
+        str_config.result_cf = [this](const TileID& t) {
+            const auto it = result_cf_.find(t);
+            return it == result_cf_.end() ? int32_t{-1} : static_cast<int32_t>(it->second);
+        };
         str_config.streamer_id = static_cast<uint32_t>(200 + i);  // 200, 201, ...
         str_config.type = StreamerType::ROW_STREAMER;
         str_config.compute_tile_pos = GridPosition(
@@ -1193,6 +1197,10 @@ inline void ConcurrentTimingExecutor::create_components() {
     for (size_t i = 0; i < config_.num_col_streamers; ++i) {
         StreamerProcess::Config str_config;
         str_config.l2_banks = l2_banks_.get();
+        str_config.result_cf = [this](const TileID& t) {
+            const auto it = result_cf_.find(t);
+            return it == result_cf_.end() ? int32_t{-1} : static_cast<int32_t>(it->second);
+        };
         str_config.streamer_id = static_cast<uint32_t>(210 + i);  // 210, 211, ...
         str_config.type = StreamerType::COL_STREAMER;
         str_config.compute_tile_pos = GridPosition(
@@ -2144,6 +2152,7 @@ inline void ConcurrentTimingExecutor::reset() {
     loads_scheduled_.clear();
     loads_landed_.clear();
     result_cf_.clear();
+    if (l2_banks_) l2_banks_->reset();      // a fresh calendar and counts for the new run (#471's review)
     fabric_epilogue_cycles_ = 0;
     scheduled_compute_counts_.clear();
     completed_compute_counts_.clear();

@@ -555,6 +555,12 @@ inline std::string DeploymentSpec::validate() const {
                 if (!power_of_two(v))
                     return where + ": systolic." + name + " is " + std::to_string(v) +
                            "; a row's bank is its low bits, so the count must be a power of two (esg#14)";
+            // L-CA's banked L2 takes the scratchpad's banks when both are declared (#401): a
+            // different l2.banks_per_tile would be declared and silently not modelled.
+            if (d.l2.banks_per_tile && *d.l2.banks_per_tile != y.sp_banks)
+                return where + ": l2.banks_per_tile is " + std::to_string(*d.l2.banks_per_tile) +
+                       " but systolic.sp_banks is " + std::to_string(y.sp_banks) +
+                       "; L2's banks are the scratchpad's, so declare one, or the same count";
             if (y.sp_macro.empty() || y.acc_macro.empty())
                 return where + ": systolic.sp_macro and systolic.acc_macro name the memories' circuit class";
             // The grouping is the fabric: one PE does one MAC a cycle.

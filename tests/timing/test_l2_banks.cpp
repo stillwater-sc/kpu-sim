@@ -12,9 +12,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <sw/kpu/timing/credit_pool.hpp>
 #include <sw/kpu/timing/l2_banks.hpp>
+#include <sw/kpu/timing/streamer_process.hpp>
+#include <sw/kpu/timing/tag_cam.hpp>
 
 using sw::kpu::timing::L2Banks;
+using namespace sw::kpu::timing;
 using A = L2Banks::Access;
 using C = L2Banks::Client;
 using Catch::Matchers::ContainsSubstring;
@@ -94,4 +98,68 @@ TEST_CASE("L2 banks: each compute tile's L2 has its own banks", "[timing][l2][ba
     CHECK(b.book(0, 0, 64, A::Write, C::Drain, 5, 1) == 1);
     CHECK(b.book(1, 0, 64, A::Write, C::Drain, 5, 1) == 1);     // another tile: no conflict
     CHECK(b.book(0, 1, 64, A::Write, C::Drain, 5, 1) == 2);     // the same tile's one bank: waits
+}
+
+TEST_CASE("L2 banks: a reset forgets every booking and count (#471's review)", "[timing][l2][banks]") {
+    auto b = banks(1, 64, 0);
+    CHECK(b.book(0, 0, 64, A::Write, C::Drain, 7, 1) == 1);
+    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 7, 1) == 2);       // waits for the first
+    REQUIRE(b.stats().stalls_total() == 1);
+    b.reset();
+    CHECK(b.stats().accesses == 0);
+    CHECK(b.stats().stalls_total() == 0);
+    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 7, 1) == 1);       // clock 7 is free again
+}
+
+namespace {
+// A Streamer on a shared one-bank L2, with its drain's result computed on `cf`.
+struct DrainRig {
+    CreditPool credits{16};
+    TagCAM l2{16}, results{16};
+    L2Banks banks;
+    StreamerProcess str;
+    static L2Banks::Geometry one_bank() {
+        L2Banks::Geometry g;
+        g.banks = 1;
+        g.row_bytes = 64;
+        g.read_latency = 0;
+        return g;
+    }
+    static StreamerProcess::Config config(L2Banks* b, int32_t cf) {
+        StreamerProcess::Config c;
+        c.bandwidth_gbps = 64.0;                // one 64-byte row a clock
+        c.clock_ghz = 1.0;
+        c.startup_latency = 0;
+        c.l2_banks = b;
+        c.result_cf = [cf](const TileID&) { return cf; };
+        return c;
+    }
+    explicit DrainRig(int32_t cf) : banks(one_bank(), 2), str(config(&banks, cf), l2, credits, results) {}
+    void drain(Cycle fabric) {
+        TileDescriptor t;
+        t.tile_id = {sw::kpu::isa::MatrixID::C, 0, 0, 0};
+        t.size_bytes = 64;                      // one row
+        t.fabric_cycles = fabric;
+        results.insert(t.tile_id, 0, 0);
+        str.schedule_drain(t);
+        (void)str.tick(0);                      // starts the drain at clock 0
+    }
+};
+}  // namespace
+
+TEST_CASE("L2 banks: a drain books its rows after the fabric's epilogue (#471's review)", "[timing][l2][banks]") {
+    DrainRig r(0);
+    r.drain(20);
+    REQUIRE(r.banks.stats().accesses == 1);
+    // Its row is booked at clock 20, not 0: a write at clock 0 finds the bank's write port free...
+    CHECK(r.banks.book(0, 5, 64, A::Write, C::BlockMover, 0, 1) == 1);
+    // ...and one at clock 20 waits for the drain's.
+    CHECK(r.banks.book(0, 6, 64, A::Write, C::BlockMover, 20, 1) == 2);
+}
+
+TEST_CASE("L2 banks: a drain books the banks of the tile that computed it (#471's review)", "[timing][l2][banks]") {
+    DrainRig r(1);
+    r.drain(0);
+    CHECK(r.banks.stats().tile_accesses[1] == 1);
+    CHECK(r.banks.stats().tile_accesses[0] == 0);
 }

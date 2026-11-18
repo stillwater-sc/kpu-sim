@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     named. With neither, L2 is pooled as before.
   - The deployment validator refuses a bank count that isn't a power of two. `kpu-run` prints the
     banks' row accesses and stalls.
-  - **Re-baselined:** values never change, and the Streamer's reads never stall under os, ws or is.
+  - **Re-baselined:** values never change. The Streamer's reads never stall under os, where it is
+    the only reader; under ws and is the Combiner's read-modify-write competes for the read ports.
     Makespans move by the read latency. The window rule of `test_csp_driver` is pinned to the
     pooled L2 for #462 to restate.
 

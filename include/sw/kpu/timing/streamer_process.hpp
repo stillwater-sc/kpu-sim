@@ -61,6 +61,9 @@ public:
         double clock_ghz = 1.0;        ///< Reference clock in GHz
         bool priority_aging = false;   ///< If true, prefer oldest ready tile (prevents starvation)
         L2Banks* l2_banks = nullptr;   ///< the banked L2 (#401); null: the pooled L2
+        /// The compute tile a result was computed on (the executor's record), so its drain books
+        /// that tile's banks; empty or -1: the descriptor's own cf_tile.
+        std::function<int32_t(const TileID&)> result_cf;
         std::string name = "STR";      ///< Human-readable name
 
         /// Generate human-readable name: "CT(0,0):RowSTR" or "CT(0,1):ColSTR" format
@@ -272,11 +275,12 @@ private:
     // An L2 transfer's cycles (#401): banked, its rows booked on their banks' ports from `now`;
     // pooled (no banks declared), bytes over the rate, as before.
     [[nodiscard]] Cycle l2_transfer_cycles(const TileDescriptor& t, uint32_t slot, L2Banks::Access a,
-                                           L2Banks::Client who, Cycle now) const {
+                                           L2Banks::Client who, Cycle now, int32_t cf = -1) const {
         if (!config_.l2_banks) return compute_transfer_cycles(t.size_bytes);
         L2Banks& b = *config_.l2_banks;
+        if (cf < 0) cf = t.cf_tile;
         return config_.startup_latency +
-               b.book(t.cf_tile < 0 ? 0 : static_cast<std::size_t>(t.cf_tile), slot, t.size_bytes, a, who, now,
+               b.book(cf < 0 ? 0 : static_cast<std::size_t>(cf), slot, t.size_bytes, a, who, now,
                       b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz));
     }
 
@@ -526,10 +530,13 @@ private:
         } else {
             l2_slot = allocate_l2_slot();
         }
-        // Into L2: a write, or the Combiner's read-modify-write when it merges into a partial.
+        // Into L2: a write, or the Combiner's read-modify-write when it merges into a partial. It
+        // books its rows once the fabric's epilogue is done, on the banks of the compute tile that
+        // produced the result (#471's review).
         const Cycle move = l2_transfer_cycles(
             drain_tile, l2_slot, accumulate ? L2Banks::Access::ReadModifyWrite : L2Banks::Access::Write,
-            accumulate ? L2Banks::Client::Combiner : L2Banks::Client::Drain, current_cycle);
+            accumulate ? L2Banks::Client::Combiner : L2Banks::Client::Drain, current_cycle + drain_tile.fabric_cycles,
+            config_.result_cf ? config_.result_cf(drain_tile.tile_id) : -1);
         Cycle transfer_cycles = drain_tile.fabric_cycles + std::max(move, drain_tile.ve_cycles);
         ve_busy_cycles_ += drain_tile.ve_cycles;
         if (drain_tile.ve_cycles > move) ve_bound_cycles_ += drain_tile.ve_cycles - move;

@@ -59,6 +59,7 @@ public:
         std::uint64_t accesses = 0;                         // row accesses booked
         std::array<std::uint64_t, kClients> stalls{};       // clocks a row waited for its bank, by client
         std::vector<std::uint64_t> bank_stalls;             // ... by bank
+        std::vector<std::uint64_t> tile_accesses;           // row accesses, by compute tile
         std::uint64_t stalls_total() const {
             std::uint64_t n = 0;
             for (auto s : stalls) n += s;
@@ -74,7 +75,16 @@ public:
                                         " banks; the RTL requires a power of two (esg#14)");
         if (g_.row_bytes == 0) throw std::invalid_argument("L2Banks: a row of 0 bytes");
         if (g_.read_ports == 0 || g_.write_ports == 0) throw std::invalid_argument("L2Banks: a bank with no port");
+        reset();
+    }
+
+    // A fresh run (the executor's reset): no bookings, no counts. The calendar is keyed by absolute
+    // clock, and a reset restarts the clock at 0.
+    void reset() {
+        for (auto& c : cal_) c.clear();
+        stats_ = Stats{};
         stats_.bank_stalls.assign(g_.banks, 0);
+        stats_.tile_accesses.assign(cal_.size(), 0);
     }
 
     const Geometry& geometry() const { return g_; }
@@ -98,7 +108,8 @@ public:
     // read latency for a read or a merge).
     Cycle book(std::size_t cf, std::uint32_t slot, std::uint64_t bytes, Access kind, Client who, Cycle start,
                Cycle per_row) {
-        auto& cal = cal_.at(cf < cal_.size() ? cf : 0);
+        const std::size_t tile = cf < cal_.size() ? cf : 0;
+        auto& cal = cal_.at(tile);
         // Clocks before this one can no longer be booked: forget them.
         if (start > kKeep) cal.erase(cal.begin(), cal.lower_bound(start - kKeep));
         const std::uint64_t n = rows_of(bytes), r0 = first_row(slot, n);
@@ -120,6 +131,7 @@ public:
                 ++stats_.bank_stalls[b];
             }
             ++stats_.accesses;
+            ++stats_.tile_accesses[tile];
             last = t;
             at = t + per_row;
         }
