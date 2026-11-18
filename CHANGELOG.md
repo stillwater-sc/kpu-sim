@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`tools/csp-gen/README.md`:** what `kpu-csp-gen` is for, and what it is not. It is a generator
+  of test and experiment programs, standing in for the DFP → CSP lowering (ADR 0002 §3.1, #281),
+  not the source of an operator library. It also says how its options probe the architecture,
+  and recommends a scope.
+
 - **An onboarding guide for new developers** (`docs/ONBOARDING.md`). It covers:
   - what kpu-sim is for;
   - the design rules behind it: one program at several levels, values at every level, credits
