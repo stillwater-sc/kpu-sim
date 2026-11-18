@@ -59,7 +59,8 @@ struct BubbleReport {
 
     // Why a compute lane sat idle before a call.
     enum class Cause : std::uint8_t {
-        Issue,          // the call was ready; the fabric's in-order issue held it
+        Issue,          // in-order issue held it: the fabric's for a call; for a move whose source was
+                        // there before it, its handover in program order (L-CA's driver window)
         Accumulator,    // it waited for the previous call on its accumulator
         StreamerBusy,   // its operand's Feed waited for a streamer lane
         L2Slot,         // the Feed's Move (a staging) waited for its L2 slot's credit
@@ -67,6 +68,7 @@ struct BubbleReport {
         L3Slot,         // the Move's Load waited for its L3 slot's credit
         DmaBusy,        // the Load waited for a DMA lane
         Dram,           // the Load itself: the DRAM transfer (and what it waited on, a Store or a Release)
+        L2Bank,         // an L2 transfer's rows waited for their banks' ports, and that delayed its finish (#401)
         Result,         // a result's way out: an operand's move held behind a Drain, Writeback or
                         // Store on its process, or the Move of a tile that is itself a result
         Unknown,
@@ -81,6 +83,7 @@ struct BubbleReport {
             case Cause::L3Slot:       return "L3 slot credit";
             case Cause::DmaBusy:      return "DMA lanes busy";
             case Cause::Dram:         return "DRAM transfer";
+            case Cause::L2Bank:       return "L2 bank ports";
             case Cause::Result:       return "a result's way out (drain, writeback, store) ahead of it";
             case Cause::Unknown:      return "unknown";
         }
@@ -333,7 +336,15 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
             const bool operand = r->kind == Action::Kind::Feed || r->kind == Action::Kind::Move || r->kind == Action::Kind::Load;
             if (result && operand) {
                 into->chain.push_back(p->second->action);
-                return Cause::Result;
+                // The result ahead ran long because its rows waited for their banks (#401), and that
+                // held the operand: the operand took the lane the result freed (it started within a
+                // clock of the result's finish, after it was ready), so without the stalls it could
+                // have started sooner. An operand that started later, or on another lane, waited on
+                // something else.
+                const Rec& q = *p->second;
+                const bool held = q.lane == r->lane && q.finish > r->ready && r->start >= q.finish &&
+                                  r->start <= q.finish + 1;
+                return q.bank_delay > 0 && held ? Cause::L2Bank : Cause::Result;
             }
             return explain(p->second, depth + 1);
         }
@@ -352,17 +363,26 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
                 return explain(bind, depth + 1);
             }
             case Action::Kind::Feed: {
+                // Its own rows waited for their banks: the transfer itself ran long (#401).
+                if (r->bank_delay > 0) return Cause::L2Bank;
                 const Rec* mv = last_before(r->tile, r->action, {Action::Kind::Move});
                 return mv ? explain(mv, depth + 1) : Cause::Unknown;
             }
             case Action::Kind::Move: {
                 if (r->l2_wait > 0) return Cause::L2Slot;
+                if (r->bank_delay > 0) return Cause::L2Bank;
                 const Rec* src =
                     last_before(r->tile, r->action, {Action::Kind::Load, Action::Kind::Writeback, Action::Kind::Inherit});
                 if (!src) return Cause::Unknown;
                 if (src->kind != Action::Kind::Load) {
                     into->chain.push_back(src->action);
-                    return Cause::Result;
+                    // The source set the Move's ready only if nothing later did: a credit (its L2
+                    // slot's), or its handover (the program's issue order; at L-CA, the window).
+                    using ReadyBy = TransactionalInterpreter::Record::ReadyBy;
+                    if (r->ready_by == ReadyBy::Credit) return Cause::L2Slot;
+                    if (r->ready_by == ReadyBy::Handover) return Cause::Issue;
+                    // A Writeback it waits for ran long at the L2 banks: its stalls delayed the data.
+                    return src->kind == Action::Kind::Writeback && src->bank_delay > 0 ? Cause::L2Bank : Cause::Result;
                 }
                 return explain(src, depth + 1);
             }
@@ -373,10 +393,12 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
             // for its Writeback.
             case Action::Kind::Drain: {
                 if (r->l2_wait > 0) return Cause::L2Slot;
+                if (r->bank_delay > 0) return Cause::L2Bank;
                 const Rec* src = last_before(r->tile, r->action, {Action::Kind::Call});
                 return src ? explain(src, depth + 1) : Cause::Unknown;
             }
             case Action::Kind::Writeback: {
+                if (r->bank_delay > 0) return Cause::L2Bank;
                 const Rec* src = last_before(r->tile, r->action, {Action::Kind::Drain});
                 return src ? explain(src, depth + 1) : Cause::Unknown;
             }

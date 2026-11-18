@@ -133,6 +133,13 @@ public:
         // The banked L2 (#401): its row accesses and the clocks rows waited for a bank, by client
         // (BlockMover, Streamer, drain, Combiner) and by bank. Absent: L2 is pooled.
         std::optional<L2Banks::Stats> l2_banks;
+        // With keep_events(true) and a banked L2: each L2 transfer's booking, its rows' clocks,
+        // with the program's name for its tile.
+        struct L2Booking {
+            program::TileCoord tile;
+            L2Banks::Booking booking;
+        };
+        std::vector<L2Booking> l2_bookings;
         // Each staged copy's L2 slot as L-CA executed it: (tile, slot), in claim order (#399).
         std::vector<std::pair<program::TileCoord, std::uint32_t>> l2_placement;
         // Each residency's L3 slot as L-CA executed it: (tile, slot), in the order the slots were
@@ -203,6 +210,13 @@ public:
 
     Result run() {
         exec_.reset();
+        // The executor is the caller's: its L2 log mode is restored however the run ends.
+        struct LogMode {
+            ConcurrentTimingExecutor& e;
+            bool was;
+            ~LogMode() { e.keep_l2_log(was); }
+        } log_mode{exec_, exec_.keeps_l2_log()};
+        exec_.keep_l2_log(keep_events_);
         exec_.l2_tag_cam().set_placed_slots(static_cast<std::uint32_t>(l2_));   // the program's L2 slots
         // DRAM holds every input tile; the program's loads read them.
         for (const auto& name : inputs_.operand_order()) {
@@ -292,7 +306,14 @@ public:
         r.staged_feeds = staged_feeds_;
         r.merges = exec_.merges();
         r.merge_accumulates = exec_.merge_accumulates();
-        if (const L2Banks* b = exec_.l2_banks()) r.l2_banks = b->stats();
+        if (const L2Banks* b = exec_.l2_banks()) {
+            r.l2_banks = b->stats();
+            if (keep_events_)
+                for (const auto& bk : b->log()) {
+                    const auto c = coord_.find(bk.tile);
+                    if (c != coord_.end()) r.l2_bookings.push_back({c->second, bk});
+                }
+        }
         for (const auto& [slot, tile] : exec_.l3_tile_tag_cam(0).claim_log())
             r.l3_placement.emplace_back(coord_.at(tile), slot);
         for (const auto& [slot, tile] : exec_.l2_tag_cam().claim_log())

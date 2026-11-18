@@ -222,8 +222,22 @@ statements in loops of one variable name have the same indices: LU's `laswp A[k,
 `trsm_ll(A[k, k], A[k, j])` both move `A[k, k]` at the same `(k, j)` (#402). Both producers run
 the same program text, so the line is the same in both records.
 No two events in a record share a key. Among the events that name an action, no two share
-`(kind, action, row, beat)` either.
+`(kind, action, row, beat)` either. This is a requirement on the producer, checked by E2, not a
+property the key guarantees: a program that moved the same tile twice from one statement in one
+iteration, by the same process between the same layers, would give two events one key, now that
+L2's address is not in it. Such a record fails E2, and `dflow_diff.py` refuses a key it cannot
+join uniquely, so a collision is reported, never joined wrongly. No program the generator or the
+corpus writes has one.
 
+- **L2's and the accumulator's addresses are not part of the key** (#401, decided 2026-11-18): they
+  are each producer's placement. (The occupancy viewer joins the same way, but only `dflow_diff.py`
+  reports placement.) kpu-sim's banked L2 puts a tile at its slot's rows, and the RTL at
+  rows its own allocator chooses, so the same transfer has different rows in the two records. L3's
+  and DRAM's addresses stay in the key, since the program places them. `dflow_diff.py` compares L2
+  and accumulator addresses on the matched events, and reports those that differ as *placed
+  differently*. It compares an endpoint only when both records give its address, in the same form:
+  slots against rows, or an address one record leaves out, is not compared, so a count of zero does
+  not prove the placements agree. E2 checks uniqueness with the same key.
 - The key is built from **what the event is**: which tile it moves, from where to where, in which
   iteration, and which row. It is not built from when the event happened or which engine instance
   ran it. So it is the same in a kpu-sim record and in an RTL record of the same schedule.
@@ -257,15 +271,18 @@ through a layer the record declares not modelled.
 |---|---|---|
 | `dram` | `{"modelled": true}` | any (or none) |
 | `l3` | `{"modelled": true, "slots": N, "banks": B}`: the machine's `l3` and `banks` | the slot, `< slots` |
-| `l2` | `{"modelled": true, "banks", "rows", "row_bytes", "interleave": "row-mod-banks"}` | the first row, `< rows` |
+| `l2` | `{"modelled": true, "banks", "rows", "row_bytes", "interleave": "row-mod-banks"}` | a transaction's: its first row; a row event's: the row it accessed, wrapping (row 0 after row `rows − 1`); both `< rows` |
 | `acc` | as for L2 | the first row, `< rows` |
 | `l1` | `{"modelled": true, "rows", "cols"}`: the array's edge | the edge lane, `< max(rows, cols)`, or none |
 
 Not modelled is `{"modelled": false, "why": "<reason>"}`.
 
-**A layer addressed by slot (6.2, #402).** kpu-sim's timed levels place tiles in L2 slots, a
+**A layer addressed by slot (6.2, #402).** L-T1 and an unbanked L-CA place tiles in L2 slots, a
 staged copy or an L2 accumulator's partial, and have no rows. They declare L2, the accumulator
-and L1 as `{"modelled": true, "slots": N}`, N ≥ 0:
+and L1 as `{"modelled": true, "slots": N}`, N ≥ 0. (A banked L-CA declares L2 by rows instead,
+and its L2 addresses are booked rows, not slots; its accumulator stays slotted. L1 is slotted,
+`slots: 0`, only when no PE array is declared; with one, any record declares L1 by the array's
+edge, `{"rows", "cols"}`.)
 
 - an event's address in such a layer is a slot, `< N`, or none. An unstaged tile's L2 address is
   none. A layer of 0 slots has no addresses: kpu-sim's accumulator (the PEs, or an L2 partial at
@@ -274,9 +291,14 @@ and L1 as `{"modelled": true, "slots": N}`, N ≥ 0:
 - a layer declared both ways, `slots` together with `banks`, `rows`, `row_bytes`, `interleave`
   or `cols`, is refused (G1).
 
-Two records whose L2 forms differ, a slotted kpu-sim record and the RTL's rows, still name the same
-transactions. Their L2 and accumulator addresses differ, so a comparison has to join them on the
-rest of the key (§5.3).
+A banked kpu-sim L-CA record (#401) declares L2 in the rows form instead, like the RTL: a
+transaction's L2 address is its transfer's first row, and each row event's is the row it accessed,
+wrapping at the L2's last row (a transfer from row 3 of a four-row L2 has rows 3, 0, 1). Each
+transfer's rows are row events (BM_ROW, STR_ROW,
+DRAIN_ROW: row r of the transfer, beat 0, at the clock the bank served it). A transfer that takes
+more L2 rows than its tile has rows keeps its transaction but has no row events, since a row event
+is a row of its tile (E3); the record's notes count those. Either way, L2 and
+accumulator addresses are placement, not identity (§5.3), so records join on the rest of the key.
 
 **A word-addressed L3 (6.1, #398).** The RTL's L3 is a flat, word-addressed memory cell per site,
 placed by the host or `plan_gemm`, with no slots and no L3 credits (credits exist for its L2 and
@@ -447,15 +469,17 @@ report says which layers those are. It reports:
 - with both records timed, the first divergence: the earliest event, in A's cycles, whose start or
   duration differs by more than `--tolerance`. Then the largest divergences of start and of duration.
 
-It is a debugging tool, not a CI gate (D3). It exits 0 when the two join with nothing one-sided and
-no divergence, 1 when they differ, and 2 when either cannot be read, fails the checker, or has no
-events (L-B's).
+It is a debugging tool, not a CI gate (D3). It exits 0 when the two join with nothing one-sided, no
+divergence and nothing placed differently, 1 when they differ (a placement difference alone
+included), and 2 when either cannot be read, fails the checker, or has no events (L-B's).
 
 The RTL sample's matrix is named L. L-CA maps a program's matrices onto A, B and C, so
 `dflow_rtl_sample.py --names A,B,C --program-out p.csp` writes the same sample under those names,
-with its program. L-CA's record of that program joins every one of the sample's transactions. The
-sample's row events are one-sided, under joined transactions. The first divergence is the first
-load.
+with its program. L-CA's record of that program joins every one of the sample's transactions. A
+row event joins one with the same key under its joined transaction: L2's addresses are not in the
+key, so the sample's BM_ROW row 0, beat 0 can match a banked L-CA's. The sample's other row events,
+whose row or beat L-CA has no counterpart for, are one-sided, under joined transactions. The first
+divergence is the first load.
 
 ## 9. Producers
 
@@ -522,7 +546,9 @@ Two things the format can't say, which the record's `not_modelled` counts:
 - **A tile the Combiner reads in place** (an init, a bias, a scale's vectors) never leaves L3 in a
   transaction, so its `RELEASE`'s credit has none to follow (E4) and is left out.
 
-There are no row events: no kpu-sim level models rows yet (the L2 banks, #388; the PE grid, #401).
+Row events: a banked L-CA record has each L2 transfer's rows (BM_ROW under a Move or Writeback,
+STR_ROW under a Feed, DRAIN_ROW under a Drain) when its booked rows fit its tile (§6, E3). L-T1's
+record and an unbanked L-CA's have none, and no level has the PE grid's rows yet (#401).
 
 ## 10. The viewer
 
@@ -540,8 +566,9 @@ what it reads with `dflow_check`.
 
 ## 11. Not in this version
 
-- **kpu-sim's row events.** L-T1 and L-CA write their events from 6.2 (§9.2, #402), without row
-  progress. Rows come with a level that models them (the L2 banks, #388; the PE grid, #401).
+- **kpu-sim's L-T1 row events.** L-CA writes them, from its banked L2's bookings (#401). L-T1 times
+  a tile move whole, so its record has none. The PE grid's rows (#401's wavefront slice) are not
+  yet events either.
 - **Golden event traces.** Ruled out by D3, as CI references. Event comparison between two records
   is a debugging tool, joined on the identity key (§5.3).
 

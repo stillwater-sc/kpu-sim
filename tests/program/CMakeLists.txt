@@ -74,6 +74,16 @@ set_tests_properties(test_domain_flow_record PROPERTIES
 )
 
 # A timed level's own domain-flow record (#402): L-T1's and L-CA's events with their cycles
+# L-CA's banked L2 in its records (#401): row events, bank waits, the bubble cause
+kpu_add_component_test(test_bank_rows "program"
+    test_bank_rows.cpp
+)
+
+set_tests_properties(test_bank_rows PROPERTIES
+    LABELS "program;csp;lca;l2;domainflow;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 kpu_add_component_test(test_timed_record "program"
     test_timed_record.cpp
 )

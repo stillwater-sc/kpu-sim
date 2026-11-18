@@ -247,6 +247,8 @@ struct CspLevelOutcome {
     // the read-modify-writes among them (L-T1, L-CA), and the L2 bytes they read and write (L-T1).
     std::size_t merges = 0, merge_accumulates = 0;
     std::optional<timing::L2Banks::Stats> l2_banks;    // L-CA, banked (#401): row accesses and bank stalls
+    std::optional<timing::L2Banks::Geometry> l2_geometry;   // L-CA, banked: its banks, rows and row width
+    std::vector<timing::CspDriver::Result::L2Booking> l2_bookings;  // L-CA, banked, events kept: each transfer's rows
     std::uint64_t merge_l2_read_bytes = 0, merge_l2_write_bytes = 0;
     std::size_t l2_bound = 0;               // L-T1: stage Moves and first merges whose start their L2 slot decided
     std::uint64_t l2_wait_cycles = 0;       //        and what those waits cost
@@ -470,7 +472,9 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         // reuse and bubble report reads as it reads L-T1's (#425).
         if (keep_events) {
             auto recs = timing::csp_records(r.handovers, r.events, cfg->config.num_dma_engines,
-                                            cfg->config.num_block_movers, cfg->config.num_compute_tiles);
+                                            cfg->config.num_block_movers, cfg->config.num_compute_tiles,
+                                            &r.l2_bookings);
+            o.l2_bookings = r.l2_bookings;
             o.records = std::move(recs.records);
             o.busy = std::move(recs.busy);
             o.lanes = std::move(recs.lanes);
@@ -497,6 +501,7 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.merges = r.merges;
         o.merge_accumulates = r.merge_accumulates;
         o.l2_banks = r.l2_banks;
+        o.l2_geometry = cfg->config.l2_banks;
         o.l3_placement = r.l3_placement;
         o.l2_placement = r.l2_placement;
     }

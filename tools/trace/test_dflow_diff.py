@@ -4,13 +4,17 @@ Self-test for dflow_diff.py (#402): two records of one program joined on the ide
 
 Usage: python3 test_dflow_diff.py <lt1.dflow> <lca.dflow> <rtl-sample-abc.dflow> <lca-of-the-sample.dflow> <lb.dflow>
 
-- the first two are kpu-sim's L-T1 and L-CA records of one program (kpu-run --dflow-lt1, --dflow-lca);
+- the first two are kpu-sim's L-T1 and L-CA records of one program (kpu-run --dflow-lt1, --dflow-lca),
+  on a deployment with a banked L2 (l2.banks_per_tile or sp_banks, e.g. kpu_s1.json), so that the
+  L-CA record has L2 by rows, with at least two rows, row events and a Block Move into an L2 row;
 - the third is the RTL sample under the names A, B, C (dflow_rtl_sample.py --names A,B,C), and the
   fourth L-CA's record of its own program (--program-out), which L-CA runs under those names;
 - the fifth an L-B record, which has no events.
 
 A record joins itself with nothing one-sided and no divergence; a shifted event is named as the
-first divergence; a dropped event is one-sided; L-T1 and L-CA join every event and diverge; the RTL
+first divergence; a dropped event is one-sided; a transfer placed elsewhere is placed differently;
+L-T1 and L-CA join every transaction, token and credit and diverge, L-CA's banked row events being
+one-sided under matched transactions; the RTL
 sample and L-CA join every transaction across L2's two address forms, and the sample's row events
 are one-sided under matched transactions (the done-when of #402).
 
@@ -44,7 +48,30 @@ class Diff(unittest.TestCase):
         self.assertEqual(code, 0, o)
         self.assertEqual((o["only_a"]["count"], o["only_b"]["count"]), (0, 0))
         self.assertIsNone(o["first_divergence"])
-        self.assertEqual(o["dropped_addresses"], [])
+        # L2's and the accumulator's addresses are placement, never identity (#401).
+        self.assertEqual(o["dropped_addresses"], ["acc", "l2"])
+        self.assertEqual(o["placement"]["count"], 0)
+
+    def test_a_transfer_placed_elsewhere_differs(self):
+        # L2's addresses are placement (§5.3): a transfer at another row still joins, and is
+        # reported placed differently, which is a difference (exit 1) though nothing is one-sided.
+        b = Bundle(LCA)
+        try:
+            rows = b.manifest["geometry"]["l2"]["rows"]
+            self.assertGreaterEqual(rows, 2, "the fixture's L2 has another row to move the transfer to")
+            e = next(i for i in range(b.rows("events"))
+                     if dc.EVENT_KINDS[b.get("events", "kind", i)] == "BLOCK_MOVE"
+                     and b.get("events", "dst", i) == dc.LAYERS.index("l2")
+                     and b.get("events", "dst_addr", i) != dc.NONE64)
+            b.set("events", "dst_addr", e, (b.get("events", "dst_addr", e) + 1) % rows)
+            code, o = run(LCA, b.dir)
+            self.assertEqual(code, 1, o)
+            self.assertEqual((o["only_a"]["count"], o["only_b"]["count"]), (0, 0))
+            self.assertIsNone(o["first_divergence"])
+            self.assertEqual(o["placement"]["count"], 1)
+            self.assertEqual([x["layer"] for x in o["placement"]["first"][0]["ends"]], ["l2"])
+        finally:
+            b.close()
 
     def test_a_shifted_event_is_the_first_divergence(self):
         b = Bundle(LCA)
@@ -70,7 +97,14 @@ class Diff(unittest.TestCase):
     def test_the_levels_join_every_event_and_diverge(self):
         code, o = run(LT1, LCA)
         self.assertEqual(code, 1, o)
-        self.assertEqual((o["only_a"]["count"], o["only_b"]["count"]), (0, 0))
+        # Every transaction, token and credit joins. L-CA's banked L2 adds its transfers' rows
+        # (#401), which L-T1, timing a tile move whole, does not have: one-sided, each under a
+        # joined transaction.
+        self.assertEqual(o["only_a"]["count"], 0)
+        rows = sum(o["only_b"]["by_kind"].get(k, 0) for k in ("BM_ROW", "STR_ROW", "DRAIN_ROW"))
+        self.assertGreater(rows, 0, "the banked L-CA record has its transfers' rows")
+        self.assertEqual(o["only_b"]["count"], rows)
+        self.assertEqual(o["only_b"]["rows_under_matched_transactions"], rows)
         self.assertGreater(o["matched_transactions"], 0)
         self.assertIsNotNone(o["first_divergence"])
         self.assertNotEqual(o["cycles"][0], o["cycles"][1])

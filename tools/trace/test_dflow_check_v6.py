@@ -10,8 +10,11 @@ Usage: python3 test_dflow_check_v6.py <rtl-sample.dflow> <lb.dflow> [<rtl-sample
 The third bundle is the sample's version-6.1 form (dflow_rtl_sample.py --addressed; #398): the
 accumulator stores straight to L3, and L3 is word-addressed.
 
-The fourth is a timed kpu-sim record, version 6.2 (kpu-run --dflow-lca; #402): L-CA's events with
-their cycles, L2 and the accumulator addressed by slot.
+The fourth is a timed kpu-sim record, version 6.2 (kpu-run --dflow-lca; #402), of a deployment with
+a banked L2 (l2.banks_per_tile, or systolic's sp_banks; #401), such as
+tests/program/deploy/kpu_s1_combiner.json: L-CA's events with their cycles, L2 by banks and rows
+with its transfers' row events, and the accumulator by slot. An unbanked deployment's L-CA record
+has L2 by slot and no row events, and fails these checks.
 
 The RTL sample is the hand-written timed record (dflow_rtl_sample.py): L2, accumulator and L1
 geometry, a cycle column, progress events, credits and tokens, int8 and int32 values with expected
@@ -627,8 +630,8 @@ class LbRecord(Checks):
 
 
 class TimedKpuSim(Checks):
-    """A kpu-sim timed level's own record (6.2, #402): its events join the program's steps, and
-    its L2 and accumulator are addressed by slot."""
+    """A kpu-sim timed level's own record (6.2, #402): its events join the program's steps. L-CA's
+    banked L2 (#401) is by rows, with its transfers' row events; its accumulator by slot."""
 
     @classmethod
     def setUpClass(cls):
@@ -646,17 +649,20 @@ class TimedKpuSim(Checks):
         m = self.b.manifest
         self.assertEqual((m["version"], m.get("minor"), m["level"]), (6, 2, "L-CA"))
         self.assertEqual(m["result"]["cycles"], m["time"]["cycles"])
-        for layer in ("l2", "acc"):
-            self.assertIn("slots", m["geometry"][layer], layer)
+        # A banked L2 (#401): by rows, as the RTL's; the accumulator by slot (6.2), with none.
+        self.assertEqual(m["geometry"]["l2"]["interleave"], "row-mod-banks")
+        for k in ("banks", "rows", "row_bytes"):
+            self.assertIn(k, m["geometry"]["l2"])
+        self.assertIn("slots", m["geometry"]["acc"])
         kinds = {self.ev("kind", i) for i in range(self.b.rows("events"))}
-        self.assertEqual(kinds & {KIND["BM_ROW"], KIND["STR_ROW"], KIND["DRAIN_ROW"]}, set(), "no row events")
+        self.assertTrue(kinds & {KIND["BM_ROW"], KIND["STR_ROW"], KIND["DRAIN_ROW"]}, "its transfers' row events")
         self.assertTrue({KIND[k] for k in ("DMA", "BLOCK_MOVE", "STREAM", "COMPUTE", "DRAIN", "CREDIT", "TOKEN")} <= kinds)
         # Every event names its action: full joining, so E5 holds one transaction per data step.
         self.assertTrue(all(self.ev("action", i) != NONE64 for i in range(self.b.rows("events"))))
-        # An L2 accumulator's partials and the staged copies are at their L2 slots.
+        # Every transfer into L2 lands at its first row.
         staged = [i for i in range(self.b.rows("events"))
                   if self.ev("dst", i) == LAYER["l2"] and self.ev("dst_addr", i) != NONE64]
-        self.assertTrue(staged, "no event lands at an L2 slot")
+        self.assertTrue(staged, "no event lands at an L2 row")
 
     def test_g1_a_slotted_layer_needs_six_two(self):
         self.b.manifest["minor"] = 1
@@ -664,18 +670,18 @@ class TimedKpuSim(Checks):
         self.assertFails("G1", "needs version 6.2")
 
     def test_g1_a_layer_declared_both_ways(self):
-        self.b.manifest["geometry"]["l2"]["rows"] = 16
+        self.b.manifest["geometry"]["acc"]["rows"] = 16
         self.b.save_manifest()
         self.assertFails("G1", "mixes the two forms")
 
     def test_g1_negative_slots(self):
-        self.b.manifest["geometry"]["l2"]["slots"] = -1
+        self.b.manifest["geometry"]["acc"]["slots"] = -1
         self.b.save_manifest()
         self.assertFails("G1", "not an integer >= 0")
 
-    def test_e1_an_address_past_the_slots(self):
+    def test_e1_an_address_past_the_rows(self):
         e = self.event("BLOCK_MOVE", lambda i: self.ev("dst", i) == LAYER["l2"] and self.ev("dst_addr", i) != NONE64)
-        self.set_ev("dst_addr", e, self.b.manifest["geometry"]["l2"]["slots"])
+        self.set_ev("dst_addr", e, self.b.manifest["geometry"]["l2"]["rows"])
         self.assertFails("E1", "outside l2")
 
     def test_e1_an_accumulator_of_no_slots_has_no_addresses(self):

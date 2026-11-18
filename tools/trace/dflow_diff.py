@@ -11,9 +11,13 @@ docs/plans/shared-tile-flow-record.md §5.3:
     (kind, process, tile, src, src_addr, dst, dst_addr, line, loop indices, row, beat)
 
 where a tile is its operand name and tile coordinates, a process and a layer are their names, and
-the loop indices are (variable name, value) pairs, so the key reads the same in both records. A
-layer whose addresses have different forms in the two records (6.2's slots against the RTL's rows,
-6.1's words against slots) has its addresses left out of the key, and said so.
+the loop indices are (variable name, value) pairs, so the key reads the same in both records. L2's
+and the accumulator's addresses are each producer's placement, not identity (§5.3; #401): they are
+left out of the key, and a matched event whose L2 or accumulator address differs is reported as
+placed differently, once per event, with each endpoint that differs. Only addresses both records
+give, in the same form, are compared: an address one record leaves out, or slots against rows, is
+not a difference, so a count of zero does not mean every placement agrees. Another layer whose addresses have different forms in the two records (6.1's
+words against slots) has its addresses left out of the key too, and said so.
 
 It reports:
   - the events only one record has, by kind, a row event under its transaction;
@@ -22,7 +26,8 @@ It reports:
     and of duration.
 
 It is a debugging tool, not a CI gate (D3): CI compares results (dflow_check.py --result), never
-events. Exit 0 when the records join with nothing one-sided and no divergence, 1 when they differ,
+events. Exit 0 when the records join with nothing one-sided, no divergence and nothing placed
+differently, 1 when they differ,
 2 when either cannot be read, fails the checker, or has no events (L-B's steps are its events).
 
 SPDX-License-Identifier: MIT
@@ -129,7 +134,10 @@ def label(key):
 
 def diff(a, b, tolerance=0, show=5):
     ga, gb = a.m.get("geometry", {}), b.m.get("geometry", {})
-    drop = sorted(layer for layer in dc.LAYERS if form(ga, layer) != form(gb, layer))
+    # L2's and the accumulator's addresses are each producer's placement, not identity (§5.3; #401):
+    # always left out of the key, and compared on the matched events instead. Another layer whose
+    # address forms differ (6.1's words against slots) is left out too.
+    drop = sorted({"l2", "acc"} | {layer for layer in dc.LAYERS if form(ga, layer) != form(gb, layer)})
     ka, kb = keys(a, set(drop)), keys(b, set(drop))
     ia, ib = {}, {}
     for side, ks, idx in (("A", ka, ia), ("B", kb, ib)):
@@ -156,7 +164,22 @@ def diff(a, b, tolerance=0, show=5):
         under = sum(1 for x in rows if x.get("parent_matched"))
         return {"count": len(rows), "by_kind": by_kind, "rows_under_matched_transactions": under, "first": rows[:show]}
 
+    # Placement: matched events whose L2 or accumulator address differs (the same transfer, placed
+    # elsewhere by each producer).
+    placed = []
+    for k in matched:
+        x, y = ia[k], ib[k]
+        ends = []                                   # each endpoint placed differently
+        for side in ("src", "dst"):
+            layer = a.E[side][x]
+            if layer < len(dc.LAYERS) and dc.LAYERS[layer] in ("l2", "acc"):
+                pa, pb = a.E[f"{side}_addr"][x], b.E[f"{side}_addr"][y]
+                if pa != pb and dc.NONE64 not in (pa, pb) and form(ga, dc.LAYERS[layer]) == form(gb, dc.LAYERS[layer]):
+                    ends.append({"layer": dc.LAYERS[layer], "a": pa, "b": pb})
+        if ends:
+            placed.append({"key": label(k), "ends": ends})
     out = {"a": a.describe(), "b": b.describe(), "dropped_addresses": drop,
+           "placement": {"count": len(placed), "first": placed[:show]},
            "matched": len(matched),
            "matched_transactions": sum(1 for k in matched if dc.EVENT_KINDS.index(k[0]) in TRANSACTIONS),
            "only_a": one_sided("A", a, ka, ia, ib), "only_b": one_sided("B", b, kb, ib, ia)}
@@ -175,17 +198,22 @@ def diff(a, b, tolerance=0, show=5):
     else:
         out["first_divergence"] = None
         out["untimed"] = [s for s, r in (("A", a), ("B", b)) if not r.timed]
-    out["differs"] = bool(only["A"] or only["B"] or out["first_divergence"])
+    out["differs"] = bool(only["A"] or only["B"] or out["first_divergence"] or out["placement"]["count"])
     return out
 
 
 def report(o, tolerance):
     print(f"A  {o['a']}")
     print(f"B  {o['b']}")
-    print("joined on (kind, process, tile, layers, addresses, line, loop indices, row, beat)"
-          + (f"; {', '.join(o['dropped_addresses'])} addresses left out: their forms differ"
-             if o["dropped_addresses"] else ""))
+    print("joined on (kind, process, tile, layers, addresses, line, loop indices, row, beat); "
+          f"{', '.join(o['dropped_addresses'])} addresses left out (L2's and the accumulator's are placement; "
+          "another layer's only when the two records' forms differ)")
     print(f"matched {o['matched']} events ({o['matched_transactions']} transactions)")
+    pl = o["placement"]
+    if pl["count"]:
+        print(f"placed differently: {pl['count']} matched events' L2 or accumulator addresses differ")
+        for x in pl["first"]:
+            print(f"    {x['key']}: " + "; ".join(f"{e['layer']} A {e['a']}, B {e['b']}" for e in x["ends"]))
     for side in ("a", "b"):
         s = o[f"only_{side}"]
         if not s["count"]:

@@ -21,6 +21,7 @@
 #pragma once
 
 #include <sw/kpu/timing/process_interface.hpp>
+#include <sw/kpu/timing/tile_descriptor.hpp>
 
 #include <algorithm>
 #include <array>
@@ -41,6 +42,11 @@ public:
         std::uint32_t row_bytes = 256;
         Cycle read_latency = 4;
         std::uint32_t read_ports = 2, write_ports = 1;
+        // Row k of a transfer whose first row is `first`: a fixed-size L2 wraps at its last row, so
+        // the transfer keeps walking the banks in order (banks divide the rows).
+        [[nodiscard]] std::uint64_t row(std::uint64_t first, std::uint64_t k) const {
+            return rows_per_bank ? (first + k) % (std::uint64_t(rows_per_bank) * banks) : first + k;
+        }
     };
     enum class Access : std::uint8_t { Read, Write, ReadModifyWrite };
     enum class Client : std::uint8_t { BlockMover, Streamer, Drain, Combiner };
@@ -67,6 +73,26 @@ public:
         }
     };
 
+    // One transfer's booking, kept when the log is on (keep_log): its tile, client and access, the
+    // clock it was booked at (`now`, its leg's start), the earliest clock its first row was asked
+    // for (`start`), its rows and the clock each was served (rows.front() is later than `start`
+    // when the first row waited for its bank), and the clocks they waited for their banks. The timed record
+    // writes these as the transfer's row events, and csp_records as its bank wait (#401).
+    struct Booking {
+        TileID tile;
+        Client who = Client::BlockMover;
+        Access kind = Access::Write;
+        std::size_t cf = 0;
+        std::uint32_t slot = 0;
+        Cycle now = 0, start = 0, per_row = 1;
+        std::uint64_t first_row = 0;
+        std::vector<Cycle> rows;                        // row k's clock
+        Cycle stalls = 0;
+        // The clocks the stalls added to the leg's completion: the transfer's own lengthening,
+        // less what other work overlapping it hid (a drain's Combiner; overlap_last).
+        Cycle delay = 0;
+    };
+
     static bool power_of_two(std::uint64_t v) { return v && !(v & (v - 1)); }
 
     L2Banks(Geometry g, std::size_t compute_tiles) : g_(g), cal_(std::max<std::size_t>(1, compute_tiles)) {
@@ -80,7 +106,21 @@ public:
 
     // A fresh run (the executor's reset): no bookings, no counts. The calendar is keyed by absolute
     // clock, and a reset restarts the clock at 0.
+    void keep_log(bool keep) { keep_log_ = keep; }
+    [[nodiscard]] bool keeps_log() const { return keep_log_; }
+    // The last booking's leg completes at max(move, other), the transfer's `move` cycles running
+    // alongside `other` cycles of other work (a drain's Combiner): its stalls delayed the leg only
+    // by what they added past `other`.
+    void overlap_last(Cycle move, Cycle other) {
+        if (!keep_log_ || log_.empty()) return;
+        Booking& b = log_.back();
+        const Cycle bare = move - std::min(b.delay, move);
+        b.delay = std::max(move, other) - std::max(bare, other);
+    }
+    [[nodiscard]] const std::vector<Booking>& log() const { return log_; }
+
     void reset() {
+        log_.clear();
         for (auto& c : cal_) c.clear();
         stats_ = Stats{};
         stats_.bank_stalls.assign(g_.banks, 0);
@@ -109,15 +149,28 @@ public:
     // or after it, so the clocks before it are forgotten. A booking may start later than `now`
     // (a drain after its epilogue), and pruning never follows it (#471's review).
     Cycle book(std::size_t cf, std::uint32_t slot, std::uint64_t bytes, Access kind, Client who, Cycle start,
-               Cycle per_row, Cycle now) {
-        const std::size_t tile = cf < cal_.size() ? cf : 0;
+               Cycle per_row, Cycle now, const TileID* id = nullptr) {
+        const std::size_t tile = tile_index(cf);
         auto& cal = cal_.at(tile);
         cal.erase(cal.begin(), cal.lower_bound(std::min(now, start)));
         const std::uint64_t n = rows_of(bytes), r0 = first_row(slot, n);
         const bool reads = kind != Access::Write, writes = kind != Access::Read;
+        Booking bk;
+        if (keep_log_) {
+            if (id) bk.tile = *id;
+            bk.who = who;
+            bk.kind = kind;
+            bk.cf = tile_index(cf);
+            bk.slot = slot;
+            bk.now = now;
+            bk.start = start;
+            bk.per_row = per_row;
+            bk.first_row = r0;
+            bk.rows.reserve(n);
+        }
         Cycle at = start, last = start;
         for (std::uint64_t k = 0; k < n; ++k) {
-            const std::uint32_t b = bank_of(r0 + k);
+            const std::uint32_t b = bank_of(g_.row(r0, k));
             Cycle t = std::max(at, start + k * per_row);
             for (;; ++t) {
                 auto& use = cal[t];
@@ -130,17 +183,26 @@ public:
                 }
                 ++stats_.stalls[static_cast<std::size_t>(who)];
                 ++stats_.bank_stalls[b];
+                ++bk.stalls;
             }
             ++stats_.accesses;
             ++stats_.tile_accesses[tile];
+            if (keep_log_) bk.rows.push_back(t);
             last = t;
             at = t + per_row;
+        }
+        if (keep_log_) {
+            if (n) bk.delay = (last + per_row - start) - n * per_row;   // the stalls' lengthening
+            log_.push_back(std::move(bk));
         }
         return (last + per_row - start) + (reads ? g_.read_latency : 0);
     }
 
 private:
+    std::size_t tile_index(std::size_t cf) const { return cf < cal_.size() ? cf : 0; }
     struct Use { std::uint8_t reads = 0, writes = 0; };
+    bool keep_log_ = false;
+    std::vector<Booking> log_;
     Geometry g_;
     std::vector<std::map<Cycle, std::vector<Use>>> cal_;
     Stats stats_;
