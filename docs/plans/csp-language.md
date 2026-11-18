@@ -200,7 +200,7 @@ time.
 
 ```
 csp 1.1
-program linear machine flat(l3 = 128) {
+program linear machine flat(l3 = 128, l2 = 8) {
   tensor X[256,256] tile 32x32 in;
   tensor W[256,256] tile 32x32 in;
   vector b[256]     tile 32    in;

@@ -1318,8 +1318,10 @@ private:
             const std::size_t d = sink_.l0(drain);
             const std::size_t id = next_residency_++;
             place(id, y);
-            emit(Action::Kind::Drain, y, kNone, d, nullptr, false, false, false, std::move(drain_ctx));
-            emit(Action::Kind::Writeback, y, id, d, nullptr, true, false, false, std::move(wb_ctx));
+            // Out through its result's L2 slot, as a store's result is, then retained in L3.
+            const ResultSlot r = results_.at(k);
+            results_.erase(k);
+            result_out(y, d, id, true, std::move(drain_ctx), std::move(wb_ctx), r.at, next_staging_++);
             emit(Action::Kind::Retain, y, id, d);
             acc_.erase(acc);
             acc_calls_.erase(k);
