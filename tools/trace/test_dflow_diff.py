@@ -48,6 +48,26 @@ class Diff(unittest.TestCase):
         self.assertEqual(o["dropped_addresses"], ["acc", "l2"])
         self.assertEqual(o["placement"]["count"], 0)
 
+    def test_a_transfer_placed_elsewhere_differs(self):
+        # L2's addresses are placement (§5.3): a transfer at another row still joins, and is
+        # reported placed differently, which is a difference (exit 1) though nothing is one-sided.
+        b = Bundle(LCA)
+        try:
+            rows = b.manifest["geometry"]["l2"]["rows"]
+            e = next(i for i in range(b.rows("events"))
+                     if dc.EVENT_KINDS[b.get("events", "kind", i)] == "BLOCK_MOVE"
+                     and b.get("events", "dst", i) == dc.LAYERS.index("l2")
+                     and b.get("events", "dst_addr", i) != dc.NONE64)
+            b.set("events", "dst_addr", e, (b.get("events", "dst_addr", e) + 1) % rows)
+            code, o = run(LCA, b.dir)
+            self.assertEqual(code, 1, o)
+            self.assertEqual((o["only_a"]["count"], o["only_b"]["count"]), (0, 0))
+            self.assertIsNone(o["first_divergence"])
+            self.assertEqual(o["placement"]["count"], 1)
+            self.assertEqual([x["layer"] for x in o["placement"]["first"][0]["ends"]], ["l2"])
+        finally:
+            b.close()
+
     def test_a_shifted_event_is_the_first_divergence(self):
         b = Bundle(LCA)
         try:

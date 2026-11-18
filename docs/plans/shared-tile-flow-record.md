@@ -230,7 +230,9 @@ No two events in a record share a key. Among the events that name an action, no 
   rows its own allocator chooses, so the same transfer has different rows in the two records. L3's
   and DRAM's addresses stay in the key, since the program places them. `dflow_diff.py` compares L2
   and accumulator addresses on the matched events, and reports those that differ as *placed
-  differently*. E2 checks uniqueness with the same key.
+  differently*. It compares an endpoint only when both records give its address, in the same form:
+  slots against rows, or an address one record leaves out, is not compared, so a count of zero does
+  not prove the placements agree. E2 checks uniqueness with the same key.
 - The key is built from **what the event is**: which tile it moves, from where to where, in which
   iteration, and which row. It is not built from when the event happened or which engine instance
   ran it. So it is the same in a kpu-sim record and in an RTL record of the same schedule.
@@ -281,8 +283,10 @@ and L1 as `{"modelled": true, "slots": N}`, N ≥ 0:
 - a layer declared both ways, `slots` together with `banks`, `rows`, `row_bytes`, `interleave`
   or `cols`, is refused (G1).
 
-A banked kpu-sim L-CA record (#401) declares L2 in the rows form instead, like the RTL: an event's L2
-address is its transfer's first row, and each transfer's rows are row events (BM_ROW, STR_ROW,
+A banked kpu-sim L-CA record (#401) declares L2 in the rows form instead, like the RTL: a
+transaction's L2 address is its transfer's first row, and each row event's is the row it accessed,
+wrapping at the L2's last row (a transfer from row 3 of a four-row L2 has rows 3, 0, 1). Each
+transfer's rows are row events (BM_ROW, STR_ROW,
 DRAIN_ROW: row r of the transfer, beat 0, at the clock the bank served it). A transfer that takes
 more L2 rows than its tile has rows keeps its transaction but has no row events, since a row event
 is a row of its tile (E3); the record's notes count those. Either way, L2 and

@@ -67,7 +67,7 @@ struct BubbleReport {
         L3Slot,         // the Move's Load waited for its L3 slot's credit
         DmaBusy,        // the Load waited for a DMA lane
         Dram,           // the Load itself: the DRAM transfer (and what it waited on, a Store or a Release)
-        L2Bank,         // an L2 transfer's rows waited for their banks' ports (L-CA's banked L2, #401)
+        L2Bank,         // an L2 transfer's rows waited for their banks' ports, and that delayed its finish (#401)
         Result,         // a result's way out: an operand's move held behind a Drain, Writeback or
                         // Store on its process, or the Move of a tile that is itself a result
         Unknown,
@@ -336,7 +336,7 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
             if (result && operand) {
                 into->chain.push_back(p->second->action);
                 // The result ahead ran long because its rows waited for their banks (#401).
-                return p->second->bank_wait > 0 ? Cause::L2Bank : Cause::Result;
+                return p->second->bank_delay > 0 ? Cause::L2Bank : Cause::Result;
             }
             return explain(p->second, depth + 1);
         }
@@ -356,13 +356,13 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
             }
             case Action::Kind::Feed: {
                 // Its own rows waited for their banks: the transfer itself ran long (#401).
-                if (r->bank_wait > 0) return Cause::L2Bank;
+                if (r->bank_delay > 0) return Cause::L2Bank;
                 const Rec* mv = last_before(r->tile, r->action, {Action::Kind::Move});
                 return mv ? explain(mv, depth + 1) : Cause::Unknown;
             }
             case Action::Kind::Move: {
                 if (r->l2_wait > 0) return Cause::L2Slot;
-                if (r->bank_wait > 0) return Cause::L2Bank;
+                if (r->bank_delay > 0) return Cause::L2Bank;
                 const Rec* src =
                     last_before(r->tile, r->action, {Action::Kind::Load, Action::Kind::Writeback, Action::Kind::Inherit});
                 if (!src) return Cause::Unknown;
@@ -379,12 +379,12 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
             // for its Writeback.
             case Action::Kind::Drain: {
                 if (r->l2_wait > 0) return Cause::L2Slot;
-                if (r->bank_wait > 0) return Cause::L2Bank;
+                if (r->bank_delay > 0) return Cause::L2Bank;
                 const Rec* src = last_before(r->tile, r->action, {Action::Kind::Call});
                 return src ? explain(src, depth + 1) : Cause::Unknown;
             }
             case Action::Kind::Writeback: {
-                if (r->bank_wait > 0) return Cause::L2Bank;
+                if (r->bank_delay > 0) return Cause::L2Bank;
                 const Rec* src = last_before(r->tile, r->action, {Action::Kind::Drain});
                 return src ? explain(src, depth + 1) : Cause::Unknown;
             }

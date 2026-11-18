@@ -538,6 +538,7 @@ private:
             accumulate ? L2Banks::Client::Combiner : L2Banks::Client::Drain, current_cycle,
             config_.result_cf ? config_.result_cf(drain_tile.tile_id) : -1, current_cycle + drain_tile.fabric_cycles);
         Cycle transfer_cycles = drain_tile.fabric_cycles + std::max(move, drain_tile.ve_cycles);
+        if (config_.l2_banks) config_.l2_banks->overlap_last(move, drain_tile.ve_cycles);
         ve_busy_cycles_ += drain_tile.ve_cycles;
         if (drain_tile.ve_cycles > move) ve_bound_cycles_ += drain_tile.ve_cycles - move;
 

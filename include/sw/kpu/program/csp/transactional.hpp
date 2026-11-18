@@ -166,6 +166,7 @@ public:
         Cycle slot_wait = 0;            // a Load whose slot decided its start: what the wait cost
         Cycle l2_wait = 0;              // a stage Move or a first merge whose L2 slot decided its start: the same
         Cycle bank_wait = 0;            // L-CA, banked (#401): the clocks its L2 rows waited for their banks' ports
+        Cycle bank_delay = 0;           //   and the clocks those waits added to its finish (<= bank_wait)
         std::uint32_t chain = kNoChain; // a Call in a stream chain: its index in chains()
         std::uint32_t chain_pos = 0;    //   and its place in it, from 1
     };

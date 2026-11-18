@@ -719,7 +719,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                 // The array's edge is the deployment's, the same at both levels.
                 const auto dv = spec.device_view(0);
                 // L-CA's banked L2 (#401): its transfers' booked rows, as the record's row events.
-                const bool rows = lvl == ExecutionLevel::CycleAccurate && o.l2_geometry && !o.l2_bookings.empty();
+                const bool rows = lvl == ExecutionLevel::CycleAccurate && o.l2_geometry.has_value();
                 record::DomainFlowRecord rec = record::timed_record(
                     *lb_record, name, o.records, o.values, static_cast<std::uint32_t>(dv.pe_rows),
                     static_cast<std::uint32_t>(dv.pe_cols), rows ? &o.l2_bookings : nullptr,

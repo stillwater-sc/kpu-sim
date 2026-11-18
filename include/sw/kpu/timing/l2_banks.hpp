@@ -88,6 +88,9 @@ public:
         std::uint64_t first_row = 0;
         std::vector<Cycle> rows;                        // row k's clock
         Cycle stalls = 0;
+        // The clocks the stalls added to the leg's completion: the transfer's own lengthening,
+        // less what other work overlapping it hid (a drain's Combiner; overlap_last).
+        Cycle delay = 0;
     };
 
     static bool power_of_two(std::uint64_t v) { return v && !(v & (v - 1)); }
@@ -104,6 +107,15 @@ public:
     // A fresh run (the executor's reset): no bookings, no counts. The calendar is keyed by absolute
     // clock, and a reset restarts the clock at 0.
     void keep_log(bool keep) { keep_log_ = keep; }
+    // The last booking's leg completes at max(move, other), the transfer's `move` cycles running
+    // alongside `other` cycles of other work (a drain's Combiner): its stalls delayed the leg only
+    // by what they added past `other`.
+    void overlap_last(Cycle move, Cycle other) {
+        if (!keep_log_ || log_.empty()) return;
+        Booking& b = log_.back();
+        const Cycle bare = move - std::min(b.delay, move);
+        b.delay = std::max(move, other) - std::max(bare, other);
+    }
     [[nodiscard]] const std::vector<Booking>& log() const { return log_; }
 
     void reset() {
@@ -178,7 +190,10 @@ public:
             last = t;
             at = t + per_row;
         }
-        if (keep_log_) log_.push_back(std::move(bk));
+        if (keep_log_) {
+            if (n) bk.delay = (last + per_row - start) - n * per_row;   // the stalls' lengthening
+            log_.push_back(std::move(bk));
+        }
         return (last + per_row - start) + (reads ? g_.read_latency : 0);
     }
 

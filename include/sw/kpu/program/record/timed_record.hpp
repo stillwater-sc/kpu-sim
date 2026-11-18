@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <string>
 #include <tuple>
@@ -151,13 +152,15 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
     };
     const std::uint8_t none = kNone8;
     // A banked L2's bookings, by tile, mover or streamer, the clock the leg started and direction.
-    const bool banked = bookings && l2g && !bookings->empty();
+    // A banked L2's geometry decides the form; its bookings give the rows (a run with no L2
+    // transfer has none).
+    const bool banked = l2g != nullptr;
     auto bkey = [](const std::string& tile, bool mover, std::uint64_t at, bool into) {
         return tile + (mover ? "/bm/" : "/str/") + std::to_string(at) + (into ? "/w" : "/r");
     };
     std::map<std::string, const timing::L2Banks::Booking*> booked;
     std::uint64_t rows_used = 1;
-    if (banked)
+    if (banked && bookings)
         for (const auto& [t, b] : *bookings) {
             std::string name = t.operand + "[" + std::to_string(t.ti) + "," + std::to_string(t.tj) + "]";
             booked[bkey(name, b.who == timing::L2Banks::Client::BlockMover, b.now, b.kind != timing::L2Banks::Access::Read)] = &b;
@@ -285,6 +288,8 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
         g.row_bytes = l2g->row_bytes;
         const std::uint64_t total = l2g->rows_per_bank ? std::uint64_t(l2g->rows_per_bank) * l2g->banks
                                                        : (rows_used + l2g->banks - 1) / l2g->banks * l2g->banks;
+        if (total > std::numeric_limits<std::uint32_t>::max())
+            throw RecordError("record: the L2's " + std::to_string(total) + " rows do not fit the record's row extent");
         g.rows = static_cast<std::uint32_t>(std::max<std::uint64_t>(1, total));
         r.l2_rows = g;
         for (const auto& [action, bk] : with_rows) {
@@ -321,8 +326,9 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
         }
         r.level_notes[0] = "row progress: each L2 transfer's rows as " + level + " booked them on the banks' ports "
                            "(BM_ROW, STR_ROW, DRAIN_ROW: row r of the transfer, beat 0, [its clock, + its row's clocks))";
-        r.level_notes[1] = "L2 by banks and rows (row-mod-banks): an event's L2 address is its transfer's first row, "
-                           "which is the producer's own placement (§5.3); the accumulator's and the array edge's, none";
+        r.level_notes[1] = "L2 by banks and rows (row-mod-banks): a transaction's L2 address is its transfer's first "
+                           "row, and each row event's the row it accessed (wrapping at the L2's last row); both are "
+                           "the producer's own placement (§5.3); the accumulator's and the array edge's, none";
         if (too_tall)
             r.level_notes.push_back(std::to_string(too_tall) + " transfers have more L2 rows than their tile has rows; "
                                     "their row events are left out (a row event is a row of its tile, E3)");

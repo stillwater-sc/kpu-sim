@@ -20,6 +20,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <random>
 #include <map>
 #include <string>
@@ -73,6 +75,8 @@ TEST_CASE("Bank rows: every booking is a leg's bank wait", "[program][record][ti
     REQUIRE(x.lca.l2_banks);
     // Every booking matched one leg: the legs' waits are the calendar's stalls.
     CHECK(waited == x.lca.l2_banks->stalls_total());
+    // A wait delays its leg at most by itself.
+    for (const Rec& r : x.lca.records) CHECK(r.bank_delay <= r.bank_wait);
 }
 
 TEST_CASE("Bank rows: a banked L-CA record has L2 by rows, and its transfers' row events", "[program][record][timed][banks]") {
@@ -159,7 +163,7 @@ TEST_CASE("Bank rows: a feed whose rows waited for their bank is the bubble's ca
     std::vector<Rec> rs = {rec(0, K::Move, P::Bm, "A", 0, 4),  rec(1, K::Feed, P::Str, "A", 4, 8),
                            rec(2, K::Call, P::Cf, "C", 8, 18), rec(3, K::Move, P::Bm, "B", 4, 8),
                            rec(4, K::Feed, P::Str, "B", 8, 40), rec(5, K::Call, P::Cf, "D", 40, 50)};
-    rs[4].bank_wait = 24;                   // the Feed of B: its rows waited 24 clocks for their bank
+    rs[4].bank_wait = rs[4].bank_delay = 24;    // the Feed of B: its rows waited 24 clocks, all added to it
     std::map<std::string, std::uint64_t> busy{{"bm", 8}, {"str", 36}, {"cf", 20}};
     std::map<std::string, std::size_t> lanes{{"dma", 1}, {"bm", 1}, {"str", 1}, {"cf", 1}};
     const auto rep = csp::bubble_report(rs, 50, busy, lanes);
@@ -224,7 +228,7 @@ TEST_CASE("Bank rows: a result ahead whose rows waited for their banks is the bu
                            rec(2, K::Call, P::Cf, "C", 8, 8, 18),  rec(3, K::Drain, P::Str, "C", 18, 18, 60),
                            rec(4, K::Move, P::Bm, "B", 4, 4, 8),   rec(5, K::Feed, P::Str, "B", 8, 60, 64),
                            rec(6, K::Call, P::Cf, "D", 64, 64, 74)};
-    rs[3].bank_wait = 30;                   // the Drain's rows waited for their bank
+    rs[3].bank_wait = rs[3].bank_delay = 30;    // the Drain's rows waited for their bank, delaying it
     std::map<std::string, std::uint64_t> busy{{"bm", 8}, {"str", 50}, {"cf", 20}};
     std::map<std::string, std::size_t> lanes{{"dma", 1}, {"bm", 1}, {"str", 2}, {"cf", 1}};
     using Cause = csp::BubbleReport::Cause;
@@ -235,6 +239,70 @@ TEST_CASE("Bank rows: a result ahead whose rows waited for their banks is the bu
         return Cause::Unknown;
     };
     CHECK(cause_of(rs) == Cause::L2Bank);
-    rs[3].bank_wait = 0;                    // without the bank wait: the result ahead
+    rs[3].bank_delay = 0;                   // its rows waited, but the Combiner's time hid it: the result ahead
     CHECK(cause_of(rs) == Cause::Result);
+    rs[3].bank_wait = 0;                    // no bank wait at all: the result ahead
+    CHECK(cause_of(rs) == Cause::Result);
+}
+
+TEST_CASE("Bank rows: a stall the Combiner's time hides does not delay the drain", "[program][timing][banks]") {
+    using sw::kpu::timing::L2Banks;
+    L2Banks::Geometry g;
+    g.banks = 1;
+    g.read_latency = 0;
+    L2Banks b(g, 1);
+    b.keep_log(true);
+    // Hold the one bank's write port at clock 0, so a drain's first row stalls one clock.
+    b.book(0, 0, g.row_bytes, L2Banks::Access::Write, L2Banks::Client::BlockMover, 0, 1, 0);
+    const auto move = b.book(0, 1, 2 * g.row_bytes, L2Banks::Access::Write, L2Banks::Client::Drain, 0, 1, 0);
+    REQUIRE(b.log().back().stalls == 1);
+    CHECK(b.log().back().delay == 1);          // alone, the stall lengthens the transfer by its clock
+    b.overlap_last(move, move + 10);           // a Combiner longer than the transfer hides it
+    CHECK(b.log().back().delay == 0);
+    const auto again = b.book(0, 2, 2 * g.row_bytes, L2Banks::Access::Write, L2Banks::Client::Drain, 0, 1, 0);
+    const auto stalled = b.log().back().delay;
+    REQUIRE(stalled > 0);
+    b.overlap_last(again, again - 1);          // a Combiner one clock shorter: one clock of it shows
+    CHECK(b.log().back().delay == std::min<sw::kpu::timing::Cycle>(stalled, 1));
+}
+
+TEST_CASE("Bank rows: the banked form follows the geometry, not the bookings", "[program][record][timed][banks]") {
+    const Run x = run();
+    // A banked run with no booking (no L2 transfer) still declares its L2 by rows, with no row events.
+    const auto r = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values, 0, 0, nullptr, &*x.lca.l2_geometry);
+    REQUIRE(r.l2_rows);
+    for (const auto& e : r.events) CHECK(e.kind < ev::BmRow);
+    // An L2 whose rows the record cannot count is refused, not written as rows: 0.
+    auto big = *x.lca.l2_geometry;
+    big.banks = 4;
+    big.rows_per_bank = 1u << 30;
+    CHECK_THROWS_AS(record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values, 0, 0, &x.lca.l2_bookings, &big),
+                    record::RecordError);
+}
+
+TEST_CASE("Bank rows: a record whose L2 is declared both ways is refused", "[program][record][timed][banks]") {
+    const Run x = run();
+    const auto r = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values, 0, 0, &x.lca.l2_bookings,
+                                        &*x.lca.l2_geometry);
+    struct Scratch {
+        std::filesystem::path p;
+        ~Scratch() {
+            std::error_code ec;
+            std::filesystem::remove_all(p, ec);
+        }
+    } tmp{std::filesystem::temp_directory_path() /
+          ("kpu_bank_rows_mixed_" + std::to_string(std::random_device{}()) + ".dflow")};
+    const std::string dir = tmp.p.string();
+    record::write_dflow(r, dir);
+    nlohmann::json m;
+    {
+        std::ifstream in(dir + "/manifest.json");
+        in >> m;
+    }
+    m["geometry"]["l2"]["slots"] = 4;
+    {
+        std::ofstream out(dir + "/manifest.json");
+        out << m.dump();
+    }
+    CHECK_THROWS_AS(record::read_dflow(dir), record::RecordError);
 }

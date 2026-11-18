@@ -26,7 +26,8 @@ It reports:
     and of duration.
 
 It is a debugging tool, not a CI gate (D3): CI compares results (dflow_check.py --result), never
-events. Exit 0 when the records join with nothing one-sided and no divergence, 1 when they differ,
+events. Exit 0 when the records join with nothing one-sided, no divergence and nothing placed
+differently, 1 when they differ,
 2 when either cannot be read, fails the checker, or has no events (L-B's steps are its events).
 
 SPDX-License-Identifier: MIT
@@ -197,7 +198,7 @@ def diff(a, b, tolerance=0, show=5):
     else:
         out["first_divergence"] = None
         out["untimed"] = [s for s, r in (("A", a), ("B", b)) if not r.timed]
-    out["differs"] = bool(only["A"] or only["B"] or out["first_divergence"])
+    out["differs"] = bool(only["A"] or only["B"] or out["first_divergence"] or out["placement"]["count"])
     return out
 
 

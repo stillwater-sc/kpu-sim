@@ -420,6 +420,8 @@ DFR read_dflow(const std::string& dir) {
                 for (const json& s : m.at("not_modelled")) rec.level_notes.push_back(s.get<std::string>());
                 // A banked L2's rows (#401), when the record declares them.
                 const json& l2 = m.at("geometry").at("l2");
+                if (l2.contains("rows") && l2.contains("slots"))
+                    throw RecordError("read_dflow: geometry.l2 declares both slots and rows");
                 if (l2.contains("rows") && l2.value("interleave", std::string()) != "row-mod-banks")
                     throw RecordError("read_dflow: geometry.l2 is by rows, but its interleave is not row-mod-banks");
                 if (l2.contains("rows"))

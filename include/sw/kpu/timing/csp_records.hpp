@@ -325,10 +325,12 @@ inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& ha
         auto key = [](const program::TileCoord& t, Proc p, std::uint64_t at, bool into) {
             return t.to_string() + "/" + std::to_string(static_cast<int>(p)) + "/" + std::to_string(at) + (into ? "/w" : "/r");
         };
-        std::map<std::string, Cycle> wait;
+        std::map<std::string, std::pair<Cycle, Cycle>> wait;        // stalls, delay
         for (const auto& [t, b] : *bookings) {
             const Proc p = b.who == L2Banks::Client::BlockMover ? Proc::Bm : Proc::Str;
-            wait[key(t, p, b.now, b.kind != L2Banks::Access::Read)] += b.stalls;
+            auto& w = wait[key(t, p, b.now, b.kind != L2Banks::Access::Read)];
+            w.first += b.stalls;
+            w.second += b.delay;
         }
         for (Leg& l : legs) {
             const Action::Kind k = l.rec.kind;
@@ -338,7 +340,10 @@ inline CspRecords csp_records(const std::vector<CspDriver::Result::Handover>& ha
             if (k == Action::Kind::Writeback && l.leg != 0) continue;
             if (!l.started) continue;       // a handed-over leg that never started booked nothing
             const auto it = wait.find(key(l.rec.tile, l.rec.proc, l.rec.start, into));
-            if (it != wait.end()) l.rec.bank_wait = it->second;
+            if (it != wait.end()) {
+                l.rec.bank_wait = it->second.first;
+                l.rec.bank_delay = it->second.second;
+            }
         }
     }
     for (const Leg& l : legs) {
