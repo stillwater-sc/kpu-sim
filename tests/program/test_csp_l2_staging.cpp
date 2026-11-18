@@ -418,6 +418,43 @@ TEST_CASE("L2 placement: the validator holds what the walker holds (#496's revie
         CHECK(error_of(p, false) == "accepted");
         CHECK(error_of(p, true) == "accepted");
     }
+    SECTION("every pending late result holds its slot, until the walker emits it") {
+        auto with = [](const std::string& accs) {
+            return "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+                   "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+                   "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 out;\n"
+                   "  tensor E[16,16] tile 16x16 out;\n  resident A[0, 0], B[0, 0];\n" + accs +
+                   "  stage A[0, 0], B[0, 0] in l2 {\n"
+                   "    acc E[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> E[0, 0]; }\n    store E[0, 0];\n  }\n"
+                   "  release A[0, 0], B[0, 0];\n}\n";
+        };
+        const std::string c = "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n";
+        const std::string d = "  acc D[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> D[0, 0]; }\n";
+        // Both stored late after both accumulators: both pending at E's call (2 + A, B + E's = 5 > 4).
+        const std::string both = with(c + d + "  store C[0, 0] late;\n  store D[0, 0] late;\n");
+        CHECK_THAT(error_of(both, false), ContainsSubstring("needs an L2 slot"));
+        CHECK_THAT(error_of(both, true), ContainsSubstring("L2 slot"));
+        // C's late store is emitted at D's close, since D opened after it: only D's is pending.
+        const std::string one = with(c + "  store C[0, 0] late;\n" + d + "  store D[0, 0] late;\n");
+        CHECK(error_of(one, false) == "accepted");
+        CHECK(error_of(one, true) == "accepted");
+    }
+    SECTION("an unstaged init's copy needs its slot as the accumulator opens") {
+        const std::string p =
+            "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 3) {\n"
+            "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n  tensor X[16,16] tile 16x16 in;\n"
+            "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 out;\n"
+            "  resident A[0, 0], B[0, 0], X[0, 0];\n"
+            "  acc D[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> D[0, 0]; }\n"
+            "  stage A[0, 0], B[0, 0] in l2 {\n"
+            // D's store, inside C's block before its call, frees D's slot only after X's copy needs one.
+            "    acc C[0, 0] in fabric init X[0, 0] {\n      store D[0, 0];\n"
+            "      call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n    }\n"
+            "    store C[0, 0];\n  }\n"
+            "  release A[0, 0], B[0, 0], X[0, 0];\n}\n";
+        CHECK_THAT(error_of(p, false), ContainsSubstring("needs an L2 slot"));
+        CHECK_THAT(error_of(p, true), ContainsSubstring("L2 slot"));
+    }
     SECTION("a stage counts the open accumulators' result slots") {
         const std::string p = prog(2,
             "  resident A[0, 0], B[0, 0];\n"
