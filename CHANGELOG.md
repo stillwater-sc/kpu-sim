@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The memory hierarchy's roles** (`docs/01-architecture/memory-hierarchy-roles.md`; an
+  architecture decision, 2026-11-18). L3 holds (reuse, double buffering against DRAM's latency),
+  L2 feeds (the concurrency that keeps the fabric busy), and L1 transforms (parallel vector in,
+  element-wise out).
+  - L2's data must be pre-arranged: two vectors per clock at a 2 GHz array, against an L2
+    latency of up to 8 clocks, means at least 16 requests in flight.
+  - So transforms happen in the BlockMover as it writes L2. The first is #483's transpose.
+  - The document lists the validation checks that follow, and notes that L-CA does not yet model
+    the outstanding-request requirement.
+
 - **L-CA's banked L2 in its records** (#401, slice 1's second part; closes #402's last item).
   - **Timed record:** an L-CA record of a banked L2 declares it in the rows form (banks, rows, row
     width, row-mod-banks), like the RTL's. A transaction's L2 address is its transfer's first row,

@@ -41,6 +41,12 @@ This is the fundamental synchronization mechanism - no locks, no polling, just t
 
 ## Memory Hierarchy as Buffers
 
+Each level's **role**, which decides where data may be transformed, is in
+[`memory-hierarchy-roles.md`](memory-hierarchy-roles.md): **L3 holds** (reuse, double buffering
+against DRAM's latency), **L2 feeds** (the concurrency that keeps the fabric busy, so its data is
+pre-arranged and nothing transforms it on the way out), and **L1 transforms** (parallel vector in,
+element-wise out). A transform such as a transpose happens in the BlockMover, as it writes L2.
+
 ### L3 Tile Buffers
 
 L3 is a collection of **tile buffers**, not a cache.
