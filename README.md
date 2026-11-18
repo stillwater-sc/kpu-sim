@@ -2,6 +2,9 @@
 
 A high-performance C++20 functional simulator for the Stillwater KPU - a specialized hardware accelerator for knowledge processing and AI workloads. Features Python bindings for easy testing and education.
 
+> **New developer?** Start with [docs/ONBOARDING.md](docs/ONBOARDING.md): what the simulator is
+> for, the ideas behind it, how the stack works, and a guided path through examples.
+
 ## Quick Start
 
 ### Prerequisites

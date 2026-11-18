@@ -16,12 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     them. A transfer with more L2 rows than its tile has rows keeps its transaction but gets no row
     events (E3 places a row inside its tile), and the record's notes count those.
   - **Bookings:** the calendar keeps each transfer's booking when L-CA keeps its events.
-  - **Bubble report:** each L-CA leg carries its bank wait (`bank_wait`), and the report blames
-    "L2 bank ports" when an operand's transfer ran long because its rows waited for their banks.
+  - **Bubble report:** each L-CA leg carries its bank wait (`bank_wait`, the raw stall clocks) and
+    its bank delay (`bank_delay`, the clocks those stalls added to its finish, past any overlapping
+    Combiner or egress work). The report blames "L2 bank ports" when a transfer's bank delay held
+    up a call.
   - **Identity (§5.3, decided 2026-11-18):** L2's and the accumulator's addresses are each
     producer's placement, not part of the identity key. `dflow_diff.py` and the occupancy viewer
     join without them, `dflow_diff.py` reports matched events placed differently, and E2 checks
     uniqueness with the same key. So a banked L-CA record still joins the RTL's.
+
+- **An onboarding guide for new developers** (`docs/ONBOARDING.md`). It covers:
+  - what kpu-sim is for;
+  - the design rules behind it: one program at several levels, values at every level, credits
+    not caches, deliberate reuse, placement as behavior, streams from the array's edges, the
+    record shared with the RTL;
+  - how the stack works;
+  - a seven-step guided path through the tools, each step saying what to look for.
+
+  `README.md` and `docs/README.md` now point to it first.
 
 ### Changed
 
