@@ -22,6 +22,7 @@ High-level architecture and specifications that define what the KPU is.
 | [kpu-execution-model.md](01-architecture/kpu-execution-model.md) | Credit-based dataflow execution model |
 | [kpu-specification.md](01-architecture/kpu-specification.md) | Complete KPU specification |
 | [kpu-architecture.md](01-architecture/kpu-architecture.md) | Overall architecture overview |
+| [memory-hierarchy-roles.md](01-architecture/memory-hierarchy-roles.md) | Each memory level's role: L3 holds (reuse, latency hiding), L2 feeds (concurrency; pre-arranged data, no transform on its read path), L1 transforms (vector in, element-wise out). Transforms happen in the BlockMover, into L2 |
 | [combiner.md](01-architecture/combiner.md) | The Combiner: the tile's result-path unit between L1 and L2 (merges partials; fused bias, activation, scaling, block-format conversion). The Vector Engine, renamed and extended (#427, #429) |
 | [soc-architecture.md](01-architecture/soc-architecture.md) | SoC-level architecture |
 | [product-architecture.md](01-architecture/product-architecture.md) | Product positioning |

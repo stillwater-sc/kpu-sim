@@ -99,7 +99,7 @@ The sweep's table is recorded here when #482 lands.
 
 | # | Operator | Issue | What it validates |
 |---|---|---|---|
-| 1 | GEMM over shapes, with transposes (Aᵀ·B, A·Bᵀ) | #480–#483 | The schedule space (§3). Transpose on a move or a stream is a data path feature: backprop needs it, and attention needs QKᵀ. |
+| 1 | GEMM over shapes, with transposes (Aᵀ·B, A·Bᵀ) | #480–#483 | The schedule space (§3). The transpose is a BlockMover transform on the Move into L2 (§7 Q1): backprop needs it, and attention needs QKᵀ. |
 | 2 | TRSM, many right-hand sides | #484 | Triangular iteration spaces (bounds on an outer index) and a new tile function. It is the panel step of LU and Cholesky; `trsm_ll` exists only inside LU today. |
 | 3 | SYRK | #485 | Only one triangle of C is computed (a triangular output space), and rank-k batching. It is Cholesky's trailing update. |
 | 4 | Cholesky, blocked: in-core, out-of-core, left- and right-looking | #486 | The simplest blocked decomposition, with no pivoting: blocking's effect on a CSP program, isolated from pivoting. |
@@ -107,7 +107,7 @@ The sweep's table is recorded here when #482 lands.
 | 6 | QR, blocked Householder (compact WY), and TSQR | #490 | A tall-skinny, BLAS-2-heavy panel, then a GEMM-heavy trailing update with block reflectors. TSQR adds a reduction tree across compute tiles (#403). |
 | 7 | GEMV and GER | #488 | Bandwidth-bound and with little reuse. The simulator must show the bandwidth limit as bubbles, not hide it: the "reuse is deliberate" rule. |
 | 8 | Batched and strided-batched GEMM | #489 | Many small problems: scheduling across compute tiles, distribute and broadcast (#403), the runtime's batching. |
-| 9 | SYMM and TRMM | #491 | An operand stored as one triangle and read whole: transposed tile access on a move. |
+| 9 | SYMM and TRMM | #491 | An operand stored as one triangle and read whole: the mirrored half is transposed by the BlockMover as it writes L2. |
 | 10 | Hessenberg reduction, then the Schur form | #492 | Two-sided updates, with reuse from both sides. The Schur form's QR iteration runs until convergence, so its sweep count depends on the data: the host sequences the sweeps (v0.13's host orchestration). The tridiagonal and bidiagonal reductions follow the same pattern. |
 
 Two neighbours are tracked by their own plans, not here:
@@ -144,8 +144,11 @@ Two neighbours are tracked by their own plans, not here:
 
 ## 7. Open questions
 
-- **Q1. Where a transpose happens** (#483): in the BlockMover, in the Streamer, or at the array's
-  edge. This is an architecture decision for kpu-sim to make; the RTL then implements it.
+- **Q1. Where a transpose happens** (#483; decided 2026-11-18): **in the BlockMover, as it writes
+  the tile into L2.** The Streamer's L2 → L1 reads have no time for it: L2's concurrency is spent
+  keeping the L1 fed (at a 2 GHz array, two vectors per clock against an L2 latency of up to 8
+  clocks means at least 16 requests in flight), so L2's data must be pre-arranged. The rule and
+  its arithmetic are in `docs/01-architecture/memory-hierarchy-roles.md`.
 - **Q2. The search's budget** (#482): how large a space, and how many candidates go on to L-CA.
 - **Q3. Milestones** (decided 2026-11-18): **v1.1.0** takes phases 1–3, the GEMM schedule space,
   transposes, and TRSM, SYRK and Cholesky (#480–#486). **v1.2.0** takes phases 4–6, GEMV and
