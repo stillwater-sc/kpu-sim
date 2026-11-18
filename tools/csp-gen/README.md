@@ -55,20 +55,24 @@ The tool came out of [`docs/plans/kpu-run-csp-programs.md`](../../docs/plans/kpu
 
 ## Scope
 
-The tool has grown past its original brief. The plan settled on one canonical schedule per
+The tool has grown past the plan's original brief. The plan settled on one canonical schedule per
 operator with two options. Since then it has gained `--init`, `--dtype`, `--requant`,
 `--requant-channels`, `--stage-a` and three dataflows, so it is becoming a small compiler for
 three operators. That serves the architecture experiments well, but it is not the road to MTL5 or
 PyTorch: each new operator added here would be hand-written schedule code that ADR 0002 says
 should not exist.
 
-**Recommended** (not yet decided):
-- Keep `kpu-csp-gen` as the generator of test and experiment programs. Add options when an
-  architecture question needs one; do not add operators for coverage.
-- Put operator-coverage work into `lower_to_csp` (#281).
-- A useful first milestone for the lowering: lower matmul's DFP and match `kpu-csp-gen`'s output.
-  That cross-checks the lowering, and after it this tool is a test fixture rather than a source
-  of programs.
+**The direction** (decided 2026-11-18; `docs/plans/blocked-linear-algebra-test-set.md`, epic #479):
+- **Schedule variability is in scope.** GEMM's schedule space moves into a shared library: shapes,
+  blocks per level, loop order, partial-C carriage, and a choice by shape with a search
+  (#480–#482). `kpu-csp-gen` becomes a front end to that library, which the DFP → CSP lowering
+  (`lower_to_csp`, #281) will also call.
+- **New operators come as reference schedules for a validation test set**, not for coverage:
+  TRSM, SYRK, Cholesky, out-of-core LU, QR and TSQR, GEMV and GER, batched GEMM, SYMM and TRMM,
+  Hessenberg and Schur (#483–#492). Each is kept as a golden program that the lowering must
+  reproduce, so the test set is the compiler's acceptance suite rather than a second source of
+  programs.
+- **Operator coverage for MTL5 or PyTorch** stays with the lowering.
 
 ## Usage
 
