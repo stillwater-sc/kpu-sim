@@ -78,13 +78,9 @@ struct OracleRun {
 
 // C = A @ B (size^3, tile^3) on the CSP executor configured from `d`, and at L-B: kpu-csp-gen's
 // matmul program on the same inputs (csp_inputs: exact multiples of 1/8).
-// The executor's mover and streamer rates before #458 mapped the deployment's (51.2 and 102.4 GB/s
-// at 1 GHz). A characterization measured at them is pinned to them (`legacy_rates`), and what
-// changes at the deployment's rates is tracked in #462, not hidden by loosening the claim.
-constexpr double kLegacyBmGbps = 51.2, kLegacyStrGbps = 102.4;
 
 OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc = false,
-                     int32_t cf_tile = -1, bool legacy_rates = false) {
+                     int32_t cf_tile = -1) {
     std::string why;
     const auto csp = csp_config_from(d, &why);
     INFO(why);
@@ -108,10 +104,6 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
 
     ConcurrentTimingExecutor::Config ec = csp->config;
     ec.max_cycles = 20'000'000;
-    if (legacy_rates) {
-        ec.bm_bandwidth_gbps = kLegacyBmGbps;
-        ec.str_bandwidth_gbps = kLegacyStrGbps;
-    }
     if (noc) {
         const auto w = csp_noc_wiring(d, static_cast<double>(T) * T * 4, ec.dma_store_buffer_blocks, &why);
         INFO(why);
@@ -393,10 +385,11 @@ TEST_CASE("NoC wired: loads and ejections cross the fabric, and values never mov
           "[timing][csp][oracle][noc]") {
     for (const char* file : {"kpu_t4.json", "kpu_t16.json", "kpu_t64.json"}) {
         CAPTURE(file);
-        // At the rates "the fabric costs time" was measured at: at the deployment's faster movers,
-        // T4 with the NoC wired runs ~2% faster than without (#462).
-        const OracleRun off = run_matmul(device(file), 128, 32, false, -1, true);
-        const OracleRun on = run_matmul(device(file), 128, 32, true, -1, true);
+        // At the deployment's own rates and banks (#462). On the pooled L2 at these rates, T4 with
+        // the NoC wired ran ~2% faster than without; with L2's banks (#401) the fabric costs time
+        // on every T-series machine: T4 +1.9%, T16 +5.2%, T64 +6.9% (128^3 in 32^3 tiles).
+        const OracleRun off = run_matmul(device(file), 128, 32, false);
+        const OracleRun on = run_matmul(device(file), 128, 32, true);
 
         // When, never what (ADR 0002): the NoC changes no value of the same computation, and C
         // is within bound of L-B's.

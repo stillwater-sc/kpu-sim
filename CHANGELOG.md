@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Two L-CA characterizations restated at the deployment's rates and banks** (#462). #458 pinned
+  them to the executor's old mover and streamer rates. Now that L2 is banked (#401), they're
+  measured at each deployment's own:
+  - **The NoC costs time.** With the NoC wired, T4 ran ~2% *faster* than without, but only on the
+    pooled L2 at the deployment's rates. That points to an issue-order effect of the pooled model
+    (like #424), not a NoC bug. With L2's banks, the fabric costs time on every T-series machine:
+    T4 +1.9%, T16 +5.2%, T64 +6.9% (128³ in 32³ tiles). The claim holds unpinned.
+  - **The driver window rule.** At S1's faster movers lookahead matters more: a window of 16 is
+    ~10% off the whole program, 64 is 2.3% under, and 256 is within 0.1%. The rule is now "from 64
+    up, every window is within 3%" (it was "from 16 up, within 2%"), and window 1 is still the
+    slowest.
+  - The legacy-rate pins (`legacy_rates`, `kLegacyBmGbps`, `kLegacyStrGbps`) and the pooled-L2 pin
+    are gone.
+
 ### Added
 
 - **L-CA's L2 is banked** (#401, slice 1; `docs/plans/banked-l2-at-lca.md`). A compute tile's L2 is

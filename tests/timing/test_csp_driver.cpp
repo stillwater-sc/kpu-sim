@@ -280,15 +280,8 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
     const csp::lang::Program ast = csp::lang::parse(kWrittenMatmul);
     const TileProgram inputs = sw::kpu::program::driver::csp_inputs(ast);
     const TileProgram ref = trace_fixtures::lb_values(ast);
-    // At the mover and streamer rates the window rule below was measured at (the executor's before
-    // #458 mapped the deployment's): at S1's faster movers a window of 16 is ~11% off the whole
-    // program, not 2% (#462).
+    // At S1's own rates and banks (#462): the window rule below is stated for them.
     auto cfg = machine("kpu_s1.json");
-    cfg.bm_bandwidth_gbps = 51.2;
-    cfg.str_bandwidth_gbps = 102.4;
-    // And on the pooled L2 it was measured on: with S1's banks (#401) a window of 16 is 3.8% off
-    // (600 of 15837 cycles). The rule is #462's to restate, at the deployment's rates and banks.
-    cfg.l2_banks.reset();
 
     const csp::CspProgram trace = trace_fixtures::compiled(ast);
     ConcurrentTimingExecutor e0(cfg);
@@ -318,12 +311,15 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
             CHECK(r.dram_loads == 32);
             check_c(r.values, ref);
             // A window is lookahead, and less of it is no faster, as a rule: window 1 is the
-            // slowest, and from 16 up every window is within 2% of the whole program. Not "never
-            // faster": handed everything at once, the mover runs ahead and holds L2 credits that
-            // nearer Moves need, so a window of 16 is a little faster than no window (#424).
+            // slowest, and from 64 up every window is within 3% of the whole program (#462). At
+            // S1's movers (128 and 256 bytes a cycle) lookahead matters more than it did at the
+            // executor's old rates, where the threshold was 16: a window of 16 is ~10% off (10582
+            // of 9659 cycles), 64 is 2.3% under (9436), 256 within 0.1%. Not "never faster": handed
+            // everything at once, the mover runs ahead and holds L2 credits that nearer Moves
+            // need, so a window of 64 is a little faster than no window (#424).
             if (w == 1) slowest = r.cycles;
             CHECK(r.cycles <= slowest);
-            if (w >= 16) CHECK(std::abs(double(r.cycles) - double(t.cycles)) <= 0.02 * double(t.cycles));
+            if (w >= 64) CHECK(std::abs(double(r.cycles) - double(t.cycles)) <= 0.03 * double(t.cycles));
             std::printf("csp driver, streamed matmul 128^3/32^3 on S1, window %2zu: %llu cycles (trace %llu)\n", w,
                         static_cast<unsigned long long>(r.cycles), static_cast<unsigned long long>(t.cycles));
         }
