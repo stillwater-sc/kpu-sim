@@ -1,7 +1,8 @@
 # A blocked linear-algebra test set: the GEMM schedule space and blocked decompositions
 
 **Status:** planned 2026-11-18, at the user's request. No step has started.
-**Epic:** #479. **Steps:** #480–#492, in §5's order.
+**Epic:** #479. **Steps:** #480–#492, in §5's order. **Milestones:** v1.1.0 (#480–#486) and
+v1.2.0 (#487–#492, the epic).
 **Related:** ADR 0002 §3.1 (the lowering boundary), #281 (derive CSP from the Domain Flow
 Program), `docs/plans/kpu-run-csp-programs.md` (why `kpu-csp-gen` exists, and its Q4),
 `docs/04-compute-fabric/matrix-tiling-strategies.md` (an earlier tiling study),
@@ -146,4 +147,7 @@ Two neighbours are tracked by their own plans, not here:
 - **Q1. Where a transpose happens** (#483): in the BlockMover, in the Streamer, or at the array's
   edge. This is an architecture decision for kpu-sim to make; the RTL then implements it.
 - **Q2. The search's budget** (#482): how large a space, and how many candidates go on to L-CA.
-- **Q3. Milestones.** The issues are filed without a milestone, for the release train to place.
+- **Q3. Milestones** (decided 2026-11-18): **v1.1.0** takes phases 1–3, the GEMM schedule space,
+  transposes, and TRSM, SYRK and Cholesky (#480–#486). **v1.2.0** takes phases 4–6, GEMV and
+  GER, batched GEMM, out-of-core LU, QR and TSQR, SYMM and TRMM, and Hessenberg and Schur
+  (#487–#492), with the epic (#479).
