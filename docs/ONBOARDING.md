@@ -14,23 +14,26 @@ document disagree, the linked document is right; please fix this guide.
 
 ## 1. What kpu-sim is for
 
-The KPU (Knowledge Processing Unit) is a **domain-flow machine**: a systolic compute fabric fed
-by a hierarchy of buffers (L3, L2, L1), in which data moves by credit, not by request. kpu-sim is
-its **architecture simulator**. It exists to prove that the machine works, and how fast, before
-it is built:
+The KPU (Knowledge Processing Unit) is a **domain-flow machine**: a nearest-neighbor compute fabric 
+fed by a hierarchy of buffers (L3, L2, L1), in which data moves by credit, not by request. kpu-sim is
+its **architecture simulator**. It exists to prove that the machine works, what features would be
+beneficial, with computer arithmetic would benefit execution, and how fast the engine can solve
+application execution, before it is built:
 
 - It decides the architecture. The RTL (the hardware implementation) implements what kpu-sim
-  has demonstrated. kpu-sim leads; it does not follow or mirror the RTL.
+  has demonstrated. kpu-sim is the experimental state space exploration tool to evaluate which
+  features are useful. Once features are proven to be valuable, RTL implementation can then
+  leverage the kpu-sim as a verification reference.
 - It runs real programs and computes their real values at every level of detail, so a design
   change is judged both on whether the answers are still right and on what it does to time.
-- It is an arithmetic laboratory. Number systems come from the
+- It is an computer arithmetic laboratory. Number systems come from the
   [Universal](https://github.com/stillwater-sc/universal) library through one registry
   (`include/sw/kpu/program/numeric.hpp`), so a new format is a registry row, not a new code
   path.
 
 ## 2. The ideas behind it
 
-These are the ideas a newcomer is most likely to get wrong, because they differ from how CPUs,
+Here are the ideas a newcomer is most likely to trip over, because they differ from how CPUs,
 GPUs and most simulators work. Each one is a design rule; code that breaks one is a bug, even
 when its tests pass.
 
@@ -52,8 +55,11 @@ the others.
 
 ### 2.2 Every level computes values
 
-Decomposition changes *when* things happen, never *what* is computed. A level that returns
-timing without values is not a cheaper simulation, it is an unvalidated one. So:
+Decomposition changes *when* things happen, never *what* is computed. Each modeling level must 
+model execution and return values to guarantee that the functionality of the machine is tested.
+Spatial/Temporal machines like the KPU use timing and spatial organization to order computation.
+Bugs in placement and timing will lead to incorrect execution and result values will carry that
+evidence.
 
 - **Values answer to L-B**, the behavioral level, which is the oracle.
 - **Timing answers to L-CA**, the cycle-accurate level.
