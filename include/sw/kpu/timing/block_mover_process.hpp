@@ -959,6 +959,8 @@ private:
         const Cycle move = l2_transfer_cycles(wb_tile, found_entry->slot_id, L2Banks::Access::Read,
                                               L2Banks::Client::BlockMover, current_cycle);
         Cycle transfer_cycles = std::max(move, wb_tile.ve_cycles);
+        // Its rows' stalls delay the writeback only past the egress unit's own time.
+        if (config_.l2_banks) config_.l2_banks->overlap_last(move, wb_tile.ve_cycles);
         ve_busy_cycles_ += wb_tile.ve_cycles;
         if (wb_tile.ve_cycles > move) ve_bound_cycles_ += wb_tile.ve_cycles - move;
         // The L3 slot it lands in: the program's placement, claimed with the credit (an in-place

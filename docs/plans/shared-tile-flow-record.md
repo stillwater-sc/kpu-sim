@@ -266,7 +266,7 @@ through a layer the record declares not modelled.
 |---|---|---|
 | `dram` | `{"modelled": true}` | any (or none) |
 | `l3` | `{"modelled": true, "slots": N, "banks": B}`: the machine's `l3` and `banks` | the slot, `< slots` |
-| `l2` | `{"modelled": true, "banks", "rows", "row_bytes", "interleave": "row-mod-banks"}` | the first row, `< rows` |
+| `l2` | `{"modelled": true, "banks", "rows", "row_bytes", "interleave": "row-mod-banks"}` | a transaction's: its first row; a row event's: the row it accessed, wrapping (row 0 after row `rows − 1`); both `< rows` |
 | `acc` | as for L2 | the first row, `< rows` |
 | `l1` | `{"modelled": true, "rows", "cols"}`: the array's edge | the edge lane, `< max(rows, cols)`, or none |
 
@@ -461,9 +461,9 @@ report says which layers those are. It reports:
 - with both records timed, the first divergence: the earliest event, in A's cycles, whose start or
   duration differs by more than `--tolerance`. Then the largest divergences of start and of duration.
 
-It is a debugging tool, not a CI gate (D3). It exits 0 when the two join with nothing one-sided and
-no divergence, 1 when they differ, and 2 when either cannot be read, fails the checker, or has no
-events (L-B's).
+It is a debugging tool, not a CI gate (D3). It exits 0 when the two join with nothing one-sided, no
+divergence and nothing placed differently, 1 when they differ (a placement difference alone
+included), and 2 when either cannot be read, fails the checker, or has no events (L-B's).
 
 The RTL sample's matrix is named L. L-CA maps a program's matrices onto A, B and C, so
 `dflow_rtl_sample.py --names A,B,C --program-out p.csp` writes the same sample under those names,
@@ -536,7 +536,9 @@ Two things the format can't say, which the record's `not_modelled` counts:
 - **A tile the Combiner reads in place** (an init, a bias, a scale's vectors) never leaves L3 in a
   transaction, so its `RELEASE`'s credit has none to follow (E4) and is left out.
 
-There are no row events: no kpu-sim level models rows yet (the L2 banks, #388; the PE grid, #401).
+Row events: a banked L-CA record has each L2 transfer's rows (BM_ROW under a Move or Writeback,
+STR_ROW under a Feed, DRAIN_ROW under a Drain) when its booked rows fit its tile (§6, E3). L-T1's
+record and an unbanked L-CA's have none, and no level has the PE grid's rows yet (#401).
 
 ## 10. The viewer
 

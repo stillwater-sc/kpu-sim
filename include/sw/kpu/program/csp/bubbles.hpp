@@ -335,8 +335,10 @@ inline BubbleReport bubble_report(const std::vector<TransactionalInterpreter::Re
             const bool operand = r->kind == Action::Kind::Feed || r->kind == Action::Kind::Move || r->kind == Action::Kind::Load;
             if (result && operand) {
                 into->chain.push_back(p->second->action);
-                // The result ahead ran long because its rows waited for their banks (#401).
-                return p->second->bank_delay > 0 ? Cause::L2Bank : Cause::Result;
+                // The result ahead ran long because its rows waited for their banks (#401), and it
+                // still held the operand when the operand was ready.
+                const bool held = p->second->finish > r->ready;
+                return p->second->bank_delay > 0 && held ? Cause::L2Bank : Cause::Result;
             }
             return explain(p->second, depth + 1);
         }

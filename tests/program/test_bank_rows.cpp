@@ -10,6 +10,7 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <sw/kpu/program/csp/bubbles.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
@@ -304,5 +305,69 @@ TEST_CASE("Bank rows: a record whose L2 is declared both ways is refused", "[pro
         std::ofstream out(dir + "/manifest.json");
         out << m.dump();
     }
-    CHECK_THROWS_AS(record::read_dflow(dir), record::RecordError);
+    CHECK_THROWS_WITH(record::read_dflow(dir), Catch::Matchers::ContainsSubstring("declares both slots and rows"));
+    // A rows-form L2 with a zero dimension is refused too.
+    m["geometry"]["l2"].erase("slots");
+    m["geometry"]["l2"]["banks"] = 0;
+    {
+        std::ofstream out(dir + "/manifest.json");
+        out << m.dump();
+    }
+    CHECK_THROWS_WITH(record::read_dflow(dir), Catch::Matchers::ContainsSubstring("must be positive"));
+}
+
+TEST_CASE("Bank rows: a result ahead that finished before the operand was ready is not its bank cause", "[program][csp][bubbles][banks]") {
+    // A Move ready at 25 waits for a BlockMover lane until 35. Its predecessor on the process, a
+    // bank-delayed Writeback on the other lane, finished at 20: its stalls cannot have held the Move.
+    using P = csp::TransactionalInterpreter::Proc;
+    auto rec = [](std::size_t action, K kind, P proc, const char* op, std::uint64_t ready, std::uint64_t start,
+                  std::uint64_t finish, std::uint32_t lane) {
+        Rec r;
+        r.action = action;
+        r.kind = kind;
+        r.tile = TileCoord{op, 0, 0};
+        r.proc = proc;
+        r.ready = ready;
+        r.start = start;
+        r.finish = finish;
+        r.lane = lane;
+        return r;
+    };
+    // A first call opens the compute lane's span, so the second's wait is a bubble.
+    std::vector<Rec> rs = {rec(0, K::Call, P::Cf, "E", 0, 0, 10, 0),       rec(1, K::Writeback, P::Bm, "C", 0, 0, 20, 1),
+                           rec(2, K::Move, P::Bm, "A", 25, 35, 40, 0),     rec(3, K::Feed, P::Str, "A", 40, 40, 44, 0),
+                           rec(4, K::Call, P::Cf, "D", 44, 44, 54, 0)};
+    rs[1].bank_wait = rs[1].bank_delay = 6;
+    std::map<std::string, std::uint64_t> busy{{"bm", 25}, {"str", 4}, {"cf", 20}};
+    std::map<std::string, std::size_t> lanes{{"dma", 1}, {"bm", 2}, {"str", 1}, {"cf", 1}};
+    using Cause = csp::BubbleReport::Cause;
+    auto cause_of = [&](const std::vector<Rec>& v) {
+        for (const auto& b : csp::bubble_report(v, 54, busy, lanes).bubbles)
+            if (b.call == 4) return b.cause;
+        return Cause::Unknown;
+    };
+    CHECK(cause_of(rs) == Cause::Result);
+    rs[1].finish = 30;                      // still writing back when the Move was ready: it held it
+    CHECK(cause_of(rs) == Cause::L2Bank);
+}
+
+TEST_CASE("Bank rows: an egress unit's time hides a writeback's bank stalls", "[program][record][timed][banks]") {
+    // With the egress unit's work longer than the transfer, a writeback's stalls add nothing to its
+    // finish (the BlockMover calls overlap_last as the drain does). In the run, every Writeback's
+    // bank delay is at most its wait; on the calendar, the unit's longer time hides the stall.
+    const Run x = run();
+    for (const Rec& r : x.lca.records)
+        if (r.kind == K::Writeback) CHECK(r.bank_delay <= r.bank_wait);
+    sw::kpu::timing::L2Banks::Geometry g;
+    g.banks = 1;
+    g.read_latency = 0;
+    sw::kpu::timing::L2Banks b(g, 1);
+    b.keep_log(true);
+    b.book(0, 0, g.row_bytes, sw::kpu::timing::L2Banks::Access::Read, sw::kpu::timing::L2Banks::Client::Streamer, 0, 1, 0);
+    b.book(0, 0, g.row_bytes, sw::kpu::timing::L2Banks::Access::Read, sw::kpu::timing::L2Banks::Client::Streamer, 0, 1, 0);
+    const auto move = b.book(0, 0, 2 * g.row_bytes, sw::kpu::timing::L2Banks::Access::Read,
+                             sw::kpu::timing::L2Banks::Client::BlockMover, 0, 1, 0);
+    REQUIRE(b.log().back().delay > 0);       // both read ports taken at clock 0: its first row waits
+    b.overlap_last(move, move + 5);
+    CHECK(b.log().back().delay == 0);
 }
