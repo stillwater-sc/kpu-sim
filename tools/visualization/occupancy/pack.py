@@ -35,13 +35,12 @@ def bundle(path):
     if m.get("version") != 6 or not m.get("time"):
         raise ValueError(f"{path}: a {m.get('level', '?')} record with no time; occupancy needs a timed "
                          "level's record (kpu-run --dflow-lt1 or --dflow-lca)")
-    bins, total = {}, 0
-    for t in m["tables"].values():
-        data = (d / t["file"]).read_bytes()
-        total += len(data)
-        bins[t["file"]] = base64.b64encode(data).decode("ascii")
+    # The size first, from the files' sizes, before reading or encoding any of them.
+    files = [d / t["file"] for t in m["tables"].values()]
+    total = sum(f.stat().st_size for f in files)
     if total > MAX_BYTES:
         raise ValueError(f"{path}: the columns are {total} bytes; view it from its folder instead")
+    bins = {f.name: base64.b64encode(f.read_bytes()).decode("ascii") for f in files}
     return {"manifest": manifest, "bins": bins}, m
 
 
@@ -61,7 +60,9 @@ def main():
     if MARKER not in page:
         print("pack: index.html has no embed marker", file=sys.stderr)
         sys.exit(2)
-    payload = json.dumps({"a": ea, "b": eb}).replace("</", "<\\/")
+    # Every "<" escaped (a JSON string's \u003c decodes to it): no "</script>" and no "<!--" can
+    # end or bend the script element the payload sits in.
+    payload = json.dumps({"a": ea, "b": eb}).replace("<", "\\u003c")
     page = page.replace(MARKER, f"<script>window.OCC_EMBED = {payload};</script>", 1)
     Path(a.output).write_text(page, encoding="utf-8")
     print(f"pack: {a.output} ({len(page) // 1024} KiB, program {ma['program']['name']}, {ma['level']}"

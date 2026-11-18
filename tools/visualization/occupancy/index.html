@@ -153,22 +153,30 @@ globalThis.OccCore = (() => {
       laneOf[e] = 0;
     }
     const procLanes = [...lanes.values()].sort((a, b) => (order[a.proc] ?? 9) - (order[b.proc] ?? 9) || a.name.localeCompare(b.name, "en", { numeric: true }));
-    // Slot holdings: a tile arrives in a slot with the transaction that lands it there, and leaves
-    // with the credit that frees the slot (its source address). Open at the record's end: held to it.
+    // Slot holdings, in a layer addressed by slot (not a word-addressed L3, not the RTL's L2 rows):
+    // each transaction that lands a tile in a slot opens a holding at its end; a credit that frees
+    // the slot (its source address) closes the open holding of its own tile there, else the oldest
+    // open one. A holding still open at the record's end is held to it.
+    const slotted = [form(m.geometry, "l3") === "slots", form(m.geometry, "l2") === "slots"];
+    const isSlot = (layer, addr) => addr >= 0 && ((layer === L3 && slotted[0]) || (layer === L2 && slotted[1]));
     const holds = [];
-    const open = new Map();                 // "layer/slot" -> { tile, from, ev }
+    const open = new Map();                 // "layer/slot" -> open holdings, oldest first
     for (let e = 0; e < R.n; e++) {
       const k = E.kind[e];
-      if (TX.has(k) && (E.dst[e] === L3 || E.dst[e] === L2) && E.dst_addr[e] >= 0) {
+      if (TX.has(k) && isSlot(E.dst[e], E.dst_addr[e])) {
         const key = `${E.dst[e]}/${E.dst_addr[e]}`;
-        if (!open.has(key)) open.set(key, { layer: E.dst[e], slot: E.dst_addr[e], tile: E.tile[e], from: E.end[e], ev: e });
-      } else if (k === 5 && (E.src[e] === L3 || E.src[e] === L2) && E.src_addr[e] >= 0) {
-        const key = `${E.src[e]}/${E.src_addr[e]}`;
-        const o = open.get(key);
-        if (o) { holds.push({ ...o, to: E.cycle[e], credit: e }); open.delete(key); }
+        if (!open.has(key)) open.set(key, []);
+        open.get(key).push({ layer: E.dst[e], slot: E.dst_addr[e], tile: E.tile[e], from: E.end[e], ev: e });
+      } else if (k === 5 && isSlot(E.src[e], E.src_addr[e])) {
+        const list = open.get(`${E.src[e]}/${E.src_addr[e]}`);
+        if (!list || !list.length) continue;
+        let i = list.findIndex(o => o.tile === E.tile[e]);
+        if (i < 0) i = 0;
+        holds.push({ ...list[i], to: E.cycle[e], credit: e });
+        list.splice(i, 1);
       }
     }
-    for (const o of open.values()) holds.push({ ...o, to: R.cycles, credit: -1 });
+    for (const list of open.values()) for (const o of list) holds.push({ ...o, to: R.cycles, credit: -1 });
     const slotLanes = new Map();
     for (const h of holds) {
       const name = `${LAYERS[h.layer]} slot ${h.slot}`;
@@ -201,6 +209,18 @@ globalThis.OccCore = (() => {
   // whose start or duration differs.
   function join(A, B) {
     const drop = new Set(LAYERS.filter(l => form(A.geometry, l) !== form(B.geometry, l)));
+    // Distinct in its own record, a key can coincide with another once addresses are dropped: an
+    // ambiguous join is refused, as dflow_diff.py refuses it, rather than matched to either.
+    for (const [side, R] of [["A", A], ["B", B]]) {
+      const seen = new Map();
+      for (let e = 0; e < R.n; e++) {
+        const k = key(R, e, drop);
+        if (seen.has(k))
+          throw new Error(`${side}: events ${seen.get(k)} and ${e} share one identity once ${[...drop].join(", ") || "no layer"}'s ` +
+                          "addresses are left out, so the two records cannot be joined unambiguously");
+        seen.set(k, e);
+      }
+    }
     const kb = new Map();
     for (let e = 0; e < B.n; e++) kb.set(key(B, e, drop), e);
     const match = new Int32Array(A.n).fill(-1);
@@ -239,9 +259,10 @@ globalThis.OccCore = (() => {
     try {
       const R = C.parse(files);
       fail("");
-      if (which === "b") { B = R; } else { A = R; B = null; fit(); }
+      // A new A drops the old overlay and its join before anything draws.
+      if (which === "b") { B = R; J = null; } else { A = R; B = null; J = null; sel = -1; fit(); }
       if (A && B) {
-        J = C.join(A, B);
+        try { J = C.join(A, B); } catch (e) { B = null; J = null; throw e; }
         $("joined").textContent = `B joined: ${J.matched} events matched, ${J.onlyA} only in A, ${J.onlyB} only in B` +
           (J.drop.length ? `; ${J.drop.join(", ")} addresses left out (their forms differ)` : "");
         $("first").disabled = J.first < 0;
@@ -281,6 +302,12 @@ globalThis.OccCore = (() => {
     }
     hit = [];
     const E = A.E;
+    // The first divergence's cycle, marked across the lanes: it may be a credit or token, which
+    // has no bar of its own.
+    if (J && J.first >= 0) {
+      const xf = X(E.cycle[J.first]);
+      if (xf >= GUTTER && xf <= w) { ctx.fillStyle = css("--credit"); ctx.fillRect(xf, TOP, 1, h - TOP); }
+    }
     const lit = t => sel >= 0 && t === sel;
     A.lanes.forEach((ln, i) => {
       const y = TOP + i * LANE_H;
@@ -289,15 +316,17 @@ globalThis.OccCore = (() => {
       if (ln.kind === "process") {
         for (const e of ln.items) {
           const x0 = X(E.cycle[e]), x1 = Math.max(x0 + 1, X(E.end[e]));
-          if (x1 < GUTTER || x0 > w) continue;
-          ctx.fillStyle = lit(E.tile[e]) ? css("--sel") : color(ln.proc);
-          ctx.globalAlpha = sel >= 0 && !lit(E.tile[e]) ? 0.35 : 1;
-          ctx.fillRect(Math.max(GUTTER, x0), y + 3, x1 - Math.max(GUTTER, x0), LANE_H - 7);
-          ctx.globalAlpha = 1;
-          hit.push({ x0, x1, y, e });
-          // B's joined event, as an outline on the same lane.
-          if (J && J.match[e] >= 0) {
+          if (!(x1 < GUTTER || x0 > w)) {
+            ctx.fillStyle = lit(E.tile[e]) ? css("--sel") : color(ln.proc);
+            ctx.globalAlpha = sel >= 0 && !lit(E.tile[e]) ? 0.35 : 1;
+            ctx.fillRect(Math.max(GUTTER, x0), y + 3, x1 - Math.max(GUTTER, x0), LANE_H - 7);
+            ctx.globalAlpha = 1;
+            hit.push({ x0, x1, y, e });
+          }
+          // B's joined event, as an outline on the same lane: culled on its own interval.
+          if (J && B && J.match[e] >= 0) {
             const b = J.match[e], bx0 = X(B.E.cycle[b]), bx1 = Math.max(bx0 + 1, X(B.E.end[b]));
+            if (bx1 < GUTTER || bx0 > w) continue;
             ctx.strokeStyle = e === J.first ? css("--credit") : css("--b");
             ctx.lineWidth = e === J.first ? 2 : 1;
             ctx.strokeRect(Math.max(GUTTER, bx0) + 0.5, y + 1.5, Math.max(1, bx1 - Math.max(GUTTER, bx0)) - 1, LANE_H - 3);
@@ -319,14 +348,21 @@ globalThis.OccCore = (() => {
   function inspect(px, py) {
     const h = hit.find(r => px >= r.x0 - 1 && px <= r.x1 + 1 && py >= r.y && py < r.y + LANE_H);
     if (!h) return;
-    const E = A.E;
-    if (h.hold) {
-      const hd = h.hold;
+    if (h.hold) inspectHold(h.hold); else inspectEvent(h.e);
+  }
+  function inspectHold(hd) {
+    {
       sel = hd.tile;
       $("inspector").textContent = `${C.LAYERS[hd.layer]} slot ${hd.slot}: ${A.tileName(hd.tile)}, held [${hd.from}, ${hd.to})` +
         (hd.credit < 0 ? ", to the record's end" : `, freed by event ${hd.credit}`);
-    } else {
-      const e = h.e, w = A.where(E.where[e]);
+    }
+    $("tile").value = String(sel);
+    draw();
+  }
+  function inspectEvent(e) {
+    const E = A.E;
+    {
+      const w = A.where(E.where[e]);
       sel = E.tile[e];
       let s = `event ${e}: ${C.KINDS[E.kind[e]]} ${A.tileName(E.tile[e])} ${C.LAYERS[E.src[e]]}` +
         (E.src_addr[e] >= 0 ? `@${E.src_addr[e]}` : "") + ` -> ${C.LAYERS[E.dst[e]]}` + (E.dst_addr[e] >= 0 ? `@${E.dst_addr[e]}` : "") +
@@ -378,14 +414,15 @@ globalThis.OccCore = (() => {
     const t0 = Math.max(0, c - span / 2);
     view = { t0, t1: t0 + span };
     sel = A.E.tile[e];
-    $("tile").value = String(sel);
-    draw();
-    const ln = A.lanes.findIndex(l => l.kind === "process" && l.items.includes(e));
-    if (ln >= 0) inspect((X(c) + X(A.E.end[e])) / 2, TOP + ln * LANE_H + LANE_H / 2);
+    inspectEvent(e);                        // a transaction, or a credit or token with no bar
   };
   addEventListener("resize", draw);
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+  // A folder read finishing after a newer pick is stale: each pick has a generation, and a new A
+  // makes any overlay read in flight stale too.
+  const gen = { a: 0, b: 0 };
   async function pick(ev, which) {
+    const g = which === "a" ? (gen.b++, ++gen.a) : ++gen.b, ga = gen.a;
     const files = {};
     for (const f of ev.target.files) {
       if (f.name === "manifest.json") files[f.name] = await f.text();
@@ -393,6 +430,7 @@ globalThis.OccCore = (() => {
     }
     if (!files["manifest.json"]) { fail("That folder has no manifest.json: choose a .dflow bundle folder."); return; }
     if (which === "b" && !A) { fail("Open a record (A) first, then its overlay (B)."); return; }
+    if ((which === "a" && g !== gen.a) || (which === "b" && (g !== gen.b || ga !== gen.a))) return;   // stale
     load(files, which);
   }
   $("pick").onchange = ev => pick(ev, "a");

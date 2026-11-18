@@ -25,9 +25,16 @@ An L-B record has no time, and is refused.
 - **Process lanes.** Each transaction (DMA, BLOCK_MOVE, STREAM, COMPUTE, DRAIN) is drawn as a bar
   on its process's lane over `[cycle, end)`. A joined overlay event is drawn as an outline on the
   same lane, with the first divergence in red.
-- **Slot lanes.** A tile holds an L3 or L2 slot from the end of the transaction that lands it
-  there (the slot is that transaction's destination address) to the credit that frees it (the
-  credit's source address). A slot not freed by the record's end is held to the end.
+- **Slot lanes.** Only a layer the record addresses by slot gets slot lanes: not a
+  word-addressed L3, and not the RTL's L2 rows. The rule:
+  - each transaction that lands a tile in a slot (its destination address) opens a holding at its
+    end;
+  - a credit that frees the slot (its source address) closes the open holding of its own tile
+    there, or else the oldest open one;
+  - a holding still open at the record's end is held to the end.
+- **An ambiguous overlay is refused.** If two events of one record share an identity once a layer's
+  addresses are left out, the page refuses the join rather than match either, as `dflow_diff.py`
+  does.
 - **Selecting a tile** (from the menu, or by clicking one of its bars) lights its whole life:
   every transaction and slot holding of that tile.
 - **The inspector** gives the clicked event's fields and, with an overlay, the joined event's

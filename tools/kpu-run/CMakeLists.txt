@@ -709,9 +709,13 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lca.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/timed_l2acc_lt1.dflow
                     ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample.dflow
-                    --lb ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_48x48x48_t16.dflow)
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_addressed.dflow
+                    --lb ${CMAKE_CURRENT_BINARY_DIR}/csp_matmul_48x48x48_t16.dflow
+                    --ambiguous ${CMAKE_CURRENT_BINARY_DIR}/timed_sample_lca.dflow
+                    ${CMAKE_CURRENT_BINARY_DIR}/rtl_sample_abc.dflow)
         set_tests_properties(occupancy_viewer PROPERTIES FIXTURES_REQUIRED
-            "dflow_timed_l2acc;dflow_rtl_sample;dflow_matmul_48x48x48_t16" LABELS "program;csp;domainflow;viewer")
+            "dflow_timed_l2acc;dflow_rtl_sample;dflow_rtl_sample_addressed;dflow_matmul_48x48x48_t16;dflow_timed_sample;dflow_rtl_sample_abc"
+            LABELS "program;csp;domainflow;viewer")
         # A timed record needs its level: --dflow-lca without L-CA is refused by name.
         add_test(NAME kpu_run_csp_dflow_timed_needs_its_level
             COMMAND ${CMAKE_COMMAND} -DCMD=$<TARGET_FILE:run>
