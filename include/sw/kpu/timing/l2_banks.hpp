@@ -105,13 +105,14 @@ public:
 
     // Book a transfer of `bytes` at L2 slot `slot` of compute tile `cf`, starting at `start`, one
     // row per `per_row` clocks. Returns the clocks from `start` to its last row served (with the
-    // read latency for a read or a merge).
+    // read latency for a read or a merge). `now` is the simulation's clock: every client books at
+    // or after it, so the clocks before it are forgotten. A booking may start later than `now`
+    // (a drain after its epilogue), and pruning never follows it (#471's review).
     Cycle book(std::size_t cf, std::uint32_t slot, std::uint64_t bytes, Access kind, Client who, Cycle start,
-               Cycle per_row) {
+               Cycle per_row, Cycle now) {
         const std::size_t tile = cf < cal_.size() ? cf : 0;
         auto& cal = cal_.at(tile);
-        // Clocks before this one can no longer be booked: forget them.
-        if (start > kKeep) cal.erase(cal.begin(), cal.lower_bound(start - kKeep));
+        cal.erase(cal.begin(), cal.lower_bound(std::min(now, start)));
         const std::uint64_t n = rows_of(bytes), r0 = first_row(slot, n);
         const bool reads = kind != Access::Write, writes = kind != Access::Read;
         Cycle at = start, last = start;
@@ -140,7 +141,6 @@ public:
 
 private:
     struct Use { std::uint8_t reads = 0, writes = 0; };
-    static constexpr Cycle kKeep = 1u << 16;           // clocks of history a late booking may still see
     Geometry g_;
     std::vector<std::map<Cycle, std::vector<Use>>> cal_;
     Stats stats_;

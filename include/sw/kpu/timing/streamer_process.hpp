@@ -275,13 +275,13 @@ private:
     // An L2 transfer's cycles (#401): banked, its rows booked on their banks' ports from `now`;
     // pooled (no banks declared), bytes over the rate, as before.
     [[nodiscard]] Cycle l2_transfer_cycles(const TileDescriptor& t, uint32_t slot, L2Banks::Access a,
-                                           L2Banks::Client who, Cycle now, int32_t cf = -1) const {
+                                           L2Banks::Client who, Cycle now, int32_t cf = -1, Cycle start = 0) const {
         if (!config_.l2_banks) return compute_transfer_cycles(t.size_bytes);
         L2Banks& b = *config_.l2_banks;
         if (cf < 0) cf = t.cf_tile;
         return config_.startup_latency +
-               b.book(cf < 0 ? 0 : static_cast<std::size_t>(cf), slot, t.size_bytes, a, who, now,
-                      b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz));
+               b.book(cf < 0 ? 0 : static_cast<std::size_t>(cf), slot, t.size_bytes, a, who, std::max(now, start),
+                      b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz), now);
     }
 
     /**
@@ -535,8 +535,8 @@ private:
         // produced the result (#471's review).
         const Cycle move = l2_transfer_cycles(
             drain_tile, l2_slot, accumulate ? L2Banks::Access::ReadModifyWrite : L2Banks::Access::Write,
-            accumulate ? L2Banks::Client::Combiner : L2Banks::Client::Drain, current_cycle + drain_tile.fabric_cycles,
-            config_.result_cf ? config_.result_cf(drain_tile.tile_id) : -1);
+            accumulate ? L2Banks::Client::Combiner : L2Banks::Client::Drain, current_cycle,
+            config_.result_cf ? config_.result_cf(drain_tile.tile_id) : -1, current_cycle + drain_tile.fabric_cycles);
         Cycle transfer_cycles = drain_tile.fabric_cycles + std::max(move, drain_tile.ve_cycles);
         ve_busy_cycles_ += drain_tile.ve_cycles;
         if (drain_tile.ve_cycles > move) ve_bound_cycles_ += drain_tile.ve_cycles - move;

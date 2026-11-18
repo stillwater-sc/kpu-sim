@@ -55,8 +55,8 @@ TEST_CASE("L2 banks: the count must be a power of two (esg#14)", "[timing][l2][b
 TEST_CASE("L2 banks: an uncontended transfer takes its rows at its rate", "[timing][l2][banks]") {
     auto b = banks(4);
     // 4 rows at 2 clocks a row: 8 clocks; a read adds its latency once (pipelined).
-    CHECK(b.book(0, 0, 256, A::Write, C::BlockMover, 100, 2) == 8);
-    CHECK(b.book(0, 1, 256, A::Read, C::Streamer, 200, 1) == 4 + 4);
+    CHECK(b.book(0, 0, 256, A::Write, C::BlockMover, 100, 2, 100) == 8);
+    CHECK(b.book(0, 1, 256, A::Read, C::Streamer, 200, 1, 200) == 4 + 4);
     CHECK(b.stats().stalls_total() == 0);
     CHECK(b.stats().accesses == 8);
 }
@@ -65,27 +65,27 @@ TEST_CASE("L2 banks: two reads and one write per bank per clock (esg#24)", "[tim
     auto b = banks(4, 64, 0);
     // Slot 0 and slot 1 of one-row tiles are rows 0 and 1: banks 0 and 1. Slot 4 is row 4, bank 0.
     // Two reads of bank 0 in clock 10 fit; a third waits a clock.
-    CHECK(b.book(0, 0, 64, A::Read, C::Streamer, 10, 1) == 1);
-    CHECK(b.book(0, 4, 64, A::Read, C::Streamer, 10, 1) == 1);
-    CHECK(b.book(0, 8, 64, A::Read, C::Combiner, 10, 1) == 2);
+    CHECK(b.book(0, 0, 64, A::Read, C::Streamer, 10, 1, 10) == 1);
+    CHECK(b.book(0, 4, 64, A::Read, C::Streamer, 10, 1, 10) == 1);
+    CHECK(b.book(0, 8, 64, A::Read, C::Combiner, 10, 1, 10) == 2);
     CHECK(b.stats().stalls[static_cast<std::size_t>(C::Combiner)] == 1);
     // One write of bank 1 in clock 20; a second waits; a read beside them does not.
-    CHECK(b.book(0, 1, 64, A::Write, C::BlockMover, 20, 1) == 1);
-    CHECK(b.book(0, 5, 64, A::Write, C::Drain, 20, 1) == 2);
-    CHECK(b.book(0, 9, 64, A::Read, C::Streamer, 20, 1) == 1);
+    CHECK(b.book(0, 1, 64, A::Write, C::BlockMover, 20, 1, 20) == 1);
+    CHECK(b.book(0, 5, 64, A::Write, C::Drain, 20, 1, 20) == 2);
+    CHECK(b.book(0, 9, 64, A::Read, C::Streamer, 20, 1, 20) == 1);
     CHECK(b.stats().stalls[static_cast<std::size_t>(C::Drain)] == 1);
     CHECK(b.stats().bank_stalls[0] == 1);
     CHECK(b.stats().bank_stalls[1] == 1);
     // Other banks in the same clock are free.
-    CHECK(b.book(0, 2, 64, A::Write, C::BlockMover, 20, 1) == 1);
+    CHECK(b.book(0, 2, 64, A::Write, C::BlockMover, 20, 1, 20) == 1);
 }
 
 TEST_CASE("L2 banks: a merge reads and writes each row in one clock", "[timing][l2][banks]") {
     auto b = banks(2, 64, 3);
     // A read-modify-write needs a read and the write port of its bank: a write already there
     // makes it wait, and it pays the read latency.
-    CHECK(b.book(0, 0, 64, A::Write, C::Drain, 50, 1) == 1);
-    CHECK(b.book(0, 2, 64, A::ReadModifyWrite, C::Combiner, 50, 1) == 2 + 3);
+    CHECK(b.book(0, 0, 64, A::Write, C::Drain, 50, 1, 50) == 1);
+    CHECK(b.book(0, 2, 64, A::ReadModifyWrite, C::Combiner, 50, 1, 50) == 2 + 3);
     CHECK(b.stats().stalls[static_cast<std::size_t>(C::Combiner)] == 1);
 }
 
@@ -95,20 +95,20 @@ TEST_CASE("L2 banks: each compute tile's L2 has its own banks", "[timing][l2][ba
     g.row_bytes = 64;
     g.read_latency = 0;
     L2Banks b(g, 2);
-    CHECK(b.book(0, 0, 64, A::Write, C::Drain, 5, 1) == 1);
-    CHECK(b.book(1, 0, 64, A::Write, C::Drain, 5, 1) == 1);     // another tile: no conflict
-    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 5, 1) == 2);     // the same tile's one bank: waits
+    CHECK(b.book(0, 0, 64, A::Write, C::Drain, 5, 1, 5) == 1);
+    CHECK(b.book(1, 0, 64, A::Write, C::Drain, 5, 1, 5) == 1);     // another tile: no conflict
+    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 5, 1, 5) == 2);     // the same tile's one bank: waits
 }
 
 TEST_CASE("L2 banks: a reset forgets every booking and count (#471's review)", "[timing][l2][banks]") {
     auto b = banks(1, 64, 0);
-    CHECK(b.book(0, 0, 64, A::Write, C::Drain, 7, 1) == 1);
-    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 7, 1) == 2);       // waits for the first
+    CHECK(b.book(0, 0, 64, A::Write, C::Drain, 7, 1, 7) == 1);
+    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 7, 1, 7) == 2);       // waits for the first
     REQUIRE(b.stats().stalls_total() == 1);
     b.reset();
     CHECK(b.stats().accesses == 0);
     CHECK(b.stats().stalls_total() == 0);
-    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 7, 1) == 1);       // clock 7 is free again
+    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 7, 1, 7) == 1);       // clock 7 is free again
 }
 
 namespace {
@@ -152,9 +152,9 @@ TEST_CASE("L2 banks: a drain books its rows after the fabric's epilogue (#471's 
     r.drain(20);
     REQUIRE(r.banks.stats().accesses == 1);
     // Its row is booked at clock 20, not 0: a write at clock 0 finds the bank's write port free...
-    CHECK(r.banks.book(0, 5, 64, A::Write, C::BlockMover, 0, 1) == 1);
+    CHECK(r.banks.book(0, 5, 64, A::Write, C::BlockMover, 0, 1, 0) == 1);
     // ...and one at clock 20 waits for the drain's.
-    CHECK(r.banks.book(0, 6, 64, A::Write, C::BlockMover, 20, 1) == 2);
+    CHECK(r.banks.book(0, 6, 64, A::Write, C::BlockMover, 20, 1, 20) == 2);
 }
 
 TEST_CASE("L2 banks: a drain books the banks of the tile that computed it (#471's review)", "[timing][l2][banks]") {
@@ -162,4 +162,13 @@ TEST_CASE("L2 banks: a drain books the banks of the tile that computed it (#471'
     r.drain(0);
     CHECK(r.banks.stats().tile_accesses[1] == 1);
     CHECK(r.banks.stats().tile_accesses[0] == 0);
+}
+
+TEST_CASE("L2 banks: a future booking never prunes the present (#471's review)", "[timing][l2][banks]") {
+    // A write at clock 0, a drain booked far ahead (after a long epilogue) while the clock is still
+    // 0, then another write at clock 0: it waits for the first, which the future booking left alone.
+    auto b = banks(1, 64, 0);
+    CHECK(b.book(0, 0, 64, A::Write, C::BlockMover, 0, 1, 0) == 1);
+    CHECK(b.book(0, 1, 64, A::Write, C::Drain, 70000, 1, 0) == 1);
+    CHECK(b.book(0, 2, 64, A::Write, C::BlockMover, 0, 1, 0) == 2);
 }

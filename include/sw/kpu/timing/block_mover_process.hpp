@@ -408,7 +408,7 @@ private:
         L2Banks& b = *config_.l2_banks;
         return config_.startup_latency +
                b.book(t.cf_tile < 0 ? 0 : static_cast<std::size_t>(t.cf_tile), slot, t.size_bytes, a, who, now,
-                      b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz));
+                      b.cycles_per_row(config_.bandwidth_gbps / config_.clock_ghz), now);
     }
 
     /**
