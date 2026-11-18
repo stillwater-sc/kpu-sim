@@ -427,10 +427,13 @@ globalThis.OccCore = (() => {
   const gen = { a: 0, b: 0 };
   async function pick(ev, which) {
     const g = which === "a" ? (gen.b++, ++gen.a) : ++gen.b, ga = gen.a;
+    // Each file under its path in the chosen folder (its root left off), which is how the manifest
+    // names a table's file, a nested one included (#472's review).
     const files = {};
     for (const f of ev.target.files) {
-      if (f.name === "manifest.json") files[f.name] = await f.text();
-      else if (f.name.endsWith(".bin")) files[f.name] = await f.arrayBuffer();
+      const rel = f.webkitRelativePath ? f.webkitRelativePath.split("/").slice(1).join("/") : f.name;
+      if (rel === "manifest.json") files[rel] = await f.text();
+      else if (rel.endsWith(".bin")) files[rel] = await f.arrayBuffer();
     }
     if (!files["manifest.json"]) { fail("That folder has no manifest.json: choose a .dflow bundle folder."); return; }
     if (which === "b" && !A) { fail("Open a record (A) first, then its overlay (B)."); return; }

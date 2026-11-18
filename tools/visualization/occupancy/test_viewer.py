@@ -78,6 +78,8 @@ class Viewer(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
         cls.out = None
+        # The ambiguous fixture, once, for the Node harness and the browser alike (#472's review).
+        cls.ambiguous_copy_path = cls.ambiguous_copy() if AMBIGUOUS else None
         if NODE:
             core = cls.tmp / "core.js"
             core.write_text(core_script(), encoding="utf-8")
@@ -86,7 +88,7 @@ class Viewer(unittest.TestCase):
             env = None
             if AMBIGUOUS:
                 import os
-                env = dict(os.environ, OCC_AMBIGUOUS=f"{AMBIGUOUS[0]}|{cls.ambiguous_copy()}")
+                env = dict(os.environ, OCC_AMBIGUOUS=f"{AMBIGUOUS[0]}|{cls.ambiguous_copy_path}")
             p = subprocess.run([NODE, str(h), str(core), str(A), str(B), *map(str, MORE)], capture_output=True, text=True,
                                env=env)
             if p.returncode:
@@ -109,7 +111,6 @@ class Viewer(unittest.TestCase):
         dst = cls.tmp / "ambiguous.dflow"
         shutil.copytree(b.dir, dst)
         b.close()
-        cls.ambiguous_copy_path = dst
         return dst
 
     @classmethod
@@ -281,6 +282,21 @@ class Viewer(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertEqual(page.inner_text("#joined"), "")
                 self.assertTrue(page.is_disabled("#first"))
+                # A bundle whose events file is nested loads from its folder (#472's review).
+                nested = self.tmp / "picked.dflow"
+                if not nested.exists():
+                    shutil.copytree(A, nested)
+                    mf = json.loads((nested / "manifest.json").read_text(encoding="utf-8"))
+                    ev = mf["tables"]["events"]["file"]
+                    (nested / "cols").mkdir()
+                    shutil.move(str(nested / ev), str(nested / "cols" / ev))
+                    mf["tables"]["events"]["file"] = f"cols/{ev}"
+                    (nested / "manifest.json").write_text(json.dumps(mf), encoding="utf-8")
+                page.set_input_files("#pick", str(nested))
+                page.wait_for_timeout(500)
+                self.assertEqual(errors, [])
+                self.assertEqual(page.inner_text("#err"), "")
+                self.assertIn("cycles to result", page.inner_text("#meta"))
                 # A refused overlay leaves A alone and says so; nothing of an earlier B remains.
                 if AMBIGUOUS:
                     page.set_input_files("#pick", str(AMBIGUOUS[0]))
