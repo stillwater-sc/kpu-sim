@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A plan for a blocked linear-algebra test set** (`docs/plans/blocked-linear-algebra-test-set.md`;
+  epic #479, steps #480–#492):
+  - a GEMM schedule space: rectangular shapes, blocks per level, loop order, partial-C carriage,
+    and a choice by shape with a search;
+  - ten operators chosen for what they validate in the language, the lowering, the runtime and
+    the data path: TRSM, SYRK, Cholesky, out-of-core LU, QR and TSQR, GEMV and GER, batched GEMM,
+    SYMM and TRMM, Hessenberg and Schur.
 - **`tools/csp-gen/README.md`:** what `kpu-csp-gen` is for, and what it is not. It is a generator
   of test and experiment programs, standing in for the DFP → CSP lowering (ADR 0002 §3.1, #281),
   not the source of an operator library. It also says how its options probe the architecture,
