@@ -287,8 +287,15 @@ public:
         l2_slots_.clear();
     }
 
-    void step(const Action& a, const TileOp* call_op) {
-        values_.step(a, call_op);                   // the values: L-B's, in the same order
+    void step(const Action& placed, const TileOp* call_op) {
+        values_.step(placed, call_op);              // the values: L-B's, in the same order
+        // The timing: slice 2's copies not yet placed. A copy's L2Release does nothing then, and has
+        // no record, as at L-CA (one leg per action at both levels).
+        if (placed.copy && placed.kind == Action::Kind::L2Release) {
+            ++st_.actions;
+            return;
+        }
+        const Action a = unplaced(placed);
         const std::string k = a.tile.to_string();
         const Cycle bytes = tile_bytes(a.tile);
         switch (a.kind) {
@@ -518,7 +525,7 @@ public:
                 // A stage block's end: its slot is free once the staged copy's last Feed is out,
                 // and the next stage into it may start from then (its credit returns upstream).
                 const Cycle t = std::max({get(moved_, k), get(fed_, k), get(partial_read_, k)});
-                l2_free_[key_of(*a.l2)] = t;
+                if (a.l2) l2_free_[key_of(*a.l2)] = t;
                 auto it = l2_open_.find(k);
                 if (it != l2_open_.end()) {
                     l2_slots_[it->second].t1 = t;

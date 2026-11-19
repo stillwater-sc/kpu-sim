@@ -178,6 +178,11 @@ private:
     bool has_late_ = false;                         // the program has a `store ... late`
     std::vector<Family> staged_;                    // families the enclosing stage blocks hold
     std::size_t l2_live_ = 0, peak_l2_ = 0;
+    // The validator checks the L2 the program STATES -- its stage blocks and L2 partials -- and
+    // that each call can find one more slot. The walker is the authority for every copy's and
+    // result's slot (slot-credits-at-lca.md): it refuses, by line, a program whose ring runs out.
+    // Recounting the walker's exact allocation here would be a second model of it to keep in step.
+    std::size_t l2_held() const { return l2_live_; }
 
     void not_staged(const Family& f, int line, const std::string& what) const {
         for (const Family& st : staged_)
@@ -204,14 +209,15 @@ private:
             if (may_overlap(y, a.tile)) throw CompileError(s.line, "acc " + text(y) + ": it may already have an accumulator");
         not_retained(y, s.line);
         const std::size_t n = count(y);
-        if (l2_live_ + n > static_cast<std::size_t>(ast_.l2))
+        const std::size_t cap = static_cast<std::size_t>(ast_.l2);
+        if (l2_held() + n > cap)
             throw CompileError(s.line, "acc " + text(y) + " in l2 needs " + std::to_string(n) + " L2 slot" +
                                        (n == 1 ? "" : "s") + " for its partials, and " +
-                                       std::to_string(static_cast<std::size_t>(ast_.l2) - std::min(l2_live_, static_cast<std::size_t>(ast_.l2))) +
-                                       " of " + std::to_string(ast_.l2) + " are free");
+                                       std::to_string(cap - std::min(l2_held(), cap)) + " of " + std::to_string(ast_.l2) +
+                                       " are free");
         if (s.init) init_l2(s, y);
         l2_live_ += n;
-        peak_l2_ = std::max(peak_l2_, l2_live_);
+        peak_l2_ = std::max(peak_l2_, l2_held());
         accs_.push_back(Acc{y, false, false, depth, true});
         if (s.init) {                                   // its residency is checked again at the first merge
             Family x = family(*s.init);
@@ -249,12 +255,13 @@ private:
             mine.push_back(f);
             n += count(f);
         }
-        if (l2_live_ + n > static_cast<std::size_t>(ast_.l2))
+        const std::size_t cap = static_cast<std::size_t>(ast_.l2);
+        if (l2_held() + n > cap)
             throw CompileError(s.line, "stage needs " + std::to_string(n) + " L2 slot" + (n == 1 ? "" : "s") + ", and " +
-                                       std::to_string(static_cast<std::size_t>(ast_.l2) - std::min(l2_live_, static_cast<std::size_t>(ast_.l2))) +
-                                       " of " + std::to_string(ast_.l2) + " are free");
+                                       std::to_string(cap - std::min(l2_held(), cap)) + " of " + std::to_string(ast_.l2) +
+                                       " are free");
         l2_live_ += n;
-        peak_l2_ = std::max(peak_l2_, l2_live_);
+        peak_l2_ = std::max(peak_l2_, l2_held());
         for (const Family& f : mine) staged_.push_back(f);
         for (const Stmt& b : s.body) stmt(b, depth, definite);
         staged_.resize(staged_.size() - mine.size());
@@ -717,6 +724,9 @@ private:
                     if (may_overlap(y, a.tile)) throw CompileError(s.line, "acc " + text(y) + ": it may already have an accumulator");
                 not_retained(y, s.line);
                 if (has_late_) late_room(s.line, "the open of acc " + text(y));
+                // An unstaged init is copied into L2 as the block opens, before any call.
+                if (s.init && unstaged({single(*s.init)}))
+                    need_l2(s.line, "acc " + text(y) + " init " + text(single(*s.init)));
                 accs_.push_back(Acc{y, false, false, depth});
                 for (const Stmt& b : s.body) stmt(b, depth, definite);
                 Acc& a = *std::find_if(accs_.begin(), accs_.end(), [&](const Acc& x) { return same(x.tile, y); });
@@ -900,6 +910,29 @@ private:
             throw CompileError(s.line, s.fn + " computes in fp32; " + y.operand + " is " + type_of(y.operand));
     }
 
+    // Every call copies its operands into L2 slots the program places, one at a time (each Move,
+    // Feed, free), and a writing call's result takes one more (docs/plans/slot-credits-at-lca.md).
+    // So a call needs at least one slot beyond the stated ones: a lower bound, which the walker's
+    // exact allocation refines.
+    // `slot`: whether the call needs a slot beyond what is held -- a copy of an unstaged operand,
+    // or a writing call's result. A call whose operands are all staged, into an open accumulator,
+    // needs none.
+    void need_l2(int line, const std::string& what, bool slot = true) {
+        if (ast_.l2 <= 0)
+            throw CompileError(line, what + " copies its operands into L2 slots the program places, and the machine "
+                                     "clause declares no L2 (write `l2 = N`)");
+        const std::size_t live = l2_held() + (slot ? 1 : 0);
+        if (live > static_cast<std::size_t>(ast_.l2))
+            throw CompileError(line, what + " needs an L2 slot for a copy, and all " + std::to_string(ast_.l2) +
+                                     " are held by stages and partials");
+        peak_l2_ = std::max(peak_l2_, live);
+    }
+    bool unstaged(const std::vector<Family>& args) const {
+        return std::any_of(args.begin(), args.end(), [&](const Family& a) {
+            return std::none_of(staged_.begin(), staged_.end(), [&](const Family& st) { return contains(st, a); });
+        });
+    }
+
     void call(const Stmt& s, std::size_t depth, bool definite) {
         std::vector<Family> args;
         for (const TileRef& r : s.tiles) args.push_back(single(r));
@@ -949,6 +982,7 @@ private:
             if (s.fn != "gemm")
                 throw CompileError(s.line, "call " + s.fn + " on the L2 accumulator " + text(y) + ": an L2 accumulator "
                                            "takes gemm '+->', whose result the Combiner merges into its slot");
+            need_l2(s.line, "call gemm +-> " + text(y), unstaged(args));   // its unstaged operands' copies
             // `via`: the final merge's epilogue (#427), on the Combiner, after the merge. The walker
             // checks that no call into the tile follows it.
             for (const ResolvedStage& r : resolve_result_context(s.context, target_, [](int line, const std::string& m) {
@@ -1007,6 +1041,7 @@ private:
                 throw CompileError(s.line, "an accumulating call's result stays in the fabric; place its epilogue on "
                                            "its store");
             for (const Family& a : args) resident(a);
+            need_l2(s.line, "call " + s.fn + " +-> " + text(y), unstaged(args));
             // The accumulator is fed if this call runs in every iteration of the loops inside it.
             if (definite || depth <= acc->depth) acc->fed = true;
             else {
@@ -1029,6 +1064,7 @@ private:
                                        "an open accumulator");
         for (const Family& a : args) resident(a);
         not_staged(y, s.line, "call " + s.fn + " writes");
+        need_l2(s.line, "call " + s.fn + " -> " + text(y));        // its operands' copies; then its result's slot
         context(s, y);
         owner->dirty = true;
         calls_ += multiplier_;

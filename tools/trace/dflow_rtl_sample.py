@@ -46,9 +46,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dflow_writer import (CHANNELS, ELEMENTS, EVENT_KINDS, KINDS, LAYERS, NONE8, NONE32, NONE64, PROCESSES,  # noqa: E402
                           Table, pack, write_bundle)
 
-PROGRAM = """csp 1.0
+PROGRAM = """csp 1.1
 // C = L . B, L lower triangular: L[0,1] is outside the domain and is never loaded
-program trmm_8x4 machine flat(l3 = 4) {
+program trmm_8x4 machine flat(l3 = 4, l2 = 8) {
   tensor L[8,8] tile 4x4 in;
   tensor B[8,4] tile 4x4 in;
   tensor C[8,4] tile 4x4 out;

@@ -205,7 +205,7 @@ TEST_CASE("Timed record: each Release's credit follows its own tile's last move 
     // C[0, 0] is stored twice: merged in L2 and stored, then read back, put through a ReLU on the
     // Combiner, and stored again (#469's review). Each Release's credit is no earlier than the end
     // of its own Store, the second included, not only the first.
-    const std::string text = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+    const std::string text = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 7) {\n"
                              "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
                              "  tensor C[32,32] tile 16x16 inout;\n"
                              "  acc C[0, 0] in l2 {\n    resident A[0, :], B[:, 0];\n"

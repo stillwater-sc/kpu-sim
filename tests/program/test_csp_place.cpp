@@ -37,7 +37,11 @@ std::string with_machine(std::string text, const std::string& options) {
     const auto close = text.find(')', at);
     const auto eq = text.find("= ", at) + 2;
     const std::string l3 = text.substr(eq, text.find_first_of(",)", eq) - eq);
-    return text.replace(at, close - at + 1, "machine flat(l3 = " + l3 + options + ")");
+    // Its L2 slots stay (every program declares them; slot-credits-at-lca.md).
+    std::string l2;
+    if (const auto k = text.find("l2 = ", at); k != std::string::npos && k < close)
+        l2 = ", l2 = " + text.substr(k + 5, text.find_first_of(",)", k) - k - 5);
+    return text.replace(at, close - at + 1, "machine flat(l3 = " + l3 + l2 + options + ")");
 }
 
 // Walk the actions: no two live residencies share a slot, every action carries its residency's
@@ -152,8 +156,8 @@ TEST_CASE("placement: the policy decides where reuse lands", "[csp][placement]")
 }
 
 TEST_CASE("placement: a program may name its slots", "[csp][placement]") {
-    const std::string base = R"(csp 1.0
-program p machine flat(l3 = 6) {
+    const std::string base = R"(csp 1.1
+program p machine flat(l3 = 6, l2 = 8) {
   tensor A[4,4] tile 2x2 in;
   tensor B[4,4] tile 2x2 in;
   tensor C[4,4] tile 2x2 out;
@@ -208,8 +212,9 @@ TEST_CASE("placement: the machine clause's options, and their text", "[csp][plac
     CHECK(format(parse(text)).find("place =") == std::string::npos);
     CHECK(format(parse(text)).find("banks =") == std::string::npos);
     const std::string named = with_machine(text, ", banks = 4, place = bank-spread");
-    CHECK_THAT(format(parse(named)), ContainsSubstring(", banks = 4, place = bank-spread)"));
-    CHECK_THAT(print(compile(named)), ContainsSubstring(", banks = 4, place = bank-spread)"));
+    // The printer keeps the program's own L2 slots last (slot-credits-at-lca.md).
+    CHECK_THAT(format(parse(named)), ContainsSubstring(", banks = 4, place = bank-spread"));
+    CHECK_THAT(print(compile(named)), ContainsSubstring(", banks = 4, place = bank-spread, l2 = 6)"));
     CHECK_THROWS_WITH(parse(with_machine(text, ", place = random")), ContainsSubstring("fifo, lowest or bank-spread"));
     CHECK_THROWS_WITH(parse(with_machine(text, ", banks = 0")), ContainsSubstring("banks must be positive"));
     CHECK_THROWS_WITH(parse(with_machine(text, ", ways = 2")), ContainsSubstring("banks, place or l2"));

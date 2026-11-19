@@ -274,7 +274,7 @@ TEST_CASE("the chain is checked at load: a held tile is never lost or misread",
         l.tensors = {tensor("X", 0x1000, true), tensor("W", 0x2000, true), tensor("H", 0x3000, true),
                      tensor("bias", 0x5000, true, {32}, {16})};
         l.operators = {sw::kpu::loadable::csp_operator(
-            "twice", "csp 1.0\nprogram twice machine flat(l3 = 4) {\n"
+            "twice", "csp 1.1\nprogram twice machine flat(l3 = 4, l2 = 8) {\n"
                      "  tensor C[32,32] tile 16x16 inout;\n  vector b[32] tile 16 in;\n"
                      "  resident C[0, 0];\n  resident b[0];\n"
                      "  call add(C[0, 0], b[0]) -> C[0, 0];\n  store C[0, 0];\n"

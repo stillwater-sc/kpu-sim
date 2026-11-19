@@ -1,8 +1,8 @@
-csp 1.0
+csp 1.1
 // An 8x8 int8 output-stationary matmul in 4x4 tiles: four reductions of two steps each, the
 // accumulator slots alternating (#397). A and B are resident whole and L3 holds every residency,
 // as the RTL's host fills it once.
-program mm8 machine flat(l3 = 12) {
+program mm8 machine flat(l3 = 12, l2 = 8) {
   tensor A[8,8] int8 tile 4x4 in;
   tensor B[8,8] int8 tile 4x4 in;
   tensor C[8,8] int32 tile 4x4 out;

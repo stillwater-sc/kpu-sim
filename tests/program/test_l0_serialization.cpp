@@ -124,8 +124,9 @@ TEST_CASE("the file is text a human can read and diff", "[program][serialize]") 
     CHECK(text.find("MIN_CONSUMER 1.0.0\n") != std::string::npos);
     // The op set is versioned separately: a new container record is not a new operator. The
     // line records what the FILE uses: 1.1.0 added BIAS_ADD and ACTIVATION, which a matmul does
-    // not use; 1.2.0 added the L3 transactions, which every trace now records (ADR 0004 §5).
-    CHECK(text.find("OPSET tile 1.2.0\n") != std::string::npos);
+    // not use; 1.2.0 added the L3 transactions, which every trace now records (ADR 0004 §5);
+    // 1.3.0 the L2 ones, which every trace records too (every copy is placed; slot-credits-at-lca.md).
+    CHECK(text.find("OPSET tile 1.3.0\n") != std::string::npos);
     // An L3 transaction names its tile and its address: the first Load takes slot 0 (fifo).
     CHECK(text.find(" l3=0 slot=0 bank=0\n") != std::string::npos);
     CHECK(text.find("OP kind=L3_LOAD out=") != std::string::npos);

@@ -154,7 +154,7 @@ TEST_CASE("Requant: the programs declare C with its accumulator and carry the sc
 }
 
 TEST_CASE("Requant: what the language refuses, in the walker and the validator", "[program][csp][lang][requant]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                              "  tensor A[16,16] int8 tile 16x16 in;\n  tensor B[16,16] int8 tile 16x16 in;\n";
     const std::string q = "  tensor C[16,16] int8 tile 16x16 out acc int32;\n";
     const std::string fab = "  resident A[0, 0], B[0, 0];\n"
@@ -204,7 +204,7 @@ TEST_CASE("Requant: what the language refuses, in the walker and the validator",
     BOTH_REFUSE(head + q + l2 + l2end + "  store C[0, 0];\n}\n", "final merge needs `via scale(m, shift) @ combiner`");
     // Every tile of an L2 family must be requantized: C[0, 0] is, C[0, 1] is not (#437's review).
     {
-        const std::string wide = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+        const std::string wide = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                                  "  tensor A[16,16] int8 tile 16x16 in;\n  tensor B[16,32] int8 tile 16x16 in;\n"
                                  "  tensor C[16,32] int8 tile 16x16 out acc int32;\n"
                                  "  acc C[0, :] in l2 {\n    resident A[0, 0], B[0, :];\n"
@@ -619,7 +619,7 @@ TEST_CASE("Requant: a vector that is a shift anywhere keeps the shift's domain",
     // each vector a multiplier in one stage and a shift in the other. Shift wins: its domain is
     // valid in both positions, and the synthesized run would otherwise refuse the first stage.
     const lang::Program ast = lang::parse(
-        "csp 1.0\nprogram t machine flat(l3 = 12, l2 = 2) {\n"
+        "csp 1.1\nprogram t machine flat(l3 = 12, l2 = 5) {\n"
         "  tensor A[16,16] int8 tile 16x16 in;\n  tensor B[16,16] int8 tile 16x16 in;\n"
         "  tensor C[16,16] int8 tile 16x16 out acc int32;\n  tensor E[16,16] int8 tile 16x16 out acc int32;\n"
         "  vector qm[16] int32 tile 16 in;\n  vector qs[16] int32 tile 16 in;\n"
@@ -666,7 +666,7 @@ TEST_CASE("Requant: a per-channel scale's trace is opset 1.9, and refuses bad va
 }
 
 TEST_CASE("Requant: what a per-channel scale refuses", "[program][csp][lang][requant]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 8) {\n"
                              "  tensor A[16,16] int8 tile 16x16 in;\n  tensor B[16,16] int8 tile 16x16 in;\n"
                              "  tensor C[16,16] int8 tile 16x16 out acc int32;\n"
                              "  vector qm[16] int32 tile 16 in;\n  vector qs[16] int32 tile 16 in;\n"

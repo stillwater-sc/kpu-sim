@@ -32,6 +32,8 @@ FMT = {"u8": ("<B", 1), "u16": ("<H", 2), "u32": ("<I", 4), "u64": ("<Q", 8), "i
        "f64": ("<d", 8)}
 OPENS, CLOSES = 1, 2
 STORE_KIND = 1                                       # enum Action::Kind
+L2_RELEASE_KIND = 10                                  # enum Action::Kind
+COPY_FLAG = 128                                       # steps.flags: a copy the walker places (slot-credits-at-lca.md)
 NONE64 = 0xFFFFFFFFFFFFFFFF
 
 
@@ -319,7 +321,12 @@ class DflowCheckSelfTest(unittest.TestCase):
     def test_overlay_is_exercised(self):
         self.assertEqual(self.b.manifest["version"], 6)
         self.assertIsNotNone(self.b.manifest["lt1"])
-        self.assertGreater(self.b.rows("lt1_legs"), self.b.rows("steps"))     # a Store has two legs
+        # A Store has two legs; a copy's L2Release has none yet (slot-credits-at-lca.md §4).
+        n = self.b.rows("steps")
+        copy_releases = sum(1 for i in range(n)
+                            if self.b.get("steps", "kind", i) == L2_RELEASE_KIND
+                            and self.b.get("steps", "flags", i) & COPY_FLAG)
+        self.assertGreater(self.b.rows("lt1_legs"), n - copy_releases)
 
     def test_l1_leg_on_a_lane_its_process_lacks(self):
         g = self.leg_of(lambda g: self.b.get("lt1_legs", "proc", g) == 3)    # cf

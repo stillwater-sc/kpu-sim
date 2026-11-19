@@ -411,7 +411,7 @@ TEST_CASE("version 6: an L2 accumulator's partial is recorded as merged into, no
     // #455: L-T1's L2 slot for an accumulator's partial carries partial and merges; the record
     // keeps them, and they round-trip.
     Run r;
-    r.ast = lang::parse("csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    r.ast = lang::parse("csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                         "  tensor A[16,32] tile 16x16 in;\n  tensor B[32,16] tile 16x16 in;\n"
                         "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 in;\n"
                         "  resident D[0, 0];\n  acc C[0, 0] in l2 init D[0, 0] {\n"
@@ -447,7 +447,7 @@ TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and
     REQUIRE_FALSE(r.outcome.skipped);
     const TileFlowRecord rec = r.record();
     CHECK(rec.phases);
-    CHECK(rec.l2_slots == 4);
+    CHECK(rec.l2_slots == 10);   // the panel (4), and 2 rounds of a call's 3
     // Every staged copy, at the address L-T1 executed, with its reuse count: A[i,k] is fed once per j.
     REQUIRE(rec.l2_residency.size() == 16);
     REQUIRE(rec.l2_residency.size() == r.outcome.l2_slots.size());
@@ -461,7 +461,7 @@ TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and
     const Station& l2 = rec.stations[2];
     CHECK(l2.kind == "l2");
     CHECK(l2.modelled);
-    CHECK(l2.capacity == 4);
+    CHECK(l2.capacity == 10);
     CHECK(std::find(rec.unmodelled.begin(), rec.unmodelled.end(), "l2") == rec.unmodelled.end());
     // One chain per C tile, on the compute tile L-T1 ran it on.
     REQUIRE(rec.chains.size() == 16);
@@ -498,17 +498,17 @@ TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and
     }
     std::size_t n_cf = 0;
     for (const Station& st : rec.stations) n_cf += st.kind == "cf";
-    CHECK(l2_rows == 4);
+    CHECK(l2_rows == 10);                   // one row per slot of the program's 10
     CHECK(in_rows == n_cf);
     CHECK(out_rows == n_cf);
     CHECK(lod.rows.back().kind == "cf_out");
 
     // A staged copy beyond the program's slots is refused at the trust boundary.
     TileFlowRecord bad = rec;
-    bad.l2_residency[0].slot = 9;
+    bad.l2_residency[0].slot = 10;
     const std::string bdir = scratch("v6bad");
     write_tflow(bad, bdir);
-    CHECK_THROWS_WITH(read_tflow(bdir), ContainsSubstring("L2 slot 9 of 4"));
+    CHECK_THROWS_WITH(read_tflow(bdir), ContainsSubstring("L2 slot 10 of 10"));
     // So are an inverted copy, a copy in no compute tile's L2, and a chain whose phases are out of order.
     bad = rec;
     bad.l2_residency[0].t0 = bad.l2_residency[0].t1 + 1;

@@ -157,7 +157,7 @@ TEST_CASE("Block formats: the language places the conversion last, off the fabri
     const std::string text = lang::format(lang::parse(src));
     CHECK(lang::format(lang::parse(text)) == text);
     auto refused = [](const std::string& via) {
-        const std::string p = "csp 1.0\nprogram t machine flat(l3 = 8) {\n  tensor A[16,16] tile 16x16 in;\n"
+        const std::string p = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 8) {\n  tensor A[16,16] tile 16x16 in;\n"
                               "  tensor B[16,16] tile 16x16 in;\n  tensor C[16,16] tile 16x16 out;\n"
                               "  resident A[0, 0], B[0, 0];\n"
                               "  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
@@ -177,7 +177,7 @@ TEST_CASE("Block formats: the language places the conversion last, off the fabri
     // An L2 accumulator's final merge that converts its tile ends its operations: its store takes
     // no stage after it (#436's review).
     {
-        const std::string p = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n  tensor A[16,16] tile 16x16 in;\n"
+        const std::string p = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n  tensor A[16,16] tile 16x16 in;\n"
                               "  tensor B[16,16] tile 16x16 in;\n  tensor C[16,16] tile 16x16 out;\n"
                               "  acc C[0, 0] in l2 {\n    resident A[0, 0], B[0, 0];\n"
                               "    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0] via mxint8 @ combiner;\n"

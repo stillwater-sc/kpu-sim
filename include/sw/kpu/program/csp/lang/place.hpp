@@ -11,7 +11,7 @@
 //   CORRECT  L3Allocator::take() as the walker opens a residency; give() as it releases one
 //
 // The policy is the program's, a schedule choice written in its machine clause
-// (`machine flat(l3 = 17, place = fifo)`), never a deployment field:
+// (`machine flat(l3 = 17, l2 = 8, place = fifo)`), never a deployment field:
 //   fifo         the slot freed longest ago: a reuse waits on the oldest release   (default)
 //   lowest       the lowest free slot: compact, and reuses the slot just freed
 //   bank-spread  a free slot in the bank holding the fewest live tiles (lowest such slot)

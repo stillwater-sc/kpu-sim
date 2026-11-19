@@ -23,6 +23,10 @@
 // twice, a Feed of a slot that does not hold its tile, and a program that ends with a tile
 // staged. An unstaged Move and Feed pass through L2 as before.
 //
+// EVERY L2 COPY IS ADDRESSED (docs/plans/slot-credits-at-lca.md). An unstaged operand's copy is
+// a one-Feed staging (Move, Feed, L2Release). A result's Drain writes its slot, its Writeback
+// reads it, and its L2Release frees it.
+//
 // L2 ACCUMULATORS ARE ADDRESSED THE SAME WAY (#429, #430). A call into one computes its partial
 // on a fresh accumulator in the fabric (MATMUL_MERGE's gemm, from zero), and its Drain is the
 // Combiner's merge into the tile's L2 slot: Overwrite writes the partial into a free slot and tags
@@ -148,13 +152,13 @@ public:
                 if (a.seeds) {                  // an accumulator's init: its values start the accumulator
                     std::vector<float> v = a.l2 ? read_l2(*a.l2, a, k, where(i)).values
                                                 : take(Chan::L2, k, where(i), /*keep=*/false);
-                    if (a.l2) ++sum_.staged_feeds;
+                    if (a.l2 && !a.copy) ++sum_.staged_feeds;
                     seed(*a.seeds, a.tile, std::move(v), where(i));
                     break;
                 }
-                if (a.l2) {                     // the staged copy: read, and kept for the next Feed
+                if (a.l2) {                     // the copy in L2: read, and kept until its L2Release
                     at(Chan::Cf)[k] = read_l2(*a.l2, a, k, where(i)).values;
-                    ++sum_.staged_feeds;
+                    if (!a.copy) ++sum_.staged_feeds;
                     break;
                 }
                 [[fallthrough]];
@@ -165,7 +169,8 @@ public:
                     break;
                 }
                 stages(v, a, where(i));         // a result's epilogue, where the program placed it
-                at(to_chan(a.kind))[k] = std::move(v);
+                if (a.kind == Action::Kind::Drain && a.l2) stage_l2(*a.l2, a, k, std::move(v), where(i));
+                else at(to_chan(a.kind))[k] = std::move(v);
                 break;
             }
             case Action::Kind::Release: {
@@ -190,8 +195,7 @@ public:
             case Action::Kind::L2Release: {
                 if (!a.l2) throw BehavioralError(where(i) + ": the action carries no L2 address");
                 read_l2(*a.l2, a, k, where(i), "nothing staged to release");
-                l2_index_.erase(k);
-                l2_.erase(l2_key(*a.l2));
+                free_l2(*a.l2, k);
                 break;
             }
             case Action::Kind::Call:
@@ -324,6 +328,10 @@ private:
         std::size_t staging = kNone;
         std::vector<float> values;
     };
+    void free_l2(const L2Address& at, const std::string& k) {
+        l2_index_.erase(k);
+        l2_.erase(l2_key(at));
+    }
     std::uint32_t l2_slots_ = 0;
     std::map<std::pair<std::uint32_t, std::uint32_t>, L2Slot> l2_;     // (cf, slot) -> its staged tile
     std::map<std::string, L2Address> l2_index_;                         // staged tile -> its slot

@@ -58,8 +58,8 @@ std::vector<float> linear_oracle(ActivationFn act) {
 // The written linear operator. `via` is the store's context; `unfused` (if set) is the
 // epilogue as calls on the stored result, read back.
 std::string linear_source(const std::string& via, const std::string& unfused = "") {
-    return std::string(R"(csp 1.0
-program linear machine flat(l3 = 64) {
+    return std::string(R"(csp 1.1
+program linear machine flat(l3 = 64, l2 = 8) {
   tensor A[128,128] tile 32x32 in;
   tensor B[128,128] tile 32x32 in;
   vector b[128] tile 32 in;
@@ -177,7 +177,7 @@ TEST_CASE("Linear: the epilogue ops serialize (opset 1.2.0, with the L3 ops)", "
     serialize::WriteOptions opt;
     opt.include_values = true;
     const std::string text = serialize::to_string(in, opt);
-    CHECK(text.find("OPSET tile 1.2.0\n") != std::string::npos);
+    CHECK(text.find("OPSET tile 1.3.0\n") != std::string::npos);   // every trace records its L2 copies
     CHECK(text.find("OP kind=BIAS_ADD in=") != std::string::npos);
     CHECK(text.find("OP kind=ACTIVATION out=") != std::string::npos);
     CHECK(text.find(" act=silu") != std::string::npos);
@@ -333,8 +333,8 @@ TEST_CASE("Linear: what the language refuses, by line", "[program][csp][linear][
     CHECK_THAT(validate_error(linear_source(" via relu @ bm.egress, add(b[j]) @ fabric")),
                ContainsSubstring("listed after a stage @ bm.egress"));
 
-    const std::string head = R"(csp 1.0
-program t machine flat(l3 = 16) {
+    const std::string head = R"(csp 1.1
+program t machine flat(l3 = 16, l2 = 8) {
   tensor A[64,64] tile 32x32 in;
   tensor B[64,64] tile 32x32 in;
   vector b[64] tile 32 in;

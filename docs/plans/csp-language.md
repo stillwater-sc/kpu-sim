@@ -77,9 +77,11 @@ So this plan also builds the epilogue's operations and the vector processor that
 ### 3.2 Grammar (EBNF sketch)
 
 ```
-file       := 'csp' VERSION NL program                               -- e.g. `csp 1.0` (Q3)
+file       := 'csp' VERSION NL program                               -- `csp 1.1` (Q3; 1.1 requires `l2 = N`)
 program    := 'program' NAME machine '{' decl* stmt* '}'
-machine    := 'machine' 'flat' '(' 'l3' '=' INT [ ',' 'l2' '=' INT ] ')'  -- level 1 (l2: staging slots)
+machine    := 'machine' 'flat' '(' 'l3' '=' INT [ ',' 'l2' '=' INT ] ')'  -- level 1 (l2: each compute tile's
+                                           -- L2 slots; required from csp 1.1 by any program that copies a
+                                           -- tile into L2, which every call does: slot-credits-at-lca.md)
             | 'machine' 'grid' '(' INT 'x' INT ',' 'l3' '=' INT ')'      -- level 2
 decl       := 'tensor' NAME '[' INT ',' INT ']' [ TYPE ] 'tile' INT 'x' INT io ';'
             | 'vector' NAME '[' INT ']' [ TYPE ] 'tile' INT io ';'         -- e.g. a bias (Q6)
@@ -197,8 +199,8 @@ time.
 **The linear operator, fused at the BlockMover's egress:**
 
 ```
-csp 1.0
-program linear machine flat(l3 = 128) {
+csp 1.1
+program linear machine flat(l3 = 128, l2 = 8) {
   tensor X[256,256] tile 32x32 in;
   tensor W[256,256] tile 32x32 in;
   vector b[256]     tile 32    in;
@@ -241,7 +243,7 @@ computed.
 ### 3.5 Level 2 (the SUMMA form, written)
 
 ```
-csp 1.0
+csp 1.1
 program summa machine grid(4x4, l3 = 64) {
   // ...declarations as in matmul...
   distribute C over grid block2d;           // owner (r,c) computes C[r*2..r*2+1, c*2..c*2+1]

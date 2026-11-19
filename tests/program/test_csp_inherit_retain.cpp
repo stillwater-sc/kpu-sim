@@ -58,7 +58,7 @@ void refused(const std::string& text, const std::string& why) {
     CHECK_THROWS_WITH(lang::compile(text), ContainsSubstring(why));
 }
 
-const char* kHead = "csp 1.0\nprogram p machine flat(l3 = 8) {\n"
+const char* kHead = "csp 1.1\nprogram p machine flat(l3 = 8, l2 = 8) {\n"
                     "  tensor A[32,32] tile 16x16 inout;\n  tensor B[32,32] tile 16x16 in;\n"
                     "  tensor C[32,32] tile 16x16 out;\n";
 
@@ -194,7 +194,7 @@ TEST_CASE("inherit/retain: the validator and the walker refuse the same misuses"
     CHECK_THROWS_WITH(lang::validate(same_tile), ContainsSubstring("every iteration must retain different tiles"));
     CHECK_THROWS_WITH(lang::compile(same_tile), ContainsSubstring("B[0,0] is retained"));
     // retained slots count against capacity to the end
-    refused("csp 1.0\nprogram p machine flat(l3 = 4) {\n  tensor A[64,64] tile 16x16 in;\n"
+    refused("csp 1.1\nprogram p machine flat(l3 = 4, l2 = 8) {\n  tensor A[64,64] tile 16x16 in;\n"
             "  resident A[0, :];\n  retain A[0, :];\n  resident A[1, 0];\n  release A[1, 0];\n}\n",
             "L3 slot");
 }

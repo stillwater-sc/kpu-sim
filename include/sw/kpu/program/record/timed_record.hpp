@@ -205,8 +205,11 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
             continue;
         }
         const std::uint64_t slot = (st.flags & DFR::kHasPlace) ? std::uint64_t(st.slot) : kNone64;
-        // A staged copy or a partial: the step's own, whatever address a banked L2 gives it.
-        const bool staged = (st.flags & DFR::kHasL2) != 0;
+        // A staged copy or a partial: the step's own, whatever address a banked L2 gives it. A copy
+        // the walker places (an unstaged operand's, a result's) runs unplaced at the timed levels in
+        // slice 2's step 1 (slot-credits-at-lca.md §4), so its record is the unplaced one.
+        const bool copy = (st.flags & DFR::kCopy) != 0;
+        const bool staged = (st.flags & DFR::kHasL2) != 0 && !copy;
         std::uint64_t l2 = staged ? std::uint64_t(st.l2_slot) : kNone64;
         // A banked L2 (#401): the transfer's booking gives its L2 address, the first row it took.
         const timing::L2Banks::Booking* bk = nullptr;
@@ -263,7 +266,7 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
                 credit_after(st, ev::L3, slot, t1);
                 break;
             case K::L2Release:
-                credit_after(st, ev::L2, l2, t1);
+                if (!copy) credit_after(st, ev::L2, l2, t1);   // a copy's credit is its Feed's, as unplaced
                 break;
             default:
                 break;                      // Inherit, Retain: no data moves, no credit returns

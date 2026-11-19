@@ -107,8 +107,8 @@ TEST_CASE("csp step: L-T1 replays every record in start order, within its lanes 
                 CHECK(n >= 1);
                 CHECK(n <= o.lanes.at(p));
             }
-            if (s.kind == csp::Action::Kind::Release) {
-                ++releases;
+            if (s.kind == csp::Action::Kind::Release || s.kind == csp::Action::Kind::L2Release) {
+                releases += s.kind == csp::Action::Kind::Release;   // an L3 residency's; an L2Release frees a copy
                 CHECK_FALSE(s.proc.has_value());
                 CHECK(s.start == s.finish);
             } else {
@@ -120,7 +120,13 @@ TEST_CASE("csp step: L-T1 replays every record in start order, within its lanes 
             }
         }
         CHECK(cur.position() == cur.size());
-        CHECK(seen.size() == o.actions);             // every action replayed
+        // Every action replayed, but a copy's L2Release, which L-T1 does not yet time
+        // (slot-credits-at-lca.md §4).
+        const csp::CspProgram prog = lang::compile(ast);
+        const auto copy_releases = static_cast<std::size_t>(std::count_if(
+            prog.actions.begin(), prog.actions.end(),
+            [](const csp::Action& a) { return a.copy && a.kind == csp::Action::Kind::L2Release; }));
+        CHECK(seen.size() == o.actions - copy_releases);
         CHECK(releases == o.slots.size());           // one Release per residency
         CHECK(store_legs == 2 * o.dram_stores);
     }
@@ -255,12 +261,12 @@ TEST_CASE("csp timeline: one event per leg on its process and lane", "[csp][time
     const auto entries = driver::csp_trace_entries(o.records, inputs, spec.device_view().element_bytes);
 
     std::size_t releases = 0;
-    for (const auto& r : o.records) releases += r.kind == csp::Action::Kind::Release;
+    for (const auto& r : o.records) releases += !csp::TransactionalInterpreter::has_process(r.kind);
     REQUIRE(entries.size() == o.records.size() - releases);
 
     std::size_t i = 0;
     for (const auto& r : o.records) {
-        if (r.kind == csp::Action::Kind::Release) continue;
+        if (!csp::TransactionalInterpreter::has_process(r.kind)) continue;   // a Release or an L2Release
         const auto& e = entries[i++];
         CAPTURE(e.description);
         CHECK(e.cycle_issue == r.start);
@@ -377,7 +383,8 @@ TEST_CASE("csp step: a lazy L-B step carries the state transition and changes no
                 CHECK_FALSE(st.size_known());
             }
             // Who acted: every kind but the credit actions has a process, and it is the kind's.
-            const bool credit = s.kind == Kind::Release || s.kind == Kind::Inherit || s.kind == Kind::Retain;
+            const bool credit = s.kind == Kind::Release || s.kind == Kind::L2Release || s.kind == Kind::Inherit ||
+                                s.kind == Kind::Retain;
             CHECK(s.process.has_value() == !credit);
             CHECK(s.from.has_value() == (s.kind != Kind::Call && !credit));
             if (s.from) CHECK(*s.from != *s.to);
@@ -411,8 +418,8 @@ TEST_CASE("csp step: a lazy L-B step carries the state transition and changes no
 }
 
 TEST_CASE("csp step: a walker refusal is thrown at its own step, not one early", "[csp][step]") {
-    const lang::Program ast = lang::parse(R"(csp 1.0
-program bad machine flat(l3 = 2) {
+    const lang::Program ast = lang::parse(R"(csp 1.1
+program bad machine flat(l3 = 2, l2 = 8) {
   tensor A[16,16] tile 16x16 in;
   resident A[0, 0];
   release A[0, 0];
