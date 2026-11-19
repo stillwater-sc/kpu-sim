@@ -156,8 +156,7 @@ private:
     struct Acc { Family tile; bool closed = false; bool fed = false; std::size_t depth = 0; bool l2 = false;
                  std::vector<Family> finals = {}; bool formatted = false; std::vector<Family> requantized = {};
                  std::optional<Family> init = {};          // `in l2 init X`: X until each tile's first merge
-                 std::vector<Family> merged = {};          // the tiles a call has merged into, as written
-                 bool reserved = false; };                 // a fabric accumulator: its results' L2 slots taken
+                 std::vector<Family> merged = {}; };       // the tiles a call has merged into, as written
     struct Var { Interval range; bool definite; };
 
     const Program& ast_;
@@ -179,41 +178,11 @@ private:
     bool has_late_ = false;                         // the program has a `store ... late`
     std::vector<Family> staged_;                    // families the enclosing stage blocks hold
     std::size_t l2_live_ = 0, peak_l2_ = 0;
-    std::size_t l2_results_ = 0;            // the open fabric accumulators' result slots
-    // The L2 slots held at a check: the stages', the partials', the open fabric results', and the
-    // late results still pending. The walker keeps a late result's slot until it emits the store:
-    // at the close of an accumulator that opened after it, before a statement that names the
-    // tile again, or at the program's end. This pass releases them at the same points
-    // (release_late). It sees a loop body once, not once per iteration, so a body with a late
-    // store starts with that store's result pending from the previous iteration (loop()):
-    // exact in the steady state, conservative in a loop's first iteration.
-    struct Late { std::size_t seq = 0, n = 0; Family tile; bool carried = false; };
-    std::vector<Late> late_pending_;
-    std::size_t late_seq_ = 0;
-    std::size_t l2_held() const {
-        std::size_t n = l2_live_ + l2_results_;
-        for (const Late& l : late_pending_) n += l.n;
-        return n;
-    }
-    void hold_late(std::size_t n, const Family& tile, bool carried = false) {
-        late_pending_.push_back(Late{late_seq_++, n, tile, carried});
-    }
-    // An accumulator's close: the late stores written before it opened (seq < due) are emitted.
-    void release_late_before(std::size_t due) {
-        late_pending_.erase(std::remove_if(late_pending_.begin(), late_pending_.end(),
-                                           [&](const Late& l) { return l.seq < due; }),
-                            late_pending_.end());
-    }
-    // A statement naming `f`: the walker emits the late stores up to the one that is it. It
-    // matches the exact tile, so this matches the same family in the same iteration, never a
-    // result carried from the previous iteration (whose indices differ).
-    void release_late_naming(const Family& f) {
-        for (std::size_t i = 0; i < late_pending_.size(); ++i)
-            if (!late_pending_[i].carried && same(late_pending_[i].tile, f)) {
-                late_pending_.erase(late_pending_.begin(), late_pending_.begin() + static_cast<std::ptrdiff_t>(i) + 1);
-                return;
-            }
-    }
+    // The validator checks the L2 the program STATES -- its stage blocks and L2 partials -- and
+    // that each call can find one more slot. The walker is the authority for every copy's and
+    // result's slot (slot-credits-at-lca.md): it refuses, by line, a program whose ring runs out.
+    // Recounting the walker's exact allocation here would be a second model of it to keep in step.
+    std::size_t l2_held() const { return l2_live_; }
 
     void not_staged(const Family& f, int line, const std::string& what) const {
         for (const Family& st : staged_)
@@ -249,8 +218,6 @@ private:
         if (s.init) init_l2(s, y);
         l2_live_ += n;
         peak_l2_ = std::max(peak_l2_, l2_held());
-        release_late_naming(y);
-        const std::size_t due = late_seq_;
         accs_.push_back(Acc{y, false, false, depth, true});
         if (s.init) {                                   // its residency is checked again at the first merge
             Family x = family(*s.init);
@@ -263,7 +230,6 @@ private:
             throw CompileError(s.line, "acc " + text(y) + " in l2 receives no call; each of its tiles needs at least "
                                        "one '+->' into it");
         a.closed = true;
-        release_late_before(due);
     }
 
     void stage(const Stmt& s, std::size_t depth, bool definite) {
@@ -514,7 +480,6 @@ private:
                                            "is not built yet, so store it");
             context(s, f);
             hold(total, s.line, "retain " + text(f) + "'s writeback");
-            if (acc->reserved) l2_results_ -= count(acc->tile);       // its results' L2 slots, freed
             accs_.erase(acc);
         } else {
             auto it = std::find_if(state_.begin(), state_.end(), [&](const Entry& e) { return same(e.family, f); });
@@ -717,7 +682,6 @@ private:
                         if (may_overlap(f, a.tile))
                             throw CompileError(s.line, text(f) + " can be an accumulator in the fabric, not a DRAM tile to load");
                     not_retained(f, s.line);
-                    release_late_naming(f);
                     hold(count(f), s.line, "resident " + text(f));
                     state_.push_back(Entry{f, false});
                     loads_ += count(f) * multiplier_;
@@ -760,11 +724,9 @@ private:
                     if (may_overlap(y, a.tile)) throw CompileError(s.line, "acc " + text(y) + ": it may already have an accumulator");
                 not_retained(y, s.line);
                 if (has_late_) late_room(s.line, "the open of acc " + text(y));
-                release_late_naming(y);
                 // An unstaged init is copied into L2 as the block opens, before any call.
                 if (s.init && unstaged({single(*s.init)}))
                     need_l2(s.line, "acc " + text(y) + " init " + text(single(*s.init)));
-                const std::size_t due = late_seq_;      // late stores written before it opened
                 accs_.push_back(Acc{y, false, false, depth});
                 for (const Stmt& b : s.body) stmt(b, depth, definite);
                 Acc& a = *std::find_if(accs_.begin(), accs_.end(), [&](const Acc& x) { return same(x.tile, y); });
@@ -773,7 +735,6 @@ private:
                                                "'+->' into it");
                 a.closed = true;
                 if (has_late_) late_room(s.line, "the close of acc " + text(y));
-                release_late_before(due);
                 break;
             }
             case Stmt::Kind::Inherit:
@@ -826,15 +787,6 @@ private:
         std::vector<std::size_t> finals_before, merged_before;
         for (const Acc& a : accs_) finals_before.push_back(a.finals.size());
         for (const Acc& a : accs_) merged_before.push_back(a.merged.size());
-        // The previous iteration's late stores, still pending as this one starts (l2_held).
-        if (trips.hi >= 2)
-            for (const Stmt& b : s.body)
-                if (b.kind == Stmt::Kind::Store && b.late) {
-                    try {
-                        const Family f = family(b.out);
-                        hold_late(static_cast<std::size_t>(count(f)), f, /*carried=*/true);
-                    } catch (const CompileError&) {}        // the store's own check reports it
-                }
         for (const Stmt& b : s.body) stmt(b, depth + 1, definite && trips.lo >= 1);
 
         // Residency-balanced: an iteration leaves exactly the families it found.
@@ -960,8 +912,8 @@ private:
 
     // Every call copies its operands into L2 slots the program places, one at a time (each Move,
     // Feed, free), and a writing call's result takes one more (docs/plans/slot-credits-at-lca.md).
-    // So a call needs a free slot beyond what is live: the stages', the partials' and the open
-    // fabric accumulators' results. As the walker allocates, so the two agree.
+    // So a call needs at least one slot beyond the stated ones: a lower bound, which the walker's
+    // exact allocation refines.
     // `slot`: whether the call needs a slot beyond what is held -- a copy of an unstaged operand,
     // or a writing call's result. A call whose operands are all staged, into an open accumulator,
     // needs none.
@@ -972,8 +924,7 @@ private:
         const std::size_t live = l2_held() + (slot ? 1 : 0);
         if (live > static_cast<std::size_t>(ast_.l2))
             throw CompileError(line, what + " needs an L2 slot for a copy, and all " + std::to_string(ast_.l2) +
-                                     " are held (" + std::to_string(l2_live_) + " by stages and partials, " +
-                                     std::to_string(l2_held() - l2_live_) + " by results)");
+                                     " are held by stages and partials");
         peak_l2_ = std::max(peak_l2_, live);
     }
     bool unstaged(const std::vector<Family>& args) const {
@@ -1090,11 +1041,6 @@ private:
                 throw CompileError(s.line, "an accumulating call's result stays in the fabric; place its epilogue on "
                                            "its store");
             for (const Family& a : args) resident(a);
-            // Its first call takes its results' L2 slots, held to its store.
-            if (!acc->reserved) {
-                l2_results_ += count(acc->tile);
-                acc->reserved = true;
-            }
             need_l2(s.line, "call " + s.fn + " +-> " + text(y), unstaged(args));
             // The accumulator is fed if this call runs in every iteration of the loops inside it.
             if (definite || depth <= acc->depth) acc->fed = true;
@@ -1203,10 +1149,6 @@ private:
             context(s, y, true);
             hold(1, s.line, "store " + text(y) + "'s writeback");      // the writeback's moment in L3
             live_ -= 1;
-            if (acc->reserved) {
-                l2_results_ -= count(acc->tile);                       // its results' L2 slots: freed now,
-                if (s.late) hold_late(count(acc->tile), acc->tile);   // or, late, held until the walker emits it
-            }
             accs_.erase(acc);
             stores_ += multiplier_;
             return;

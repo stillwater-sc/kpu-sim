@@ -108,12 +108,13 @@ TEST_CASE("L2 staging: parsed, formatted and validated", "[program][csp][lang][l
     CHECK_THAT(text, ContainsSubstring("machine flat(l3 = 9, l2 = 7)"));
     CHECK_THAT(text, ContainsSubstring("stage A[i, :] in l2 {"));
     CHECK(lang::format(lang::parse(text)) == text);
-    // Every L2 copy has a slot (slot-credits-at-lca.md): the staged panel's 4, plus a result's, the
-    // late-stored result still pending, and one copy's; unstaged, just those three.
+    // The validator's L2 is a lower bound (slot-credits-at-lca.md): the stated slots, the staged
+    // panel's 4, and one more for a call's copy; unstaged, just that one. The walker is the
+    // authority for every copy's and result's slot.
     const lang::Validation v = lang::validate(matmul(true));
-    CHECK(v.peak_l2 == 7);
+    CHECK(v.peak_l2 == 5);
     CHECK(v.peak_l3 == lang::validate(matmul(false)).peak_l3);   // staging takes no L3 slot
-    CHECK(lang::validate(matmul(false)).peak_l2 == 3);
+    CHECK(lang::validate(matmul(false)).peak_l2 == 1);
 }
 
 TEST_CASE("L2 staging: one Move per tile per stage, and Feeds of the copy", "[program][csp][lang][l2]") {
@@ -381,9 +382,12 @@ TEST_CASE("L2 staging: kpu-csp-gen --stage-a stages A's row panel", "[program][c
     CHECK_THROWS_WITH(gen::generate(o), ContainsSubstring("needs orient row"));
 }
 
-TEST_CASE("L2 placement: the validator holds what the walker holds (#496's review)", "[program][csp][lang][l2]") {
-    // Every L2 copy has a slot (slot-credits-at-lca.md): the validator's L2 accounting must refuse
-    // exactly the programs whose walk runs out of slots.
+TEST_CASE("L2 placement: the walker is the authority, the validator a lower bound (#496's review)",
+          "[program][csp][lang][l2]") {
+    // Every L2 copy has a slot (slot-credits-at-lca.md). The walker allocates them exactly and
+    // refuses, by line, a program whose ring runs out. The validator checks only the slots the
+    // program states and one more per call, so it never refuses a program the walker accepts,
+    // and may accept one the walker then refuses.
     auto prog = [](int l2, const std::string& body) {
         return "csp 1.1\nprogram t machine flat(l3 = 8, l2 = " + std::to_string(l2) + ") {\n"
                "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,32] tile 16x16 in;\n"
@@ -407,7 +411,6 @@ TEST_CASE("L2 placement: the validator holds what the walker holds (#496's revie
             "  acc C[0, 1] in fabric { call gemm(A[0, 0], B[0, 1]) +-> C[0, 1]; }\n"
             "  store C[0, 1];\n  release A[0, 0], B[0, :];\n");
         CHECK_THAT(error_of(p, false), ContainsSubstring("needs an L2 slot"));
-        CHECK_THAT(error_of(p, true), ContainsSubstring("needs an L2 slot"));
     }
     SECTION("a call whose operands are all staged needs no copy's slot") {
         const std::string p = prog(3,
@@ -433,7 +436,6 @@ TEST_CASE("L2 placement: the validator holds what the walker holds (#496's revie
         // Both stored late after both accumulators: both pending at E's call (2 + A, B + E's = 5 > 4).
         const std::string both = with(c + d + "  store C[0, 0] late;\n  store D[0, 0] late;\n");
         CHECK_THAT(error_of(both, false), ContainsSubstring("needs an L2 slot"));
-        CHECK_THAT(error_of(both, true), ContainsSubstring("L2 slot"));
         // C's late store is emitted at D's close, since D opened after it: only D's is pending.
         const std::string one = with(c + "  store C[0, 0] late;\n" + d + "  store D[0, 0] late;\n");
         CHECK(error_of(one, false) == "accepted");
@@ -453,7 +455,6 @@ TEST_CASE("L2 placement: the validator holds what the walker holds (#496's revie
             "    store C[0, 0];\n  }\n"
             "  release A[0, 0], B[0, 0], X[0, 0];\n}\n";
         CHECK_THAT(error_of(p, false), ContainsSubstring("needs an L2 slot"));
-        CHECK_THAT(error_of(p, true), ContainsSubstring("L2 slot"));
     }
     SECTION("a stage counts the open accumulators' result slots") {
         const std::string p = prog(2,
@@ -462,6 +463,5 @@ TEST_CASE("L2 placement: the validator holds what the walker holds (#496's revie
             "    stage A[0, 0], B[0, 0] in l2 { }\n  }\n"
             "  store C[0, 0];\n  release A[0, 0], B[0, 0];\n");
         CHECK_THAT(error_of(p, false), ContainsSubstring("needs an L2 slot"));
-        CHECK_THAT(error_of(p, true), ContainsSubstring("needs 2 L2 slots"));
     }
 }

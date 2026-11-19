@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       (Drain, Writeback, L2Release);
     - a writing call's result takes one at the call.
   - **L-B** executes all of it as addressed storage, and the trace's replay checks every slot.
-  - **The validator** counts the copies and the result slots as the walker does.
+  - **The walker is the authority for L2 capacity.** It refuses, by line, a program whose ring
+    runs out. The validator checks the slots a program states (stage blocks, partials) and one
+    more per call: a lower bound that never refuses a program the walker accepts.
   - **`kpu-csp-gen --l2-buffers 1|2`** sizes `l2 = N` (default 2: a double-buffered
     output-stationary matmul declares 6).
   - **The records:** the L-B record marks each copy's steps (flag 128), and records a result's
