@@ -7,7 +7,6 @@ add_library(kpu_compiler
     tile_optimizer.cpp
     schedule_generator.cpp
     l2_tile_scheduler.cpp
-    l3_scheduler.cpp
     schedule_characterizer.cpp
     kernel_compiler.cpp
 )

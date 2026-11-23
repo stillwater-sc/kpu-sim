@@ -134,6 +134,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The `examples/compiler/l3_*` analyzers and the L3 scheduler behind them** (#501). The four
+  tools (`l3_overfetch_analyzer`, `l3_comprehensive_analysis`, `l3_focused_analysis`,
+  `l3_transformer_analysis`) modeled L3 as a cache and measured "overfetch", and three of them never
+  finished. `sw/compiler/l3_scheduler` (its `L3CacheSimulator`) had no other user, so it goes too,
+  with the notes and Python scripts that read the tools' CSVs. The design-space role now belongs to
+  `examples/characterize/tile_characterize` and the characterization harness, which run the program
+  path and check values. `l2_tile_scheduler_demo` no longer prints its own text in cache terms;
+  the cache model inside `L2TileScheduler` itself is #510.
 - **`examples/schedule/run_matmul_DEPRECATED`** (#500). It showed only what not to do, on
   `BehavioralProgramExecutor` and `TransactionalProgramExecutor`, two engines ADR 0001 D6 retires,
   and nothing depended on it. The other examples on frozen engines stay until their engine is
