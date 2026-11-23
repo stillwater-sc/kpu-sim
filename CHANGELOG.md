@@ -34,6 +34,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Device memory can be freed** (#497, part 2). `ResourceManager::deallocate` sat on a bump
+  allocator and always returned `false`, so `KPURuntime::free` and the C API's
+  `kpu_runtime_free` never released anything. `runtime_demo` logged 11 failed frees. Each memory
+  resource now keeps a `TrackingAllocator`, so a freed block is reused (first fit) and merges with
+  free neighbours, and freed space at the end returns to the never-used tail.
+  - **`TrackingAllocator` fixed on the way:** a reused block wasn't split, so the address it
+    returned could be one `deallocate` refused. Freeing a reused block subtracted the block's old
+    size, so the byte count drifted and could wrap. It now tiles its used span with blocks and
+    checks four invariants (`is_consistent()`).
+  - `try_allocate` returns `std::optional`, so a region based at address 0 can hand out 0.
+  - The peak, which `ResourceManager::allocate` never updated, now tracks the high watermark.
+
 - **A stale corpus result:** `lu_64_t16.result.l0` no longer matched what `main` computes (23 rows
   differed, by at most 4.2e-7 relative); `test_csp_corpus` compares within a tolerance, so it never
   failed. It is regenerated, and the build matches `main` bit for bit.
