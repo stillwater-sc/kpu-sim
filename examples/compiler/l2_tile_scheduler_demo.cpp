@@ -3,7 +3,7 @@
  * @brief Demonstration of L2 tile scheduler for KPU matrix multiplication
  *
  * This demo shows how the L2 tile scheduler manages tile allocations and
- * generates load/reload sequences to minimize DRAM accesses.
+ * orders the L3 -> L2 tile moves to minimize DRAM traffic.
  */
 
 #include <sw/compiler/l2_tile_scheduler.hpp>
@@ -164,7 +164,7 @@ void demo_comparison() {
     std::vector<Size> l2_capacities = {128, 256, 512};
 
     std::cout << "  ┌────────────────┬───────────────┬──────────────┬──────────────┬──────────────┐\n";
-    std::cout << "  │  L2 Capacity   │  Total Loads  │   Reloads    │  L2 Hit Rate │  L3 Hit Rate │\n";
+    std::cout << "  │  L2 Capacity   │  Total Loads  │ Repeat Moves │   L2 Reuse   │   L3 Reuse   │\n";
     std::cout << "  ├────────────────┼───────────────┼──────────────┼──────────────┼──────────────┤\n";
 
     for (Size capacity : l2_capacities) {
@@ -208,7 +208,7 @@ void demo_systolic_array_sizes() {
     std::cout << "\n";
 
     std::cout << "  ┌──────────────┬───────────────┬────────────┬───────────────┬──────────────┐\n";
-    std::cout << "  │  Array Size  │ Ti x Tj x Tk  │ Tile Count │  Total Loads  │  L2 Hit Rate │\n";
+    std::cout << "  │  Array Size  │ Ti x Tj x Tk  │ Tile Count │  Total Loads  │   L2 Reuse   │\n";
     std::cout << "  ├──────────────┼───────────────┼────────────┼───────────────┼──────────────┤\n";
 
     for (Size sys_size : systolic_sizes) {
@@ -251,8 +251,8 @@ int main() {
     std::cout << "█                    L2 TILE SCHEDULER DEMONSTRATION                       █\n";
     std::cout << "█                                                                          █\n";
     std::cout << "█  This demo showcases the L2 tile scheduler for KPU matrix multiply.      █\n";
-    std::cout << "█  The scheduler manages tile allocations in L2 cache banks and            █\n";
-    std::cout << "█  generates optimal load/reload sequences to minimize DRAM accesses.      █\n";
+    std::cout << "█  The scheduler manages tile allocations in the L2 banks and              █\n";
+    std::cout << "█  orders the L3 -> L2 tile moves to minimize DRAM traffic.                █\n";
     std::cout << "█                                                                          █\n";
     std::cout << "████████████████████████████████████████████████████████████████████████████\n";
 
