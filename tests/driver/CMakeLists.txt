@@ -17,6 +17,12 @@ kpu_add_component_test(resource_api_test "driver"
     test_resource_api.cpp
 )
 
+# TrackingAllocator's strong exception guarantee. Its own executable: the test replaces the
+# global operator new to make allocations fail on demand, which applies to the whole program.
+kpu_add_component_test(tracking_allocator_exceptions_test "driver"
+    test_tracking_allocator_exceptions.cpp
+)
+
 # Comprehensive test for all resource types
 kpu_add_component_test(all_resources_test "driver"
     test_all_resources.cpp
