@@ -15,6 +15,7 @@
 #include <sw/kpu/data_types.hpp>
 #include <sw/kpu/resource_handle.hpp>
 #include <sw/kpu/resource_stats.hpp>
+#include <sw/kpu/allocator.hpp>
 
 namespace sw::kpu {
 
@@ -400,15 +401,14 @@ private:
 
     // Allocation tracking per resource
     struct ResourceAllocator {
-        Address next_free;          // Next free address (bump allocator)
-        Size total_allocated;       // Total bytes allocated
-        Size peak_allocated;        // High watermark
-        std::vector<AllocationInfo> allocations;  // All allocations in this resource
+        ResourceHandle resource;        // The memory resource this allocator manages
+        TrackingAllocator allocator;    // Its allocations: individual free, reuse, peak
 
         // Statistics
         MemoryResourceStats stats;
 
-        ResourceAllocator() : next_free(0), total_allocated(0), peak_allocated(0) {}
+        explicit ResourceAllocator(ResourceHandle res)
+            : resource(res), allocator(res.base_address, res.capacity) {}
     };
 
     // Map from (type, id) to allocator state

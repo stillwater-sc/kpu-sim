@@ -40,6 +40,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sizes its bank, checks every stage's data, callbacks and the result (`[[19, 22], [43, 50]]`),
   exits non-zero on a mismatch, and runs as the CTest `example_data_movement_pipeline`. The
   README's description of it no longer mentions DMA, which it doesn't use.
+- **`examples/` no longer tracks binaries, dead sources or run output** (#499). Removed:
+  - three ELF executables in `examples/test/`, and its four sources, which no CMake file built;
+  - `basic/kernel_demo.cpp` (moved to `kernel/matmul_kernel.cpp` long ago) and
+    `blas/trace_infrastructure.cpp`, also never built;
+  - run output: three `.log` files, `basic/data_movement_schedule.txt`, and `compiler/`'s design-space
+    CSV and PNG (which `hardware_design_explorer` writes when it runs);
+  - 41 downloaded images and class lists in the examples' `.cache/` directories, which the scripts
+    download again when missing;
+  - `python/generate.py`, a torchvision export snippet with no KPU use, and
+    `blas/big_matmul_fsim_bug.txt`, a note on a timing bug that `big_matmul` no longer shows (85%
+    efficiency, 4 tiles in flight).
+
+  `.gitignore` now covers the logs and the design-space output.
 
 - **Three runtime examples no longer claim values the runtime doesn't compute** (#497, part 1).
   `KPURuntime` is timing only: a launch runs the program through `isa::ConcurrentExecutor` and
@@ -51,6 +64,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     every time). `mlp/sine_approximation` printed a KPU output column of zeros, and called its
     weights trained. Both now report their cycles and say they check no values.
   - `mlp/xor_classifier` pointed to a `docs/` file that doesn't exist. It now points to #257.
+
+- **Device memory can be freed** (#497, part 2). `ResourceManager::deallocate` sat on a bump
+  allocator and always returned `false`, so `KPURuntime::free` and the C API's
+  `kpu_runtime_free` never released anything. `runtime_demo` logged 11 failed frees. Each memory
+  resource now keeps a `TrackingAllocator`, so a freed block is reused (first fit) and merges with
+  free neighbours, and freed space at the end returns to the never-used tail.
+  - **`TrackingAllocator` fixed on the way:** a reused block wasn't split, so the address it
+    returned could be one `deallocate` refused. Freeing a reused block subtracted the block's old
+    size, so the byte count drifted and could wrap. It now tiles its used span with blocks and
+    checks four invariants (`is_consistent()`).
+  - `try_allocate` returns `std::optional`, so a region based at address 0 can hand out 0.
+  - `try_allocate` has a strong exception guarantee: if a map node or a label copy throws, the
+    allocator is left as it was.
+  - The peak, which `ResourceManager::allocate` never updated, now tracks the high watermark.
 
 - **A stale corpus result:** `lu_64_t16.result.l0` no longer matched what `main` computes (23 rows
   differed, by at most 4.2e-7 relative); `test_csp_corpus` compares within a tolerance, so it never
@@ -104,6 +131,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a seven-step guided path through the tools, each step saying what to look for.
 
   `README.md` and `docs/README.md` now point to it first.
+
+### Documentation
+
+- **`docs/analysis/examples-inventory.md`: what in `examples/` is current, and what is outdated.**
+  Every source's engine was checked against ADR 0001 D6, and every built example was run, as
+  was every Python script but two (the report says which were not run).
+  - 13 are current, 10 are component demos, 20 need a decision and 42 are outdated. Only
+    `characterize/tile_characterize` runs the CSP program path.
+  - Four examples exit 0 on wrong results: `c/hello_kpu` gets C = 0, `mlp/mnist_classifier`
+    predicts class 0 for every digit, `mlp/sine_approximation` outputs zeros, and
+    `runtime/runtime_demo` fails its frees. `basic/data_movement_pipeline`, which `README.md`
+    links to, aborts. Three `compiler/l3_*` analyzers time out and model L3 as a cache. 11
+    `examples/python` scripts call names the binding no longer has. Committed binaries and
+    generated files sit alongside the sources.
+  - The follow-ups are filed as #497–#503: the silently wrong examples, the crash, the cleanup,
+    the frozen-engine dependents for #266, the `l3_*` analyzers, the Python scripts, and new
+    program-path examples.
 
 ### Changed
 

@@ -471,6 +471,136 @@ TEST_CASE("TrackingAllocator operations", "[allocator]") {
     }
 }
 
+// #497: TrackingAllocator reused a freed block without splitting it. The address it
+// returned could differ from the block's start (so deallocate() refused it), and freeing
+// a reused block subtracted the block's old size, not the size allocated (so the byte
+// count drifted, and could wrap). It also never merged free neighbours.
+TEST_CASE("TrackingAllocator splits, coalesces and accounts reused blocks", "[allocator]") {
+    TrackingAllocator allocator(0x2000, 8192);
+
+    SECTION("A block reused at an aligned offset can be freed by its address") {
+        Address x = allocator.allocate(64, 64);    // 0x2000
+        Address a = allocator.allocate(256, 64);   // 0x2040
+        Address y = allocator.allocate(64, 64);    // 0x2140, keeps a off the tail
+        REQUIRE(x == 0x2000);
+        REQUIRE(a == 0x2040);
+        REQUIRE(y == 0x2140);
+        REQUIRE(allocator.deallocate(a));
+
+        Address c = allocator.allocate(64, 128);   // first fit in a's block, aligned up
+        REQUIRE(c == 0x2080);
+        REQUIRE(allocator.is_allocated(c));
+        REQUIRE(allocator.deallocate(c));
+        REQUIRE(allocator.get_allocated_bytes() == 128);
+        REQUIRE(allocator.is_consistent());
+    }
+
+    SECTION("Freeing a reused block returns exactly what it took") {
+        Address a = allocator.allocate(256);
+        Address y = allocator.allocate(64);
+        REQUIRE(allocator.deallocate(a));
+        Address c = allocator.allocate(64);
+        REQUIRE(c == a);                           // reuses a's space
+        REQUIRE(allocator.get_allocated_bytes() == 128);
+        REQUIRE(allocator.deallocate(c));
+        REQUIRE(allocator.get_allocated_bytes() == 64);
+        REQUIRE(allocator.get_allocation(y).has_value());
+        REQUIRE(allocator.is_consistent());
+    }
+
+    SECTION("Adjacent free blocks coalesce into one") {
+        Address a = allocator.allocate(256);
+        Address b = allocator.allocate(256);
+        Address d = allocator.allocate(256);       // keeps a and b off the tail
+        REQUIRE(allocator.deallocate(a));
+        REQUIRE(allocator.deallocate(b));
+        REQUIRE(allocator.is_consistent());
+        REQUIRE(allocator.allocate(512) == a);     // fits only in a and b merged
+        REQUIRE(allocator.is_allocated(d));
+        REQUIRE(allocator.is_consistent());
+    }
+
+    SECTION("Freeing the last blocks gives the space back to the tail") {
+        Address a = allocator.allocate(256);
+        Address b = allocator.allocate(256);
+        REQUIRE(allocator.deallocate(b));
+        REQUIRE(allocator.deallocate(a));
+        REQUIRE(allocator.get_allocated_bytes() == 0);
+        REQUIRE(allocator.get_all_allocations().empty());
+        REQUIRE(allocator.allocate(8192, 64) == 0x2000);  // the whole region again
+        REQUIRE(allocator.is_consistent());
+    }
+
+    SECTION("A double free is refused") {
+        Address a = allocator.allocate(128);
+        allocator.allocate(128);
+        REQUIRE(allocator.deallocate(a));
+        REQUIRE_FALSE(allocator.deallocate(a));
+        REQUIRE_FALSE(allocator.deallocate(a + 64));      // inside a block, not its start
+        REQUIRE(allocator.is_consistent());
+    }
+
+    SECTION("The peak is the high watermark") {
+        Address a = allocator.allocate(256);
+        allocator.allocate(256);
+        REQUIRE(allocator.deallocate(a));
+        REQUIRE(allocator.get_peak_allocated() == 512);
+        REQUIRE(allocator.get_allocated_bytes() == 256);
+        allocator.reset_peak();
+        REQUIRE(allocator.get_peak_allocated() == 256);
+    }
+
+    SECTION("A region based at address 0 can hand out address 0") {
+        TrackingAllocator at_zero(0, 1024);
+        auto first = at_zero.try_allocate(64);
+        REQUIRE(first.has_value());
+        REQUIRE(*first == 0);
+        REQUIRE(at_zero.deallocate(0));
+        REQUIRE_FALSE(at_zero.try_allocate(2048).has_value());  // too big
+        REQUIRE(at_zero.is_consistent());
+    }
+}
+
+// #497: ResourceManager::deallocate always returned false (a bump allocator with no free),
+// so KPURuntime::free and the C API's kpu_runtime_free never released anything.
+TEST_CASE("ResourceManager deallocates and reuses memory", "[resource_api]") {
+    KPUSimulator::Config config;
+    config.memory_bank_count = 1;
+    config.memory_bank_capacity_mb = 1;
+    config.page_buffer_count = 1;
+    config.page_buffer_capacity_kb = 64;
+
+    KPUSimulator simulator(config);
+    auto rm = simulator.create_resource_manager();
+    ResourceHandle handle = rm->get_resource(ResourceType::PAGE_BUFFER, 0);
+
+    auto a = rm->allocate(handle, 1024, 64, "a");
+    auto b = rm->allocate(handle, 1024, 64, "b");
+    REQUIRE(a.has_value());
+    REQUIRE(b.has_value());
+    REQUIRE(rm->get_allocated_bytes(handle) == 2048);
+
+    REQUIRE(rm->deallocate(*a));
+    REQUIRE_FALSE(rm->deallocate(*a));                 // double free
+    REQUIRE(rm->get_allocated_bytes(handle) == 1024);
+    REQUIRE_FALSE(rm->get_allocation_info(*a).has_value());
+
+    auto c = rm->allocate(handle, 1024, 64, "c");
+    REQUIRE(c.has_value());
+    REQUIRE(*c == *a);                                 // a's space is reused
+    auto info = rm->get_allocation_info(*c);
+    REQUIRE(info.has_value());
+    REQUIRE(info->label == "c");
+    REQUIRE(info->resource.type == ResourceType::PAGE_BUFFER);
+
+    REQUIRE(rm->get_memory_stats(handle).peak_allocated_bytes == 2048);
+
+    REQUIRE(rm->deallocate(*b));
+    REQUIRE(rm->deallocate(*c));
+    REQUIRE(rm->is_empty(handle));
+    REQUIRE(rm->get_available_bytes(handle) == handle.capacity);
+}
+
 TEST_CASE("PoolAllocator operations", "[allocator]") {
     PoolAllocator pool(0x3000, 64, 10);  // 10 blocks of 64 bytes each
 

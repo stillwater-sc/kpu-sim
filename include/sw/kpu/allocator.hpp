@@ -4,6 +4,9 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <iterator>
+#include <map>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include <optional>
@@ -147,9 +150,23 @@ private:
 /**
  * @brief Tracking allocator that supports individual deallocation
  *
- * This allocator tracks all allocations and supports freeing individual
- * allocations. It uses a bump allocator internally but maintains a free
- * list to reuse deallocated memory.
+ * The region [base, base + capacity) is split in two: the *used span*
+ * [base, next_free) and the *tail* [next_free, base + capacity), which has never
+ * been handed out (or has been given back). The used span is tiled by blocks, each
+ * free or allocated.
+ *
+ * Invariants (is_consistent() checks them):
+ *   I1  the blocks tile the used span exactly: no gaps, no overlaps;
+ *   I2  no two adjacent blocks are both free (free neighbours are coalesced);
+ *   I3  the last block, if any, is allocated (a free last block returns to the tail);
+ *   I4  allocated_bytes == the sum of the allocated blocks' sizes, and
+ *       peak_allocated >= allocated_bytes.
+ *
+ * An allocated block starts at the address allocate() returned and is exactly the
+ * size requested, so deallocate(address) always finds it, and freeing it returns
+ * exactly what allocating it took. Alignment padding stays a free block of its own.
+ *
+ * allocate() is first fit over the free blocks, in address order, then the tail.
  */
 class TrackingAllocator {
 public:
@@ -178,76 +195,127 @@ public:
      * @param size Size in bytes to allocate
      * @param alignment Required alignment (must be power of 2)
      * @param label Optional label for debugging
-     * @return Allocated address, or 0 if allocation failed
+     * @return Allocated address, or std::nullopt if size is 0 or no space fits.
+     *         Unlike allocate(), an allocation at address 0 is distinguishable.
+     * @throws std::invalid_argument if alignment is not a power of 2
      */
-    Address allocate(Size size, Size alignment = 64, const std::string& label = "") {
-        if (size == 0) return 0;
-
-        // Validate alignment
+    std::optional<Address> try_allocate(Size size, Size alignment = 64,
+                                        const std::string& label = "") {
         if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
             throw std::invalid_argument("Alignment must be a power of 2");
         }
+        if (size == 0) return std::nullopt;
 
-        // First, try to find a suitable free block
-        for (auto& alloc : allocations_) {
-            if (alloc.is_free && alloc.size >= size) {
-                Address aligned = align_up(alloc.address, alignment);
-                if (aligned + size <= alloc.address + alloc.size) {
-                    // Reuse this block
-                    alloc.is_free = false;
-                    alloc.alignment = alignment;
-                    alloc.label = label;
-                    total_allocated_ += size;
-                    update_peak();
-                    return aligned;
-                }
+        // First fit over the free blocks, in address order
+        for (auto it = blocks_.begin(); it != blocks_.end(); ++it) {
+            if (!it->second.is_free) continue;
+            const Address start = it->first;
+            const Size block_size = it->second.size;
+            const Address aligned = align_up(start, alignment);
+            if (aligned < start || aligned - start > block_size ||
+                size > block_size - (aligned - start)) {
+                continue;
             }
+            const Address end = start + block_size;
+            // Split: [start, aligned) stays free, [aligned, aligned + size) is taken,
+            // [aligned + size, end) stays free. The block was free and coalesced, so
+            // its neighbours are allocated, and I2 holds for the pieces.
+            //
+            // Strong exception guarantee: everything that can throw (the label's copy, a
+            // map node's allocation) happens before the existing block changes, and an
+            // insertion that throws is undone. A failed call leaves the allocator as it was.
+            Block taken{size, alignment, label, false};
+            auto suffix = blocks_.end();
+            if (aligned + size < end) {
+                suffix = blocks_.emplace(aligned + size,
+                                         Block{end - (aligned + size), 0, std::string(), true}).first;
+            }
+            if (aligned > start) {
+                try {
+                    blocks_.emplace(aligned, std::move(taken));
+                } catch (...) {
+                    if (suffix != blocks_.end()) blocks_.erase(suffix);
+                    throw;
+                }
+                it->second.size = aligned - start;   // the prefix stays free
+            } else {
+                it->second = std::move(taken);       // reuse the node: no allocation
+            }
+            record_allocation(size);
+            return aligned;
         }
 
-        // No suitable free block, allocate from the end
-        Address aligned = align_up(next_free_, alignment);
-        if (aligned + size > base_address_ + capacity_) {
-            return 0;  // Out of memory
+        // The tail
+        const Address limit = base_address_ + capacity_;
+        const Address aligned = align_up(next_free_, alignment);
+        if (aligned < next_free_ || aligned > limit || size > limit - aligned) {
+            return std::nullopt;  // Out of memory
         }
-
-        // Record allocation
-        Allocation alloc;
-        alloc.address = aligned;
-        alloc.size = size;
-        alloc.alignment = alignment;
-        alloc.label = label;
-        alloc.is_free = false;
-        allocations_.push_back(alloc);
-
-        // Update state
+        // Strong exception guarantee, as above: the padding is inserted first, and removed
+        // again if the allocation's own insertion throws.
+        Block taken{size, alignment, label, false};
+        auto padding = blocks_.end();
+        if (aligned > next_free_) {
+            // The padding: the last block is allocated (I3), so it can't coalesce
+            padding = blocks_.emplace(next_free_,
+                                      Block{aligned - next_free_, 0, std::string(), true}).first;
+        }
+        try {
+            blocks_.emplace(aligned, std::move(taken));
+        } catch (...) {
+            if (padding != blocks_.end()) blocks_.erase(padding);
+            throw;
+        }
         next_free_ = aligned + size;
-        total_allocated_ += size;
-        update_peak();
-
-        // Add to address map for fast lookup
-        address_to_index_[aligned] = allocations_.size() - 1;
-
+        record_allocation(size);
         return aligned;
     }
 
     /**
+     * @brief Allocate memory with alignment
+     * @return Allocated address, or 0 if allocation failed. A region based at 0 can
+     *         hand out address 0: use try_allocate() there.
+     */
+    Address allocate(Size size, Size alignment = 64, const std::string& label = "") {
+        return try_allocate(size, alignment, label).value_or(0);
+    }
+
+    /**
      * @brief Deallocate memory
-     * @param address The address to deallocate
-     * @return true if deallocation succeeded
+     * @param address An address allocate() returned and not yet freed
+     * @return true if it was allocated; false for any other address, or a double free
      */
     bool deallocate(Address address) {
-        auto it = address_to_index_.find(address);
-        if (it == address_to_index_.end()) {
+        auto it = blocks_.find(address);
+        if (it == blocks_.end() || it->second.is_free) {
             return false;
         }
 
-        size_t index = it->second;
-        if (index >= allocations_.size() || allocations_[index].is_free) {
-            return false;
-        }
+        total_allocated_ -= it->second.size;
+        it->second.is_free = true;
+        it->second.alignment = 0;
+        it->second.label.clear();
 
-        allocations_[index].is_free = true;
-        total_allocated_ -= allocations_[index].size;
+        // Coalesce with the next block (I2)
+        auto next = std::next(it);
+        if (next != blocks_.end() && next->second.is_free) {
+            it->second.size += next->second.size;
+            blocks_.erase(next);
+        }
+        // Coalesce with the previous block (I2)
+        if (it != blocks_.begin()) {
+            auto prev = std::prev(it);
+            if (prev->second.is_free) {
+                prev->second.size += it->second.size;
+                blocks_.erase(it);
+                it = prev;
+            }
+        }
+        // A free last block returns to the tail (I3)
+        if (std::next(it) == blocks_.end()) {
+            next_free_ = it->first;
+            blocks_.erase(it);
+        }
         return true;
     }
 
@@ -257,38 +325,40 @@ public:
      * @return Optional allocation info
      */
     std::optional<Allocation> get_allocation(Address address) const {
-        auto it = address_to_index_.find(address);
-        if (it == address_to_index_.end()) {
+        auto it = blocks_.find(address);
+        if (it == blocks_.end() || it->second.is_free) {
             return std::nullopt;
         }
-        size_t index = it->second;
-        if (index >= allocations_.size() || allocations_[index].is_free) {
-            return std::nullopt;
-        }
-        return allocations_[index];
+        return to_allocation(it->first, it->second);
     }
 
     /**
-     * @brief Get all active allocations
+     * @brief Get all active allocations, in address order
      */
     std::vector<Allocation> get_all_allocations() const {
         std::vector<Allocation> active;
-        for (const auto& alloc : allocations_) {
-            if (!alloc.is_free) {
-                active.push_back(alloc);
+        for (const auto& [address, block] : blocks_) {
+            if (!block.is_free) {
+                active.push_back(to_allocation(address, block));
             }
         }
         return active;
     }
 
     /**
-     * @brief Reset the allocator (free all allocations)
+     * @brief Reset the allocator (free all allocations). The peak is kept.
      */
     void reset() {
-        allocations_.clear();
-        address_to_index_.clear();
+        blocks_.clear();
         next_free_ = base_address_;
         total_allocated_ = 0;
+    }
+
+    /**
+     * @brief Reset the peak to the bytes allocated now
+     */
+    void reset_peak() {
+        peak_allocated_ = total_allocated_;
     }
 
     /**
@@ -299,10 +369,11 @@ public:
     }
 
     /**
-     * @brief Get available bytes (may be fragmented)
+     * @brief Get available bytes: every byte not allocated (it may be fragmented,
+     *        so one allocation of this size need not fit)
      */
     Size get_available_bytes() const {
-        return capacity_ - (next_free_ - base_address_);
+        return capacity_ - total_allocated_;
     }
 
     /**
@@ -330,35 +401,63 @@ public:
      * @brief Check if an address is within this allocator's range
      */
     bool contains(Address addr) const {
-        return addr >= base_address_ && addr < base_address_ + capacity_;
+        return addr >= base_address_ && addr - base_address_ < capacity_;
     }
 
     /**
      * @brief Check if an address is currently allocated
      */
     bool is_allocated(Address addr) const {
-        auto it = address_to_index_.find(addr);
-        if (it == address_to_index_.end()) {
-            return false;
+        auto it = blocks_.find(addr);
+        return it != blocks_.end() && !it->second.is_free;
+    }
+
+    /**
+     * @brief Check invariants I1-I4 (for tests and debugging)
+     */
+    bool is_consistent() const {
+        Address expected = base_address_;
+        Size allocated = 0;
+        bool prev_free = false;
+        for (const auto& [address, block] : blocks_) {
+            if (address != expected || block.size == 0) return false;   // I1
+            if (block.is_free && prev_free) return false;               // I2
+            if (!block.is_free) allocated += block.size;
+            prev_free = block.is_free;
+            expected = address + block.size;
         }
-        return !allocations_[it->second].is_free;
+        if (expected != next_free_) return false;                       // I1
+        if (prev_free) return false;                                    // I3
+        if (next_free_ - base_address_ > capacity_) return false;
+        return allocated == total_allocated_ && peak_allocated_ >= total_allocated_;  // I4
     }
 
 private:
+    struct Block {
+        Size size;
+        Size alignment;     // 0 for a free block
+        std::string label;
+        bool is_free;
+    };
+
     Address base_address_;
     Size capacity_;
     Address next_free_;
     Size total_allocated_;
     Size peak_allocated_;
 
-    std::vector<Allocation> allocations_;
-    std::unordered_map<Address, size_t> address_to_index_;
+    std::map<Address, Block> blocks_;  // the used span's tiling, by start address
 
     static Address align_up(Address addr, Size alignment) {
         return (addr + alignment - 1) & ~(alignment - 1);
     }
 
-    void update_peak() {
+    static Allocation to_allocation(Address address, const Block& block) {
+        return Allocation{address, block.size, block.alignment, block.label, block.is_free};
+    }
+
+    void record_allocation(Size size) {
+        total_allocated_ += size;
         if (total_allocated_ > peak_allocated_) {
             peak_allocated_ = total_allocated_;
         }

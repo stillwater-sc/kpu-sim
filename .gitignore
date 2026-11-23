@@ -78,3 +78,9 @@ tests/benchmarks/baselines/
 
 # clangd index (created by the clangd-lsp language server)
 .cache/
+
+# Example run output (#499): logs and generated files belong to a run, not to git. (The
+# examples' downloaded images sit in .cache/ directories, which the rule above covers.)
+examples/**/*.log
+examples/compiler/hardware_design_space.csv
+examples/compiler/hardware_design_space_visualization.png

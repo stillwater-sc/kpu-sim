@@ -157,10 +157,7 @@ ResourceManager::ResourceAllocator& ResourceManager::get_allocator(ResourceHandl
     auto it = allocators_.find(key);
     if (it == allocators_.end()) {
         // Create new allocator for this resource
-        ResourceAllocator alloc;
-        alloc.next_free = resource.base_address;
-        alloc.total_allocated = 0;
-        auto [inserted, success] = allocators_.emplace(key, std::move(alloc));
+        auto [inserted, success] = allocators_.emplace(key, ResourceAllocator(resource));
         return inserted->second;
     }
     return it->second;
@@ -188,25 +185,8 @@ std::optional<Address> ResourceManager::allocate(ResourceHandle resource, Size s
         throw std::invalid_argument("Alignment must be a power of 2");
     }
 
-    auto& allocator = get_allocator(resource);
-
-    // Calculate aligned address
-    Address aligned = (allocator.next_free + alignment - 1) & ~(alignment - 1);
-
-    // Check if allocation fits
-    if (aligned + size > resource.base_address + resource.capacity) {
-        return std::nullopt;  // Out of memory
-    }
-
-    // Record allocation
-    AllocationInfo info(aligned, size, alignment, resource, label);
-    allocator.allocations.push_back(info);
-
-    // Update allocator state
-    allocator.next_free = aligned + size;
-    allocator.total_allocated += size;
-
-    return aligned;
+    // First fit over freed blocks, then the never-used tail (TrackingAllocator)
+    return get_allocator(resource).allocator.try_allocate(size, alignment, label);
 }
 
 std::optional<Address> ResourceManager::allocate(ResourceType type, Size size, Size alignment,
@@ -236,25 +216,20 @@ bool ResourceManager::deallocate(Address address) {
         return false;
     }
 
-    const ResourceAllocator* alloc = find_allocator(resource);
-    if (!alloc) {
-        return false;
+    auto it = allocators_.find(allocator_key(resource.type, resource.id));
+    if (it == allocators_.end()) {
+        return false;  // nothing was ever allocated in this resource
     }
 
-    // Note: With a bump allocator, we can't truly deallocate individual allocations.
-    // We just mark it as deallocated for tracking purposes.
-    // A more sophisticated allocator would be needed for real deallocation.
-    // For now, we return false to indicate we can't actually free the memory.
-    return false;
+    // False for an address that isn't an allocation's start, or a double free
+    return it->second.allocator.deallocate(address);
 }
 
 std::optional<AllocationInfo> ResourceManager::get_allocation_info(Address address) const {
     // Search all allocators for this address
-    for (const auto& [key, allocator] : allocators_) {
-        for (const auto& alloc : allocator.allocations) {
-            if (alloc.address == address) {
-                return alloc;
-            }
+    for (const auto& [key, alloc] : allocators_) {
+        if (auto a = alloc.allocator.get_allocation(address)) {
+            return AllocationInfo(a->address, a->size, a->alignment, alloc.resource, a->label);
         }
     }
     return std::nullopt;
@@ -262,8 +237,10 @@ std::optional<AllocationInfo> ResourceManager::get_allocation_info(Address addre
 
 std::vector<AllocationInfo> ResourceManager::get_all_allocations() const {
     std::vector<AllocationInfo> all;
-    for (const auto& [key, allocator] : allocators_) {
-        all.insert(all.end(), allocator.allocations.begin(), allocator.allocations.end());
+    for (const auto& [key, alloc] : allocators_) {
+        for (const auto& a : alloc.allocator.get_all_allocations()) {
+            all.emplace_back(a.address, a.size, a.alignment, alloc.resource, a.label);
+        }
     }
     return all;
 }
@@ -273,7 +250,7 @@ Size ResourceManager::get_allocated_bytes(ResourceHandle resource) const {
     if (!alloc) {
         return 0;
     }
-    return alloc->total_allocated;
+    return alloc->allocator.get_allocated_bytes();
 }
 
 Size ResourceManager::get_available_bytes(ResourceHandle resource) const {
@@ -513,10 +490,8 @@ void ResourceManager::reset_allocations(ResourceHandle resource) {
     size_t key = allocator_key(resource.type, resource.id);
     auto it = allocators_.find(key);
     if (it != allocators_.end()) {
-        it->second.next_free = resource.base_address;
-        it->second.total_allocated = 0;
-        it->second.allocations.clear();
-        // Note: peak_allocated and stats are preserved
+        it->second.allocator.reset();
+        // Note: the peak and stats are preserved
     }
 }
 
@@ -529,7 +504,7 @@ void ResourceManager::reset(ResourceHandle resource) {
     auto it = allocators_.find(key);
     if (it != allocators_.end()) {
         it->second.stats.reset_counters();
-        it->second.peak_allocated = 0;
+        it->second.allocator.reset_peak();
     }
 }
 
@@ -575,7 +550,7 @@ MemoryResourceStats ResourceManager::get_memory_stats(ResourceHandle resource) c
     // Get stats from allocator if exists
     const ResourceAllocator* alloc = find_allocator(resource);
     if (alloc) {
-        stats.peak_allocated_bytes = alloc->peak_allocated;
+        stats.peak_allocated_bytes = alloc->allocator.get_peak_allocated();
         stats.read_count = alloc->stats.read_count;
         stats.write_count = alloc->stats.write_count;
         stats.bytes_read = alloc->stats.bytes_read;
@@ -644,7 +619,7 @@ SystemStats ResourceManager::get_system_stats() const {
 
     // Aggregate memory stats
     for (const auto& [key, alloc] : allocators_) {
-        stats.total_memory_allocated += alloc.total_allocated;
+        stats.total_memory_allocated += alloc.allocator.get_allocated_bytes();
         stats.total_memory_read_bytes += alloc.stats.bytes_read;
         stats.total_memory_write_bytes += alloc.stats.bytes_written;
     }
