@@ -18,6 +18,16 @@ set_target_properties(hello_kpu PROPERTIES
 # timing only (#257).
 if(KPU_BUILD_TESTS)
     add_test(NAME hello_kpu_c COMMAND hello_kpu)
+    set_tests_properties(hello_kpu_c PROPERTIES TIMEOUT 60)   # it runs in well under a second
+    if(WIN32)
+        # The C API is a DLL, built in its own directory, and Windows looks for a DLL beside
+        # the exe or on PATH. Without this the test hung on CI until its timeout. ENVIRONMENT
+        # is a list, so PATH's own separators are escaped.
+        string(REPLACE ";" "\\;" _kpu_c_system_path "$ENV{PATH}")
+        set_tests_properties(hello_kpu_c PROPERTIES
+            ENVIRONMENT "PATH=$<SHELL_PATH:$<TARGET_FILE_DIR:kpu_c_api>>\\;${_kpu_c_system_path}"
+        )
+    endif()
 endif()
 
 # runtime_demo - Full runtime API demonstration
