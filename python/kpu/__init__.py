@@ -94,7 +94,7 @@ def _install_cpp_warning_filter():
                     for record in records:
                         _emit(record)
                     if len(rest) > _max_pending:
-                        _emit(rest)
+                        _write_all(rest)  # as is: no line to judge suppression on
                         rest = b''
                     _state['pending'] = rest
 
