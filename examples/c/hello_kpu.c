@@ -10,6 +10,11 @@
  * - Creating and launching a simple kernel
  * - Cleaning up resources
  *
+ * The runtime is timing only today: a launch reports the kernel's cycles but
+ * computes no values, so C is never written (#257 makes the host API return
+ * simulator-computed values). This example checks what the runtime does do,
+ * a host -> device -> host round trip, and exits non-zero if any step fails.
+ *
  * Build and run:
  *   cmake --build --preset release
  *   ./build/examples/c/hello_kpu
@@ -132,15 +137,18 @@ int main(void) {
     printf("   B initialized to all 1.0\n");
     printf("   C initialized to all 0.0\n");
 
-    /* Copy to device */
+    /* Copy to device. Any failed step makes the example exit non-zero. */
+    int status = 0;
     KPUError err = kpu_runtime_memcpy_h2d(runtime, A_dev, A_host, A_bytes);
     if (err != KPU_SUCCESS) {
         fprintf(stderr, "Failed to copy A: %s\n", kpu_error_string(err));
+        status = 1;
     }
 
     err = kpu_runtime_memcpy_h2d(runtime, B_dev, B_host, B_bytes);
     if (err != KPU_SUCCESS) {
         fprintf(stderr, "Failed to copy B: %s\n", kpu_error_string(err));
+        status = 1;
     }
 
     printf("   Data copied to device\n");
@@ -188,35 +196,45 @@ int main(void) {
                rt_config.clock_ghz);
     } else {
         fprintf(stderr, "   Launch failed: %s\n", result.error);
+        status = 1;
     }
 
     /* =========================================================
-     * 6. Copy Result and Verify
+     * 6. Round Trip
      * ========================================================= */
-    printf("\n6. Verifying Result\n");
-    printf("   -----------------\n");
+    printf("\n6. Checking the Host <-> Device Round Trip\n");
+    printf("   ----------------------------------------\n");
+    printf("   The runtime is timing only: the launch computed no values,\n");
+    printf("   so C is not checked (#257).\n");
 
-    err = kpu_runtime_memcpy_d2h(runtime, C_host, C_dev, C_bytes);
-    if (err != KPU_SUCCESS) {
-        fprintf(stderr, "Failed to copy result: %s\n", kpu_error_string(err));
-    }
-
-    /* Each C[i][j] should be K = 32 (sum of 32 ones) */
-    float expected = (float)K;
-    int errors = 0;
-    for (KPUSize i = 0; i < M * N && errors < 5; i++) {
-        if (C_host[i] != expected) {
-            printf("   Error at C[%zu]: expected %.1f, got %.1f\n",
-                   i, expected, C_host[i]);
-            errors++;
+    /* Read A back and compare it with what was written */
+    float* A_back = (float*)malloc(A_bytes);
+    err = A_back ? kpu_runtime_memcpy_d2h(runtime, A_back, A_dev, A_bytes) : KPU_SUCCESS;
+    if (!A_back) {
+        fprintf(stderr, "Failed to allocate host memory for the read-back\n");
+        status = 1;
+    } else if (err != KPU_SUCCESS) {
+        fprintf(stderr, "Failed to copy A back: %s\n", kpu_error_string(err));
+        status = 1;
+    } else {
+        int errors = 0;
+        for (KPUSize i = 0; i < M * K; i++) {
+            if (A_back[i] != A_host[i]) {
+                if (errors < 5) {
+                    printf("   Mismatch at A[%zu]: wrote %.1f, read %.1f\n",
+                           i, A_host[i], A_back[i]);
+                }
+                errors++;
+            }
+        }
+        if (errors == 0) {
+            printf("   A read back unchanged: all %zu elements\n", M * K);
+        } else {
+            printf("   A read back with %d mismatches\n", errors);
+            status = 1;
         }
     }
-
-    if (errors == 0) {
-        printf("   Result verified: all %zu elements = %.1f\n", M * N, expected);
-    } else {
-        printf("   Found %d errors (showing first 5)\n", errors);
-    }
+    free(A_back);
 
     /* =========================================================
      * 7. Statistics and Cleanup
@@ -249,8 +267,8 @@ int main(void) {
     printf("   Simulator destroyed\n");
 
     printf("\n===========================================\n");
-    printf(" Hello KPU complete!\n");
+    printf(" Hello KPU %s\n", status == 0 ? "complete!" : "FAILED");
     printf("===========================================\n");
 
-    return 0;
+    return status;
 }
