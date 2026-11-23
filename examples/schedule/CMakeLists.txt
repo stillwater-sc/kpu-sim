@@ -40,19 +40,6 @@ set_target_properties(csp_pipeline_demo PROPERTIES
     FOLDER "Examples/Schedule"
 )
 
-# DEPRECATED: Example of incorrect timing model usage
-# This demonstrates what NOT to do - kept for educational purposes
-add_executable(run_matmul_DEPRECATED run_matmul_DEPRECATED.cpp)
-target_link_libraries(run_matmul_DEPRECATED PRIVATE
-    kpu_isa
-    kpu_dsl
-    kpu_schedules
-    kpu_memory_components
-)
-set_target_properties(run_matmul_DEPRECATED PROPERTIES
-    FOLDER "Examples/Schedule/Deprecated"
-)
-
 # Online softmax simulator with tile-state tracker (issue #165)
 add_executable(softmax_simulator softmax_simulator.cpp)
 target_link_libraries(softmax_simulator PRIVATE kpu_simulator)
