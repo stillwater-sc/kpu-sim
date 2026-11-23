@@ -96,6 +96,27 @@ class CompatibilityReport:
         return grouped
 
 
+def _output_diffs(expected, actual):
+    """Max abs diff of every tensor in `expected`, matched by position or key in `actual`.
+
+    Raises ValueError when the two outputs differ in structure, so a mismatch
+    can't pass as an output with nothing to compare.
+    """
+    if isinstance(expected, torch.Tensor):
+        if not isinstance(actual, torch.Tensor):
+            raise ValueError(f"expected a tensor, got {type(actual).__name__}")
+        return [(expected - actual).abs().max().item()]
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict) or set(expected) != set(actual):
+            raise ValueError("output dicts differ in keys")
+        return [d for key in expected for d in _output_diffs(expected[key], actual[key])]
+    if isinstance(expected, (list, tuple)):
+        if not isinstance(actual, (list, tuple)) or len(expected) != len(actual):
+            raise ValueError("output sequences differ in length")
+        return [d for e, a in zip(expected, actual) for d in _output_diffs(e, a)]
+    return []
+
+
 def test_model(
     name: str,
     model_fn: Callable[[], nn.Module],
@@ -167,25 +188,15 @@ def test_model(
 
         result.inference_time = time.time() - inference_start
 
-        # Handle different output types
-        if isinstance(pytorch_out, torch.Tensor):
-            diff = (pytorch_out - kpu_out).abs().max().item()
-        elif isinstance(pytorch_out, dict):
-            # Detection models return dicts
-            diffs = []
-            for key in pytorch_out:
-                if isinstance(pytorch_out[key], torch.Tensor):
-                    d = (pytorch_out[key] - kpu_out[key]).abs().max().item()
-                    diffs.append(d)
-            diff = max(diffs) if diffs else 0.0
-        elif isinstance(pytorch_out, (list, tuple)):
-            diffs = []
-            for p, k in zip(pytorch_out, kpu_out):
-                if isinstance(p, torch.Tensor):
-                    diffs.append((p - k).abs().max().item())
-            diff = max(diffs) if diffs else 0.0
-        else:
-            diff = 0.0
+        # Compare every tensor in the output, however it is nested.
+        diffs = _output_diffs(pytorch_out, kpu_out)
+        if not diffs:
+            result.status = TestStatus.PARTIAL
+            result.notes = "No tensors compared in the output"
+            print(" PARTIAL (no tensors compared)")
+            sys.stdout.flush()
+            return result
+        diff = max(diffs)
 
         result.max_diff = diff
 

@@ -143,7 +143,7 @@ def demo_kernel_graph():
     if valid:
         print("  Graph validation: PASSED")
     else:
-        print(f"  Graph validation: FAILED - {error}")
+        raise RuntimeError(f"graph validation failed: {error}")
     print()
 
     # Get execution order
@@ -194,7 +194,7 @@ def demo_kernel_graph():
         print(f"  Fused pairs: {len(result.fused_pairs)}")
         print(f"  Workspace required: {result.workspace_required / 1024:.1f} KB")
     else:
-        print(f"  Failed: {result.error_message}")
+        raise RuntimeError(f"graph compilation failed: {result.error_message}")
 
 def demo_diamond_graph():
     """Demonstrate a diamond-shaped graph with parallel branches"""

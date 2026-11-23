@@ -62,24 +62,42 @@ def _install_cpp_warning_filter():
     _os.dup2(_write_fd, _stderr_fd)
     _os.close(_write_fd)
 
+    import threading
+    _lock = threading.Lock()
+    _state = {'pending': b'', 'done': False}
+
+    def _write_all(data):
+        while data:
+            data = data[_os.write(_saved_fd, data):]
+
+    def _emit(line):
+        if line and not any(s in line for s in _suppressed):
+            _write_all(line)
+
     def _forward():
         with _os.fdopen(_read_fd, 'rb', buffering=0) as pipe:
-            pending = b''
             while True:
                 chunk = pipe.read(65536)
-                if not chunk:
-                    break
-                pending += chunk
-                *lines, pending = pending.split(b'\n')
-                for line in lines:
-                    if not any(s in line for s in _suppressed):
-                        _os.write(_saved_fd, line + b'\n')
-            if pending and not any(s in pending for s in _suppressed):
-                _os.write(_saved_fd, pending)
+                with _lock:
+                    if _state['done']:
+                        return
+                    if not chunk:
+                        _emit(_state['pending'])
+                        _state['done'] = True
+                        return
+                    *lines, _state['pending'] = (_state['pending'] + chunk).split(b'\n')
+                    for line in lines:
+                        _emit(line + b'\n')
 
-    import threading
     _reader = threading.Thread(target=_forward, name='kpu-stderr-filter', daemon=True)
-    _reader.start()
+    try:
+        _reader.start()
+    except BaseException:
+        # No reader to drain the pipe: put stderr back before failing.
+        _os.dup2(_saved_fd, _stderr_fd)
+        _os.close(_saved_fd)
+        _os.close(_read_fd)
+        raise
 
     def _flush():
         try:
@@ -90,12 +108,16 @@ def _install_cpp_warning_filter():
     def _restore_stderr():
         """Restore the original stderr once the reader has forwarded everything."""
         _flush()
-        # fd 2 holds the pipe's only write end (unless a child inherited it):
-        # restoring it closes that end, so the reader reaches EOF and finishes.
+        # fd 2 holds the pipe's write end. Restoring it closes that end, so the
+        # reader reaches EOF and finishes, unless a child process inherited fd 2
+        # and is still running: then stop waiting after a bounded join, and
+        # forward the unterminated tail the reader is holding.
         _os.dup2(_saved_fd, _stderr_fd)
         _reader.join(timeout=2.0)
-        if not _reader.is_alive():
-            _os.close(_saved_fd)
+        with _lock:
+            if not _state['done']:
+                _emit(_state['pending'])
+                _state['done'] = True
 
     import atexit
     atexit.register(_restore_stderr)

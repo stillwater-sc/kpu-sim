@@ -9,10 +9,12 @@ error text). A program writing more than the pipe buffer to stderr blocked
 forever.
 
 The filter is off under pytest, so each check runs in a child interpreter.
-Runs under pytest, or as a script (exit 77 = skipped: `kpu` can't be imported).
+Runs under pytest, or as a script (exit 77 = skipped: a third-party module `kpu`
+needs is missing; any other import failure fails).
 """
 
 import os
+import re
 import subprocess
 import sys
 
@@ -26,8 +28,18 @@ def _run(code, timeout=60):
                           timeout=timeout)
 
 
-def _kpu_importable():
-    return _run("import kpu").returncode == 0
+def _missing_dependency():
+    """Name of the missing third-party module that keeps `kpu` from importing, or None.
+
+    Any other import failure is a regression, so it raises with the child's output.
+    """
+    r = _run("import kpu")
+    if r.returncode == 0:
+        return None
+    m = re.search(rb"ModuleNotFoundError: No module named '([\w.]+)'", r.stderr)
+    if m and not m.group(1).startswith(b"kpu"):
+        return m.group(1).decode()
+    raise RuntimeError("import kpu failed:\n" + r.stderr.decode(errors="replace"))
 
 
 def test_traceback_reaches_stderr():
@@ -54,8 +66,9 @@ def test_large_stderr_output_does_not_block():
 
 
 if __name__ == "__main__":
-    if not _kpu_importable():
-        print("kpu is not importable here; skipping")
+    missing = _missing_dependency()
+    if missing:
+        print(f"kpu needs {missing}, which isn't installed here; skipping")
         sys.exit(77)
     tests = [test_traceback_reaches_stderr,
              test_lines_are_forwarded_and_nnpack_is_suppressed,

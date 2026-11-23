@@ -337,7 +337,8 @@ Its examples are in [`examples/fusion/`](examples/fusion/), [`examples/torch/`](
 [`examples/applications/`](examples/applications/).
 
 The native `stillwater_kpu` module (`src/tools/bindings/python`) exposes the simulator's components directly. Its
-examples are in [`examples/python/`](examples/python/), and CTest runs each of them (label `python`).
+examples are in [`examples/python/`](examples/python/). CTest runs each of them (label `python`) in builds with tests
+and the Python bindings enabled. See that directory's README for the conditions.
 
 ## Testing
 
