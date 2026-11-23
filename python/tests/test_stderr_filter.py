@@ -113,6 +113,16 @@ def test_overlong_record_is_forwarded_whole_even_if_it_mentions_nnpack():
     assert r.stderr.count(b"z") == 200000
 
 
+def test_nnpack_after_the_overflow_boundary_is_still_forwarded():
+    # One record: 128 KB, then "NNPACK tail", then its newline. Every fragment of
+    # it is forwarded; suppression resumes with the next record.
+    r = _run("import kpu, os\n"
+             "os.write(2, b'a' * 131072 + b' NNPACK tail\\n')\n"
+             "os.write(2, b'[W NNPACK.cpp:64] Could not initialize NNPACK!\\nafter\\n')\n")
+    assert r.returncode == 0
+    assert r.stderr == b"a" * 131072 + b" NNPACK tail\nafter\n"
+
+
 def test_large_stderr_output_does_not_block():
     r = _run("import kpu, sys\nsys.stderr.write('x' * 1000000 + '\\n')\nprint('done')")
     assert r.returncode == 0
@@ -130,6 +140,7 @@ if __name__ == "__main__":
              test_carriage_return_records_are_forwarded_and_filtered,
              test_unterminated_output_is_forwarded_while_running,
              test_overlong_record_is_forwarded_whole_even_if_it_mentions_nnpack,
+             test_nnpack_after_the_overflow_boundary_is_still_forwarded,
              test_large_stderr_output_does_not_block]
     failed = 0
     for t in tests:

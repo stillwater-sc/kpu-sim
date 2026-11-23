@@ -67,15 +67,19 @@ def _install_cpp_warning_filter():
     _record_end = re.compile(rb'(?<=[\r\n])')
     _max_pending = 65536
     _lock = threading.Lock()
-    _state = {'pending': b'', 'done': False}
+    # 'overflowed': the current record passed the bound, so the rest of it, up
+    # to its terminator, is forwarded as is.
+    _state = {'pending': b'', 'done': False, 'overflowed': False}
 
     def _write_all(data):
         while data:
             data = data[_os.write(_saved_fd, data):]
 
-    def _emit(line):
-        if line and not any(s in line for s in _suppressed):
-            _write_all(line)
+    def _emit(record):
+        if _state['overflowed']:
+            _write_all(record)  # the end of an overlong record: as is
+        elif record and not any(s in record for s in _suppressed):
+            _write_all(record)
 
     def _forward():
         with _os.fdopen(_read_fd, 'rb', buffering=0) as pipe:
@@ -93,8 +97,10 @@ def _install_cpp_warning_filter():
                     *records, rest = _record_end.split(_state['pending'] + chunk)
                     for record in records:
                         _emit(record)
-                    if len(rest) > _max_pending:
-                        _write_all(rest)  # as is: no line to judge suppression on
+                        _state['overflowed'] = False  # the record ended
+                    if _state['overflowed'] or len(rest) > _max_pending:
+                        _write_all(rest)  # as is: no whole line to judge suppression on
+                        _state['overflowed'] = True
                         rest = b''
                     _state['pending'] = rest
 
