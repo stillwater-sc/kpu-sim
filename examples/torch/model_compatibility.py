@@ -114,6 +114,8 @@ def _output_diffs(expected, actual):
         if not isinstance(actual, (list, tuple)) or len(expected) != len(actual):
             raise ValueError("output sequences differ in length")
         return [d for e, a in zip(expected, actual) for d in _output_diffs(e, a)]
+    if isinstance(actual, (torch.Tensor, dict, list, tuple)):
+        raise ValueError(f"expected {type(expected).__name__}, got {type(actual).__name__}")
     return []
 
 

@@ -62,7 +62,10 @@ def _install_cpp_warning_filter():
     _os.dup2(_write_fd, _stderr_fd)
     _os.close(_write_fd)
 
+    import re
     import threading
+    _record_end = re.compile(rb'(?<=[\r\n])')
+    _max_pending = 65536
     _lock = threading.Lock()
     _state = {'pending': b'', 'done': False}
 
@@ -85,9 +88,15 @@ def _install_cpp_warning_filter():
                         _emit(_state['pending'])
                         _state['done'] = True
                         return
-                    *lines, _state['pending'] = (_state['pending'] + chunk).split(b'\n')
-                    for line in lines:
-                        _emit(line + b'\n')
+                    # A record ends at '\n' or '\r' (progress output). An overlong
+                    # unterminated record is forwarded as is, so `pending` stays bounded.
+                    *records, rest = _record_end.split(_state['pending'] + chunk)
+                    for record in records:
+                        _emit(record)
+                    if len(rest) > _max_pending:
+                        _emit(rest)
+                        rest = b''
+                    _state['pending'] = rest
 
     _reader = threading.Thread(target=_forward, name='kpu-stderr-filter', daemon=True)
     try:

@@ -58,6 +58,47 @@ def test_lines_are_forwarded_and_nnpack_is_suppressed():
     assert b"NNPACK" not in r.stderr
 
 
+def test_carriage_return_records_are_forwarded_and_filtered():
+    r = _run("import kpu, os\n"
+             "os.write(2, b'step 1\\rstep 2\\r[W NNPACK.cpp:64] NNPACK\\rstep 3')\n")
+    assert r.returncode == 0
+    assert r.stderr == b"step 1\rstep 2\rstep 3"
+
+
+def test_unterminated_output_is_forwarded_while_running():
+    # 200 KB with no newline, then the child blocks on stdin. The parent must
+    # receive more than the 64 KB bound while the child is still running.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = PYTHON_DIR + os.pathsep + env.get("PYTHONPATH", "")
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import kpu, os, sys\nos.write(2, b'y' * 200000)\nsys.stdin.read()"],
+        env=env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    received = []
+
+    def read_some():
+        total = 0
+        while total <= 65536:
+            chunk = child.stderr.read1(65536)
+            if not chunk:
+                break
+            received.append(chunk)
+            total += len(chunk)
+
+    import threading
+    reader = threading.Thread(target=read_some, daemon=True)
+    reader.start()
+    reader.join(timeout=30)
+    # Snapshot before releasing the child: at its exit the rest arrives anyway.
+    received_while_running = sum(len(c) for c in list(received))
+    still_running = child.poll() is None
+    child.stdin.close()
+    reader.join(timeout=30)
+    child.stderr.read()
+    child.wait(timeout=30)
+    assert still_running
+    assert received_while_running > 65536
+
+
 def test_large_stderr_output_does_not_block():
     r = _run("import kpu, sys\nsys.stderr.write('x' * 1000000 + '\\n')\nprint('done')")
     assert r.returncode == 0
@@ -72,6 +113,8 @@ if __name__ == "__main__":
         sys.exit(77)
     tests = [test_traceback_reaches_stderr,
              test_lines_are_forwarded_and_nnpack_is_suppressed,
+             test_carriage_return_records_are_forwarded_and_filtered,
+             test_unterminated_output_is_forwarded_while_running,
              test_large_stderr_output_does_not_block]
     failed = 0
     for t in tests:
