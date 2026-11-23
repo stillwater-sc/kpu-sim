@@ -307,7 +307,9 @@ See [`examples/basic/matrix_multiply.cpp`](examples/basic/matrix_multiply.cpp) f
 
 #### Data Movement Pipeline
 
-See [`examples/basic/data_movement_pipeline.cpp`](examples/basic/data_movement_pipeline.cpp) for DMA and data orchestration examples.
+See [`examples/basic/data_movement_pipeline.cpp`](examples/basic/data_movement_pipeline.cpp): a 2×2 matmul through every
+stage of the memory hierarchy (memory bank, L3, the BlockMover into L2, the Streamer into L1, compute), checking the
+data at each stage.
 
 ### Python API
 

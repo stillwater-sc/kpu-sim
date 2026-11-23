@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`examples/basic/data_movement_pipeline` no longer aborts** (#498). It never set
+  `memory_bank_capacity_mb`, which `KPUSimulator::Config` defaults to 0, so its first write threw
+  `Memory write out of bounds`. `README.md` links to it as the data-movement example. It now
+  sizes its bank, checks every stage's data, callbacks and the result (`[[19, 22], [43, 50]]`),
+  exits non-zero on a mismatch, and runs as the CTest `example_data_movement_pipeline`. The
+  README's description of it no longer mentions DMA, which it doesn't use.
 - **`examples/` no longer tracks binaries, dead sources or run output** (#499). Removed:
   - three ELF executables in `examples/test/`, and its four sources, which no CMake file built;
   - `basic/kernel_demo.cpp` (moved to `kernel/matmul_kernel.cpp` long ago) and
