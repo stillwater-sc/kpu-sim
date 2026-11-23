@@ -179,6 +179,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **`docs/analysis/issue-assessment.md`: the 122 open issues against the simplest program** (#521). Each issue is
+  classified by one question: what blocks an output-stationary int8 → int32 matmul on one systolic tile from running
+  consistently at L-B, L-T1 and L-CA?
+  - Values already agree at every level, int8 exact included.
+  - Timing is the gap. L-CA doesn't time the deployment's array, so L-T1 isn't held to it.
+  - The critical path is seven issues, one piece of work: #401 with #387, #389, #385, #495, #415 and #458.
+  - The other 115 are 49 deferred backlog, 48 off the path, 12 RTL parity, 5 that simplify, and #503 (merged).
+  - #401 now has the first slice's acceptance, with L2 bank concurrency (a 1–2 GHz array fed from 250 MHz banks) as
+    a requirement of the first test.
 - **`docs/analysis/examples-inventory.md`: what in `examples/` is current, and what is outdated.**
   Every source's engine was checked against ADR 0001 D6, and every built example was run, as
   was every Python script but two (the report says which were not run).
