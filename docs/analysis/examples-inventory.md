@@ -14,8 +14,11 @@ Each example was judged on four things, all checked in this session, not inferre
 2. **Values.** Whether it computes values and checks them. CLAUDE.md treats a level that returns
    timing without values as unvalidated.
 3. **Runs.** Every built C/C++ binary in `build/examples` (built 2026-11-16) was run with a
-   60 s timeout. Every Python script was run with a 120 s timeout, using `python/` and the
-   `stillwater_kpu` binding on the path.
+   60 s timeout. Every Python script except `python/generate.py` and
+   `analysis/visualize_tiling.py` was run with a 120 s timeout, using `python/` and the
+   `stillwater_kpu` binding on the path. `dfg/matmul.sh` was run. Not run, and graded from
+   their source and build files alone: the six C/C++ sources with no build target, those two
+   Python scripts, and `pipelines/matmul_pipeline.sh`. Each table's Run column says which.
 4. **Vocabulary.** A grep for the forbidden cache terms (`cache hit/miss`, `evict`, `LRU`,
    `refetch`, `overfetch`).
 
@@ -44,9 +47,9 @@ Combiner rename), so they don't mean the example was maintained.
 
 | Verdict | Source files (85 total) |
 |---|---|
-| Current | 16 |
+| Current | 13 |
 | Current (component) | 10 |
-| Review | 17 |
+| Review | 20 |
 | Outdated | 42 |
 
 The program stack is barely represented. **Only `characterize/tile_characterize.cpp` drives the
@@ -175,9 +178,9 @@ not apply, and nothing in the current program path consumes them.
 
 | File | Dates | Engine / API | Run | Verdict | Why |
 |---|---|---|---|---|---|
-| `csp_pipeline_demo.cpp` | 2026-02 → 2026-06 | `ConcurrentTimingExecutor`, `process_interface` | rc 0 | **Current** | Teaches credits and TagCAM. A good onboarding companion. |
-| `csp_schedule_demo.cpp` | 2026-02 → 2026-07 | `timing/schedule` generators + validator | rc 0, "Validation: PASSED" | **Current** | |
-| `run_matmul.cpp` | 2026-02 → 2026-07 | `ConcurrentTimingExecutor` + schedule executor | rc 0 | **Current** | |
+| `csp_pipeline_demo.cpp` | 2026-02 → 2026-06 | `ConcurrentTimingExecutor`, `process_interface` | rc 0 | **Review** | Kept engine, but no values: it teaches credits and the TagCAM. A good onboarding companion. |
+| `csp_schedule_demo.cpp` | 2026-02 → 2026-07 | `timing/schedule` generators + validator | rc 0, "Validation: PASSED" | **Review** | Kept engine, but no values. "Validation" is `validate_schedule`, a structural check of each generated schedule, and the demo exits 0 even when it prints FAILED. |
+| `run_matmul.cpp` | 2026-02 → 2026-07 | `ConcurrentTimingExecutor` + schedule executor | rc 0 | **Review** | Kept engine, but timing only: it reports cycles and a status, with no value check. |
 | `unified_xor_mlp.cpp` | 2026-07 | `timing/functional_mlp_executor` | rc 0, PASS; ctest | **Current** | |
 | `matmul_simulator.cpp`, `softmax_simulator.cpp`, `layernorm_simulator.cpp` | 2026-07 | `ConcurrentTimingExecutor` + tile tracker + functional oracle | rc 0, `… OK`; ctests | **Current** | |
 | `conv2d_simulator.cpp`, `batchnorm_simulator.cpp`, `pooling_simulator.cpp` | 2026-07 | same | rc 0, `… OK`; ctests | **Current** | Caveat: these are per-operator schedule generators, the pattern ADR D7 stops adding to. They are kept as cycle-accurate implementations. |
@@ -244,8 +247,10 @@ not apply, and nothing in the current program path consumes them.
    Add `xor_behavioral`, `kernel/*`, `concurrent_execution_debug`, `kernel_graph_demo`,
    `run_matmul_DEPRECATED`, `c/*`, `mlp/*` and `runtime/*` to #266's dependents so they leave
    with their engines.
-5. **Retire or rewrite the `compiler/l3_*` analyzers.** They time out, and "overfetch" is
-   cache semantics. `characterize/` already covers the design-space role.
+5. **Retire or rewrite the `compiler/l3_*` analyzers.** Three of them
+   (`l3_comprehensive_analysis`, `l3_focused_analysis`, `l3_transformer_analysis`) time out.
+   All four, `l3_overfetch_analyzer` included, model "overfetch", which is cache semantics.
+   `characterize/` already covers the design-space role.
 6. **Decide what to do about the Python `baseline/`, `educational/` and `test_*` scripts**:
    rewrite them against the current binding, or delete them. They have failed since the
    binding's API changed.

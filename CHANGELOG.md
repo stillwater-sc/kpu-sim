@@ -90,8 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - **`docs/analysis/examples-inventory.md`: what in `examples/` is current, and what is outdated.**
-  All 85 example sources were run, and their engines checked against ADR 0001 D6.
-  - 16 are current, 10 are component demos, 17 need a decision and 42 are outdated. Only
+  Every source's engine was checked against ADR 0001 D6, and every built example was run, as
+  was every Python script but two (the report says which were not run).
+  - 13 are current, 10 are component demos, 20 need a decision and 42 are outdated. Only
     `characterize/tile_characterize` runs the CSP program path.
   - Four examples exit 0 on wrong results: `c/hello_kpu` gets C = 0, `mlp/mnist_classifier`
     predicts class 0 for every digit, `mlp/sine_approximation` outputs zeros, and
