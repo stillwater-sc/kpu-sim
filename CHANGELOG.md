@@ -34,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three runtime examples no longer claim values the runtime doesn't compute** (#497, part 1).
+  `KPURuntime` is timing only: a launch runs the program through `isa::ConcurrentExecutor` and
+  never writes its outputs (#257 makes it return values).
+  - `c/hello_kpu.c` reported `expected 32.0, got 0.0` for C and still exited 0. It now checks
+    what the runtime does do, a host → device → host round trip of A. It exits non-zero when a
+    copy, the launch or the round trip fails, and runs as the CTest `hello_kpu_c`.
+  - `mlp/mnist_classifier` printed a PASS/FAIL table from logits that were never written (class 0
+    every time). `mlp/sine_approximation` printed a KPU output column of zeros, and called its
+    weights trained. Both now report their cycles and say they check no values.
+  - `mlp/xor_classifier` pointed to a `docs/` file that doesn't exist. It now points to #257.
+
 - **A stale corpus result:** `lu_64_t16.result.l0` no longer matched what `main` computes (23 rows
   differed, by at most 4.2e-7 relative); `test_csp_corpus` compares within a tolerance, so it never
   failed. It is regenerated, and the build matches `main` bit for bit.

@@ -9,6 +9,9 @@
 //
 // This example uses simplified "digit patterns" for demonstration.
 // For real MNIST, you would load actual test images and trained weights.
+//
+// TIMING MODEL ONLY: the runtime reports the network's cycles per layer but computes
+// no values, so this example classifies nothing (#257).
 
 #include <sw/runtime/graph.hpp>
 #include <sw/kpu/kpu_simulator.hpp>
@@ -208,19 +211,6 @@ void print_digit(const float* image, int width = 28, int height = 28) {
     }
 }
 
-// Softmax for output interpretation
-void softmax(const float* input, float* output, size_t n) {
-    float max_val = *std::max_element(input, input + n);
-    float sum = 0.0f;
-    for (size_t i = 0; i < n; ++i) {
-        output[i] = std::exp(input[i] - max_val);
-        sum += output[i];
-    }
-    for (size_t i = 0; i < n; ++i) {
-        output[i] /= sum;
-    }
-}
-
 int main() {
     std::cout << "================================================\n";
     std::cout << "MNIST Digit Classifier on KPU Simulator\n";
@@ -362,46 +352,13 @@ int main() {
     }
     std::cout << "\n";
 
-    // Get logits output
-    std::vector<float> logits(BATCH_SIZE * OUTPUT_DIM);
-    runner.get_output("logits", logits.data());
-
-    // Compute predictions
-    std::cout << "Classification Results:\n";
-    std::cout << "  Digit  Predicted  Confidence  Status\n";
-    std::cout << "  -----  ---------  ----------  ------\n";
-
-    int correct = 0;
-    for (int digit = 0; digit < 10; ++digit) {
-        // Apply softmax
-        std::vector<float> probs(OUTPUT_DIM);
-        softmax(&logits[digit * OUTPUT_DIM], probs.data(), OUTPUT_DIM);
-
-        // Find prediction
-        int predicted = static_cast<int>(std::max_element(probs.begin(), probs.end()) - probs.begin());
-        float confidence = probs[predicted];
-
-        bool is_correct = (predicted == digit);
-        if (is_correct) correct++;
-
-        std::cout << "    " << digit << "        " << predicted
-                  << "        " << std::setw(6) << std::setprecision(2)
-                  << (confidence * 100) << "%     "
-                  << (is_correct ? "PASS" : "FAIL") << "\n";
-    }
-
-    std::cout << "\nAccuracy: " << correct << "/10 (" << (correct * 10) << "%)\n\n";
-
-    // Note about the demo
+    // No classification table: the runtime is timing only. runner.run() reports each
+    // layer's cycles, but computes no values, so the logits are never written (#257
+    // makes the host API return simulator-computed values). The weights are random as
+    // well, so even computed logits would not classify the digits.
     std::cout << "================================================\n";
-    std::cout << "Note: This demo uses randomly initialized weights.\n";
-    std::cout << "With properly trained weights (e.g., from PyTorch),\n";
-    std::cout << "accuracy would be ~98% on real MNIST test data.\n";
-    std::cout << "\n";
-    std::cout << "To use trained weights:\n";
-    std::cout << "  1. Train model in PyTorch/TensorFlow\n";
-    std::cout << "  2. Export weights to binary format\n";
-    std::cout << "  3. Load weights before execution\n";
+    std::cout << "Note: the runtime is a timing model. It computes no\n";
+    std::cout << "logits, so no digits are classified here (#257).\n";
     std::cout << "================================================\n";
 
     return 0;
