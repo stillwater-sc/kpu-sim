@@ -87,6 +87,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `README.md` and `docs/README.md` now point to it first.
 
+### Documentation
+
+- **`docs/analysis/examples-inventory.md`: what in `examples/` is current, and what is outdated.**
+  All 85 example sources were run, and their engines checked against ADR 0001 D6.
+  - 16 are current, 10 are component demos, 17 need a decision and 42 are outdated. Only
+    `characterize/tile_characterize` runs the CSP program path.
+  - Four examples exit 0 on wrong results: `c/hello_kpu` gets C = 0, `mlp/mnist_classifier`
+    predicts class 0 for every digit, `mlp/sine_approximation` outputs zeros, and
+    `runtime/runtime_demo` fails its frees. `basic/data_movement_pipeline`, which `README.md`
+    links to, aborts. Three `compiler/l3_*` analyzers time out and model L3 as a cache. 11
+    `examples/python` scripts call names the binding no longer has. Committed binaries and
+    generated files sit alongside the sources.
+  - The follow-ups are filed as #497–#503: the silently wrong examples, the crash, the cleanup,
+    the frozen-engine dependents for #266, the `l3_*` analyzers, the Python scripts, and new
+    program-path examples.
+
 ### Changed
 
 - **Two L-CA characterizations restated at the deployment's rates and banks** (#462). #458 pinned
