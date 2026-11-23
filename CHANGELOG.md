@@ -126,6 +126,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `README.md` and `docs/README.md` now point to it first.
 
+### Removed
+
+- **`examples/schedule/run_matmul_DEPRECATED`** (#500). It showed only what not to do, on
+  `BehavioralProgramExecutor` and `TransactionalProgramExecutor`, two engines ADR 0001 D6 retires,
+  and nothing depended on it. The other examples on frozen engines stay until their engine is
+  deleted, and are now listed as its dependents in #266.
+
 ### Documentation
 
 - **`docs/analysis/examples-inventory.md`: what in `examples/` is current, and what is outdated.**
