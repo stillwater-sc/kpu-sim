@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     L-CA hold each tile in the walker's slot.
   - `matmul_48_stage_a.csp`, generated with `kpu-csp-gen --stage-a`, exercises both L3 and L2 placement.
   - CTest `example_program_run_levels` and `example_program_placement` fail on a value or placement mismatch. The
-    example also passes on every corpus program, on `kpu_s1` and `kpu_t4`.
+    example also passes on every corpus program, on `kpu_s1` and `kpu_t4`. L-CA runs only on `kpu_s1`: on
+    `kpu_t4` it skips, because `kpu_t4` has two L3 tiles and a level-1 program addresses one.
   - The README shows where the bubble report and the `.tflow`/`.dflow` records come from (`kpu-run`), and
     `docs/ONBOARDING.md`'s note on `examples/` points to it.
 - **Every L2 copy has a slot the program places; csp 1.1** (#387 step 1,
@@ -195,6 +196,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     program-path examples.
 
 ### Changed
+
+- **L-T1 executes every L2 slot the walker places** (#387 step 2; `docs/plans/slot-credits-at-lca.md` §4).
+  Until now L-T1 ran an unstaged operand's copy and a fabric result's slot unplaced.
+  - **Copies take their slots.** Each copy's Move waits for its own slot's credit, and its L2Release returns it, as
+    a staging's do.
+  - **A result's slot is taken at its first call** (decision 1). The walker marks that call with the new
+    `Action::result_l2`, the call starts after the slot's credit, and the wait is charged to the slot (`l2_bound`).
+    For example, a second accumulator whose result gets the first one's slot waits for that slot's L2Release.
+  - **What `kpu-run` reports.** It prints the L2 peak held (copies included) next to the staged peak, and the copy
+    count. The outcome carries `l2_copy_slots`, `l2_copies` and `peak_l2_held`, and `l2_slots` still means
+    stagings.
+  - **One compute tile only.** A level-1 program places every copy in compute tile 0's L2, so on more than one
+    compute tile L-T1 runs the copies unplaced, and says so in `unmodelled` (multi-tile placement is #403).
+  - **Records.** The `.tflow`/`.dflow` records still show stagings only at both levels. They gain the copies in
+    step 3, when L-CA places them too.
+  - **Timing.** Values don't move. No corpus program's L-T1 makespan moves on `kpu_s1` or `kpu_t4`.
+  - **Tests.** Three new: every copy holds the walker's slot, and no slot is held twice; a result's slot holds back
+    its first call, which fails if the credit is dropped; and #476's deferred case, a Move whose ready a credit set
+    while the lane decided its start. `examples/program --placement` also checks L-T1's copies against the walker.
 
 - **Two L-CA characterizations restated at the deployment's rates and banks** (#462). #458 pinned
   them to the executor's old mover and streamer rates. Now that L2 is banked (#401), they're

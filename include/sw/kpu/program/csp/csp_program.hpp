@@ -253,15 +253,21 @@ struct Action {
     // accumulator's from then on. None on every other action.
     std::optional<TileCoord> seeds;
     // A copy the walker places in L2 as of slice 2 (an unstaged operand's Move and Feed; a result's
-    // Drain, Writeback and L2Release): the timed levels execute these slots from slice 2's later
-    // steps (docs/plans/slot-credits-at-lca.md §4), and see them through unplaced() until then.
+    // Drain, Writeback and L2Release). L-B and L-T1 execute these slots (slice 2's steps 1 and 2);
+    // L-CA sees them through unplaced() until step 3 (docs/plans/slot-credits-at-lca.md §4).
     bool copy = false;
+    // A Call that opens its result's L2 slot (decision 1 of slot-credits-at-lca.md): a fabric
+    // accumulator's first call, or a writing call. The slot is the one its result's Drain writes,
+    // Writeback reads and L2Release frees; a timed level takes the slot's credit here, so the
+    // result has a home before any compute. None on every other action.
+    std::optional<L2Address> result_l2;
 };
 
-// The action as the timed levels execute it in slice 2's step 1: a copy without its L2 slot,
-// as every level ran it before the walker placed it.
+// The action as L-CA executes it until slice 2's step 3: a copy without its L2 slot, and no
+// result slot taken at a call, as every level ran it before the walker placed them.
 inline Action unplaced(const Action& a) {
     Action b = a;
+    b.result_l2.reset();
     if (b.copy) {
         b.l2.reset();
         b.staging = kNone;

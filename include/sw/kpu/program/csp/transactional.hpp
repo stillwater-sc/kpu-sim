@@ -205,7 +205,9 @@ public:
         bool retained = false;          // closed by a Retain: held past the program's end
     };
 
-    // One staged copy's L2 slot: held from its stage Move's credit to its L2Release.
+    // One L2 slot's hold, from its credit to its L2Release: a staged copy (its stage Move), an L2
+    // accumulator's partial (its first merge), or a copy the walker places (slice 2): an unstaged
+    // operand's (its Move, one Feed) or a result's (its opening call; Drain, Writeback).
     struct L2Slot {
         TileCoord tile;
         L2Address place;                // the walker's L2 address, executed
@@ -213,6 +215,7 @@ public:
         std::uint32_t feeds = 0;        // the Feeds that read it: its reuse count
         bool partial = false;           // an L2 accumulator's partial (#429): merged into, not fed
         std::uint32_t merges = 0;       // a partial: the Drains the Combiner merged into it
+        bool copy = false;              // a copy the walker places, not a staging the program states
     };
 
     struct Stats {
@@ -227,6 +230,8 @@ public:
         std::size_t slot_bound = 0;
         Cycle slot_wait_cycles = 0;
         std::size_t peak_l2 = 0;                    // staged copies held at once, in time
+        std::size_t peak_l2_held = 0;               // every L2 slot held at once, the walker's copies too
+        std::size_t l2_copies = 0;                  // holds of a copy the walker places (slice 2's step 2)
         std::size_t l2_bound = 0;                   // stage Moves whose start their L2 slot decided
         Cycle l2_wait_cycles = 0;                   //   and what those waits cost
         std::size_t merges = 0;                     // Drains the Combiner merged into an L2 partial
@@ -289,13 +294,17 @@ public:
 
     void step(const Action& placed, const TileOp* call_op) {
         values_.step(placed, call_op);              // the values: L-B's, in the same order
-        // The timing: slice 2's copies not yet placed. A copy's L2Release does nothing then, and has
-        // no record, as at L-CA (one leg per action at both levels).
-        if (placed.copy && placed.kind == Action::Kind::L2Release) {
+        // The timing executes every L2 slot the walker placed (slice 2's step 2): a copy's Move
+        // takes its slot's credit and its L2Release returns it, as a staging's do, and a result's
+        // slot is taken at the call that opens it (Action::result_l2). On a device with more than
+        // one compute tile it can't: a level-1 program places every copy in compute tile 0's L2
+        // (L2Address::cf), and L-T1 spreads the calls over the tiles, each with its own L2. There
+        // the copies run unplaced, as before, and a copy's L2Release has nothing to do.
+        if (!copies_placed() && placed.copy && placed.kind == Action::Kind::L2Release) {
             ++st_.actions;
             return;
         }
-        const Action a = unplaced(placed);
+        const Action a = copies_placed() ? placed : unplaced(placed);
         const std::string k = a.tile.to_string();
         const Cycle bytes = tile_bytes(a.tile);
         switch (a.kind) {
@@ -359,7 +368,7 @@ public:
                 moved_[k] = f;
                 if (a.l2) {
                     l2_open_[k] = l2_slots_.size();
-                    l2_slots_.push_back(L2Slot{a.tile, *a.l2, ready, 0, 0});
+                    l2_slots_.push_back(L2Slot{a.tile, *a.l2, ready, 0, 0, false, 0, a.copy});
                 }
                 break;
             }
@@ -376,11 +385,41 @@ public:
                 for (const TileCoord& t : call_op->inputs) ready = std::max(ready, get(fed_, t.to_string()));
                 for (const TileCoord& t : call_op->outputs)        // an in-place result is fed too
                     ready = std::max(ready, get(fed_, t.to_string()));
+                // A call that opens its result's L2 slot starts after that slot's credit (decision 1
+                // of slot-credits-at-lca.md): the result has a home before any compute.
+                Cycle l2_wait = 0;
+                bool credit_set = false;
+                if (a.result_l2) {
+                    const Cycle credit = get_l2(*a.result_l2);
+                    if (credit > ready) {
+                        const auto& lanes_free = lane_free_[Proc::Cf];
+                        const Cycle other = std::max({ready, *std::min_element(lanes_free.begin(), lanes_free.end()),
+                                                      last_start_[Proc::Cf]});
+                        if (credit > other) {
+                            ++st_.l2_bound;
+                            st_.l2_wait_cycles += credit - other;
+                            l2_wait = credit - other;
+                        }
+                        ready = credit;
+                        credit_set = true;
+                    }
+                }
+                // After the call's record is made: its wait, and the result's slot opened at its start.
+                auto took_result_slot = [&]() {
+                    Record& rec = records_.back();
+                    rec.l2_wait = l2_wait;
+                    if (credit_set) rec.ready_by = Record::ReadyBy::Credit;
+                    if (a.result_l2) {
+                        l2_open_[k] = l2_slots_.size();
+                        l2_slots_.push_back(L2Slot{a.tile, *a.result_l2, rec.start, 0, 0, false, 0, true});
+                    }
+                };
                 const TileWork w = tile_work_of(shapes_, *call_op, dev_.element_bytes);
                 const std::uint32_t c = stream_chain(a, *call_op);
                 if (c == kNoChain) {
                     const Cycle d = quantize_cycles(w.macs / std::max(1.0, dev_.fabric_macs_per_cycle), w.macs > 0.0);
                     acc_[k] = run(Proc::Cf, ready, d, a);
+                    took_result_slot();
                     break;
                 }
                 Chain& ch = chains_[c];
@@ -396,6 +435,7 @@ public:
                     ch.in1 = ch.front + S;
                     ch.first_action = ch.last_action = rec.action;
                     acc_[k] = f;
+                    took_result_slot();
                     break;
                 }
                 // K = the call's reduction depth: macs over the PEs its C tile occupies.
@@ -412,6 +452,7 @@ public:
                 ch.in1 = f;
                 ch.last_action = rec.action;
                 acc_[k] = f;
+                took_result_slot();
                 break;
             }
             case Action::Kind::Drain: {
@@ -525,6 +566,7 @@ public:
                 // A stage block's end: its slot is free once the staged copy's last Feed is out,
                 // and the next stage into it may start from then (its credit returns upstream).
                 const Cycle t = std::max({get(moved_, k), get(fed_, k), get(partial_read_, k)});
+                partial_read_.erase(k);                     // this slot's reads are done
                 if (a.l2) l2_free_[key_of(*a.l2)] = t;
                 auto it = l2_open_.find(k);
                 if (it != l2_open_.end()) {
@@ -583,25 +625,38 @@ public:
             live += d;
             st_.peak_l3 = std::max(st_.peak_l3, static_cast<std::size_t>(std::max(live, 0)));
         }
-        // The same for L2's staged copies (L-B, stepped first, refused a program ending with one).
-        ev.clear();
-        for (const L2Slot& sl : l2_slots_) {
-            ev.push_back({sl.t0, +1});
-            ev.push_back({sl.t1, -1});
-        }
-        std::sort(ev.begin(), ev.end());
-        live = 0;
-        for (const auto& [t, d] : ev) {
-            live += d;
-            st_.peak_l2 = std::max(st_.peak_l2, static_cast<std::size_t>(std::max(live, 0)));
-        }
+        // The same for L2 (L-B, stepped first, refused a program ending with a slot held): the
+        // staged copies and partials the program states, and every slot held, the walker's copies too.
+        auto peak = [&](bool with_copies) {
+            ev.clear();
+            for (const L2Slot& sl : l2_slots_) {
+                if (sl.copy && !with_copies) continue;
+                ev.push_back({sl.t0, +1});
+                ev.push_back({sl.t1, -1});
+            }
+            std::sort(ev.begin(), ev.end());
+            int held = 0;
+            std::size_t most = 0;
+            for (const auto& [t, d] : ev) {
+                held += d;
+                most = std::max(most, static_cast<std::size_t>(std::max(held, 0)));
+            }
+            return most;
+        };
+        st_.peak_l2 = peak(false);
+        st_.peak_l2_held = peak(true);
+        st_.l2_copies = static_cast<std::size_t>(
+            std::count_if(l2_slots_.begin(), l2_slots_.end(), [](const L2Slot& sl) { return sl.copy; }));
         return st_;
     }
 
     const TileProgram& result() const { return values_.result(); }
     const std::vector<Record>& records() const { return records_; }
     const std::vector<Slot>& slots() const { return slots_; }
-    const std::vector<L2Slot>& l2_slots() const { return l2_slots_; }
+    const std::vector<L2Slot>& l2_slots() const { return l2_slots_; }     // every hold; L2Slot::copy tells them apart
+    // Whether L-T1 executes the walker's L2 copies in their slots: on one compute tile, whose L2
+    // the program's placement names.
+    bool copies_placed() const { return lanes(Proc::Cf) == 1; }
     const std::vector<Chain>& chains() const { return chains_; }
     std::size_t lanes_of(Proc p) const { return lanes(p); }
 

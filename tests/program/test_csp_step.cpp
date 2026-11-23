@@ -120,13 +120,9 @@ TEST_CASE("csp step: L-T1 replays every record in start order, within its lanes 
             }
         }
         CHECK(cur.position() == cur.size());
-        // Every action replayed, but a copy's L2Release, which L-T1 does not yet time
-        // (slot-credits-at-lca.md §4).
-        const csp::CspProgram prog = lang::compile(ast);
-        const auto copy_releases = static_cast<std::size_t>(std::count_if(
-            prog.actions.begin(), prog.actions.end(),
-            [](const csp::Action& a) { return a.copy && a.kind == csp::Action::Kind::L2Release; }));
-        CHECK(seen.size() == o.actions - copy_releases);
+        // Every action replayed, a copy's L2Release included: L-T1 times every slot the walker
+        // places (slot-credits-at-lca.md §4, step 2).
+        CHECK(seen.size() == o.actions);
         CHECK(releases == o.slots.size());           // one Release per residency
         CHECK(store_legs == 2 * o.dram_stores);
     }

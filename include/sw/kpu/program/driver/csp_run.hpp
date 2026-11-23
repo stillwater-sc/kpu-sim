@@ -243,6 +243,9 @@ struct CspLevelOutcome {
     // L-T1 with L2 staging: each staged copy's L2 slot, credit to L2Release, with its Feeds.
     std::vector<csp::TransactionalInterpreter::L2Slot> l2_slots;
     std::size_t peak_l2 = 0;                // L-T1: staged copies held at once, in time
+    std::size_t peak_l2_held = 0;           // L-T1: every L2 slot held at once, the walker's copies too
+    std::size_t l2_copies = 0;              // L-T1: the walker's copies, each under its own slot's credit
+    std::vector<csp::TransactionalInterpreter::L2Slot> l2_copy_slots;   // L-T1: those copies' holds
     // With an L2 accumulator (#429, #430): the Combiner's merges of partials into L2 slots and
     // the read-modify-writes among them (L-T1, L-CA), and the L2 bytes they read and write (L-T1).
     std::size_t merges = 0, merge_accumulates = 0;
@@ -443,8 +446,12 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.cf_busy = st.busy.count("cf") ? st.busy.at("cf") : 0;
         o.records = lt.records();
         o.slots = lt.slots();
-        o.l2_slots = lt.l2_slots();
+        // The stagings the program states; the walker's copies are counted, and recorded from step 3,
+        // when L-CA places them too (slot-credits-at-lca.md §4).
+        for (const auto& sl : lt.l2_slots()) (sl.copy ? o.l2_copy_slots : o.l2_slots).push_back(sl);
         o.peak_l2 = st.peak_l2;
+        o.peak_l2_held = st.peak_l2_held;
+        o.l2_copies = st.l2_copies;
         o.merges = st.merges;
         o.merge_accumulates = st.merge_accumulates;
         o.merge_l2_read_bytes = st.merge_l2_read_bytes;
@@ -458,6 +465,11 @@ inline CspLevelOutcome csp_run_level(ExecutionLevel level, const csp::lang::Prog
         o.pe_cols = static_cast<std::uint32_t>(dev.pe_cols);
         o.dataflow = dev.dataflow;
         o.compute_tiles = lt.lanes_of(csp::TransactionalInterpreter::Proc::Cf);
+        if (!lt.copies_placed())
+            o.unmodelled.push_back("L2 copies on " + std::to_string(o.compute_tiles) + " compute tiles: a level-1 "
+                                   "program places each operand's and result's L2 copy in compute tile 0's L2, so "
+                                   "L-T1 runs them unplaced here (its stagings keep their slots; multi-tile "
+                                   "placement is #403)");
         o.unmodelled.push_back("tile contexts' vector-unit time (movers.vector): L-T1 applies the stages' "
                                "values; their time is L-CA's");
     } else {                                        // CycleAccurate

@@ -18,8 +18,10 @@
 //
 // With --placement it also shows the L3 placement: the walker gives every residency an L3
 // address (module, slot, bank), and every level executes that address rather than allocating
-// its own (ADR 0004 §5). Likewise each staging's L2 slot (`stage ... in l2`). The example checks
-// that L-T1 and L-CA hold each tile in exactly the slot the walker assigned.
+// its own (ADR 0004 §5). Likewise each staging's L2 slot (`stage ... in l2`), and each copy the
+// walker places in L2 (an operand's for its call, a result's). The example checks that L-T1 and
+// L-CA hold each tile in exactly the slot the walker assigned. L-T1 executes the copies on one
+// compute tile; L-CA runs them unplaced until slot-credits-at-lca.md §4's step 3.
 //
 //   program_run_levels [--program <file.csp>] [--deploy <spec.json>] [--placement]
 //
@@ -172,20 +174,24 @@ int main(int argc, char** argv) {
 
     // 5. L3 placement and L2 staging, as the walker assigns them and as each level executes them.
     if (show_placement) {
-        Residencies walker_l3, walker_l2, lt1_l3, lt1_l2, lca_l3, lca_l2;
+        Residencies walker_l3, walker_l2, walker_copies, lt1_l3, lt1_l2, lt1_copies, lca_l3, lca_l2;
+        bool lt1_places_copies = false;
         csp::lang::ActionStream stream(*ast, csp::lang::target_from(spec->device(0)));
         while (auto e = stream.next()) {
             const csp::Action& a = e->action;
             if (e->opens && a.place) walker_l3.emplace_back(tile_key(a.tile), a.place->slot);
-            // A staging the program states (`stage ... in l2`). The per-call copies the walker
-            // also places are not yet the timed levels' (they run unplaced there), so they are
-            // left out (docs/plans/slot-credits-at-lca.md §4).
-            if (e->opens_staging && a.l2 && !a.copy) walker_l2.emplace_back(tile_key(a.tile), a.l2->slot);
+            // A staging the program states (`stage ... in l2`), and a copy the walker places: each
+            // operand's copy for its call, and each result's slot. L-T1 executes the copies on one
+            // compute tile; L-CA runs them unplaced until slot-credits-at-lca.md §4's step 3.
+            if (e->opens_staging && a.l2)
+                (a.copy ? walker_copies : walker_l2).emplace_back(tile_key(a.tile), a.l2->slot);
         }
         for (const CspLevelOutcome& o : outcomes) {
             if (o.level == ExecutionLevel::BlockSequential) {
                 for (const auto& s : o.slots) lt1_l3.emplace_back(tile_key(s.tile), s.place.slot);
                 for (const auto& s : o.l2_slots) lt1_l2.emplace_back(tile_key(s.tile), s.place.slot);
+                for (const auto& s : o.l2_copy_slots) lt1_copies.emplace_back(tile_key(s.tile), s.place.slot);
+                lt1_places_copies = o.compute_tiles == 1;
             }
             if (o.level == ExecutionLevel::CycleAccurate) {
                 for (const auto& [t, slot] : o.l3_placement) lca_l3.emplace_back(tile_key(t), slot);
@@ -195,10 +201,13 @@ int main(int argc, char** argv) {
         std::cout << "\nplacement (tile@slot, in the walker's order)\n";
         print_placement("L3", "residencies", walker_l3);
         print_placement("L2", "stagings", walker_l2);
+        print_placement("L2", "copies", walker_copies);
         for (const CspLevelOutcome& o : outcomes) {
             if (o.level == ExecutionLevel::BlockSequential) {
                 ok = same("L-T1", "L3", walker_l3, lt1_l3) && ok;
                 ok = same("L-T1", "L2", walker_l2, lt1_l2) && ok;
+                if (lt1_places_copies) ok = same("L-T1", "L2 copies", walker_copies, lt1_copies) && ok;
+                else std::cout << "    L-T1 L2 copies: run unplaced on more than one compute tile (#403)\n";
             }
             if (o.level == ExecutionLevel::CycleAccurate) {
                 ok = same("L-CA", "L3", walker_l3, lca_l3) && ok;

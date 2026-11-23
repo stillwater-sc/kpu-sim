@@ -432,6 +432,10 @@ private:
         }
         e.action.merge = merge_;
         merge_ = Merge::None;
+        if (kind == Action::Kind::Call && result_l2_) {
+            e.action.result_l2 = result_l2_;
+            result_l2_.reset();
+        }
         // A Call and its result's Drain carry their accumulator's dataflow (#395).
         if (kind == Action::Kind::Call || kind == Action::Kind::Drain) {
             const auto df = dataflow_.find(t.to_string());
@@ -504,6 +508,7 @@ private:
     std::set<std::size_t> pinned_;                          // residencies the program placed itself
     std::optional<TileCoord> seed_;                         // the accumulator the next Feed starts
     bool copy_ = false;                                     // the actions being emitted are a placed copy
+    std::optional<L2Address> result_l2_;                    // the next Call opens this result slot
     Merge merge_ = Merge::None;                             // the next Drain's merge (an L2 accumulator's)
     std::map<std::string, Dataflow> dataflow_;              // an accumulator's tile -> its dataflow (#395)
     static Dataflow dataflow_of(const Stmt& s) {
@@ -1175,7 +1180,10 @@ private:
             // An output-stationary chain: the operands are fed; the result accumulates in the fabric.
             // Its first call takes the result's L2 slot (decision 1 of slot-credits-at-lca.md): the
             // result has a home before any compute.
-            if (!results_.count(yk)) results_[yk] = ResultSlot{take_l2(s.line, "acc " + yk + "'s result"), 0};
+            if (!results_.count(yk)) {
+                results_[yk] = ResultSlot{take_l2(s.line, "acc " + yk + "'s result"), 0};
+                result_l2_ = results_[yk].at;       // this call takes it: its credit, at the timed levels
+            }
             for (std::size_t i = 0; i < args.size(); ++i) {
                 TileOp feed;
                 feed.kind = TileOpKind::Feed;
@@ -1202,6 +1210,7 @@ private:
         // The result's L2 slot, taken at the call: its Drain writes it, its Writeback reads it.
         const L2Address at = take_l2(s.line, "call " + s.fn + "'s result " + yk);
         const std::size_t sid = next_staging_++;
+        result_l2_ = at;
         emit(Action::Kind::Call, y, kNone, sink_.l0(op), &op);
         record_stages(y, drain_ctx, wb_ctx);
         result_out(y, kNone, resident_.at(yk).id, false, std::move(drain_ctx), std::move(wb_ctx), at, sid);

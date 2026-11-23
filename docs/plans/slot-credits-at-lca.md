@@ -113,7 +113,13 @@ Each step is a PR, under #387, with no closing keyword until the last.
    timing is unchanged by this step; only L-B, the trace and the L-B record place the copies.
 2. **L-T1** (PR 2): every copy under its own slot's credit; a result slot at its first call. With
    it, the test deferred from #476: a Move whose ready a credit set while a lane kept `l2_wait`
-   at 0, asserting both.
+   at 0, asserting both. (Done, 2026-11-23.)
+   - The call that opens a result's slot carries it, as `Action::result_l2`. L-T1 takes the
+     credit there.
+   - On more than one compute tile L-T1 runs the copies unplaced and names it in `unmodelled`:
+     a level-1 program places every copy in compute tile 0's L2 (multi-tile placement is #403).
+   - The records keep showing stagings only until step 3 places the copies at L-CA too. Then both
+     levels' records describe the same L2.
 3. **L-CA** (PR 3):
    - every slot placed; transient slots and the dedup removed;
    - a result slot at its first call;

@@ -37,6 +37,9 @@ With `--placement` it also shows the **L3 placement** and the **L2 staging**:
 - L-B executes those addresses, and L-T1 and L-CA time them. No level allocates a slot of its
   own (ADR 0004 §5).
 - The example checks that L-T1 and L-CA hold each tile in exactly the walker's slot.
+- The walker also places a copy in L2 for each call's operands and each result. L-T1 executes
+  those copies too (on one compute tile), and the example checks them. L-CA runs them unplaced
+  until `docs/plans/slot-credits-at-lca.md` step 3.
 - `matmul_48_stage_a.csp` stages A's row panel in L2 (`stage A[i, :] in l2`), so it exercises
   both. Generate others with `kpu-csp-gen --stage-a`.
 
