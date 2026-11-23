@@ -56,8 +56,13 @@ placement (tile@slot, in the walker's order)
 
 The L-T1 and L-CA makespans differ: L-T1 is uncalibrated, and L-CA is the timing reference.
 
-**Checks.** The program exits 1 if any level's values fall outside the bound of L-B's, or if a
-level holds a tile in a slot the walker didn't assign. CTest runs it twice:
+**Checks.** The program exits 1 in any of these cases:
+- L-B's run wasn't traced and replayed;
+- a level that supports the program fails to run it (a livelock, or the cycle limit);
+- a level's values fall outside the bound of L-B's;
+- a level holds a tile in a slot the walker didn't assign.
+
+A level that can't run the program at all (L-T2 today) is reported as skipped. CTest runs it twice:
 `example_program_run_levels` (the corpus matmul) and `example_program_placement` (the staged
 program with `--placement`).
 

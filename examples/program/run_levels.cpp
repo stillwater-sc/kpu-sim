@@ -132,6 +132,10 @@ int main(int argc, char** argv) {
         std::cerr << "L-B's trace does not replay: " << reference.replay_mismatch << "\n";
         return 1;
     }
+    if (!reference.trace) {     // e.g. past the trace limit: an oracle that was never replayed
+        std::cerr << "L-B's run was not traced, so it was not validated: " << reference.note << "\n";
+        return 1;
+    }
     std::cout << "program  " << program_path << "\n"
               << "deploy   " << deploy_path << "\n"
               << "actions  " << reference.actions << "\n\n";
@@ -140,10 +144,17 @@ int main(int argc, char** argv) {
     bool ok = true;
     std::vector<CspLevelOutcome> outcomes;
     for (ExecutionLevel level : driver::all_levels()) {
-        CspLevelOutcome o = vp->run_csp(handle, level).outcome;
         std::cout << std::left << std::setw(24) << driver::to_string(level);
+        // A level that can't run this program (L-T2 today) is skipped. A level that can, but
+        // comes back without a result (a livelock, the cycle limit), has failed.
+        if (const auto why = vp->csp_supported(handle, level)) {
+            std::cout << "skipped: " << *why << "\n";
+            continue;
+        }
+        CspLevelOutcome o = vp->run_csp(handle, level).outcome;
         if (o.skipped) {
-            std::cout << "skipped: " << *o.skipped << "\n";
+            std::cout << "FAILED to run: " << *o.skipped << "\n";
+            ok = false;
             continue;
         }
         if (o.has_timing) std::cout << "makespan " << std::setw(8) << o.makespan;
