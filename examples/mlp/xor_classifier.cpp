@@ -287,7 +287,7 @@ int main() {
     std::cout << "IMPORTANT: This is a TIMING MODEL only.\n";
     std::cout << "- Cycle counts reflect real hardware behavior\n";
     std::cout << "- Actual values computed by reference implementation\n";
-    std::cout << "- See docs/FUNCTIONAL_SIMULATION_GAP_ANALYSIS.md\n";
+    std::cout << "- #257 makes the host API return simulator-computed values\n";
     std::cout << "========================================\n";
 
     return (correct == 4) ? 0 : 1;

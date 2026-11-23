@@ -13,6 +13,13 @@ set_target_properties(hello_kpu PROPERTIES
     C_STANDARD_REQUIRED ON
 )
 
+# hello_kpu exits non-zero when a step fails or the host <-> device round trip loses data,
+# so it is a smoke test of the C API (#497). It checks no launch values: the runtime is
+# timing only (#257).
+if(KPU_BUILD_TESTS)
+    add_test(NAME hello_kpu_c COMMAND hello_kpu)
+endif()
+
 # runtime_demo - Full runtime API demonstration
 add_executable(runtime_demo_c runtime_demo.c)
 target_link_libraries(runtime_demo_c PRIVATE StillwaterKPU::C_API)

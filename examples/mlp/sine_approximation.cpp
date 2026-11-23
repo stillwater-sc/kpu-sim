@@ -5,9 +5,11 @@
 // - Input: x value in range [-pi, pi]
 // - Output: approximation of sin(x)
 //
-// The weights are pre-trained using gradient descent to minimize MSE.
-// This demonstrates function approximation, a fundamental capability
-// of neural networks.
+// The weights below are illustrative, not trained: run on the host, they do not
+// approximate sin(x).
+//
+// TIMING MODEL ONLY: the runtime reports the network's cycles per layer but computes
+// no values, so this example checks no outputs (#257).
 
 #include <sw/runtime/graph.hpp>
 #include <sw/kpu/kpu_simulator.hpp>
@@ -21,15 +23,8 @@
 using namespace sw::runtime;
 using namespace sw::kpu;
 
-// Pre-trained weights for sine approximation
+// Illustrative weights for the network's shape (they are not trained)
 // Network: 1 -> 32 (ReLU) -> 32 (ReLU) -> 1
-// Trained on sin(x) for x in [-pi, pi]
-//
-// These weights were obtained by training with:
-// - 1000 epochs of gradient descent
-// - Learning rate 0.01
-// - MSE loss
-// - 100 training samples uniformly distributed in [-pi, pi]
 
 // First hidden layer: [1, 32]
 const float LAYER1_WEIGHTS[1 * 32] = {
@@ -142,36 +137,6 @@ const float LAYER3_WEIGHTS[32 * 1] = {
 
 const float LAYER3_BIAS[1] = {0.0f};
 
-// Reference forward pass
-float reference_sine_forward(float x,
-                              const float* w1, const float* b1,
-                              const float* w2, const float* b2,
-                              const float* w3, const float* b3) {
-    // Layer 1: [1] -> [32]
-    float h1[32];
-    for (int i = 0; i < 32; ++i) {
-        h1[i] = std::max(0.0f, x * w1[i] + b1[i]);  // ReLU
-    }
-
-    // Layer 2: [32] -> [32]
-    float h2[32];
-    for (int i = 0; i < 32; ++i) {
-        float sum = b2[i];
-        for (int j = 0; j < 32; ++j) {
-            sum += h1[j] * w2[j * 32 + i];
-        }
-        h2[i] = std::max(0.0f, sum);  // ReLU
-    }
-
-    // Layer 3: [32] -> [1]
-    float out = b3[0];
-    for (int i = 0; i < 32; ++i) {
-        out += h2[i] * w3[i];
-    }
-
-    return out;
-}
-
 int main() {
     std::cout << "============================================\n";
     std::cout << "Sine Wave Approximation on KPU Simulator\n";
@@ -198,12 +163,10 @@ int main() {
     const Size NUM_SAMPLES = 32;
     const float PI = 3.14159265358979f;
     std::vector<float> x_values(NUM_SAMPLES);
-    std::vector<float> expected(NUM_SAMPLES);
 
     for (Size i = 0; i < NUM_SAMPLES; ++i) {
         float t = static_cast<float>(i) / (NUM_SAMPLES - 1);
         x_values[i] = -PI + 2.0f * PI * t;
-        expected[i] = std::sin(x_values[i]);
     }
 
     // Build computational graph
@@ -291,58 +254,12 @@ int main() {
     }
     std::cout << "\n";
 
-    // Get output
-    std::vector<float> output(NUM_SAMPLES);
-    runner.get_output("output", output.data());
-
-    // Compute statistics
-    float mse = 0.0f;
-    float max_error = 0.0f;
-
-    std::cout << std::fixed << std::setprecision(4);
-    std::cout << "Sample results (every 4th point):\n";
-    std::cout << "     x      sin(x)    NN Output   Error\n";
-    std::cout << "  ------   --------   ---------   ------\n";
-
-    for (Size i = 0; i < NUM_SAMPLES; ++i) {
-        float err = std::abs(output[i] - expected[i]);
-        mse += err * err;
-        max_error = std::max(max_error, err);
-
-        if (i % 4 == 0) {
-            std::cout << "  " << std::setw(6) << x_values[i]
-                      << "   " << std::setw(8) << expected[i]
-                      << "   " << std::setw(9) << output[i]
-                      << "   " << std::setw(6) << err << "\n";
-        }
-    }
-
-    mse /= NUM_SAMPLES;
-    float rmse = std::sqrt(mse);
-
-    std::cout << "\n";
-    std::cout << "Error statistics:\n";
-    std::cout << "  MSE:       " << mse << "\n";
-    std::cout << "  RMSE:      " << rmse << "\n";
-    std::cout << "  Max Error: " << max_error << "\n";
-
-    // Also show reference implementation results
-    std::cout << "\nReference implementation comparison (first 8 points):\n";
-    std::cout << "     x      Reference   KPU Output\n";
-    std::cout << "  ------   ----------   ----------\n";
-    for (Size i = 0; i < 8; ++i) {
-        float ref = reference_sine_forward(x_values[i],
-                                            LAYER1_WEIGHTS, LAYER1_BIAS,
-                                            LAYER2_WEIGHTS, LAYER2_BIAS,
-                                            LAYER3_WEIGHTS, LAYER3_BIAS);
-        std::cout << "  " << std::setw(6) << x_values[i]
-                  << "   " << std::setw(10) << ref
-                  << "   " << std::setw(10) << output[i] << "\n";
-    }
-
-    std::cout << "\n============================================\n";
-    std::cout << "Note: The weights shown are illustrative.\n";
-    std::cout << "Proper training would yield better accuracy.\n";
+    // No error table: the runtime is timing only. runner.run() reports each layer's
+    // cycles, but computes no values, so the output is never written (#257 makes the
+    // host API return simulator-computed values).
+    std::cout << "============================================\n";
+    std::cout << "Note: the runtime is a timing model. It computes\n";
+    std::cout << "no outputs, so sin(x) is not compared here (#257).\n";
     std::cout << "============================================\n";
 
     return 0;
