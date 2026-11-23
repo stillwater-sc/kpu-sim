@@ -166,9 +166,9 @@ void print_levels(const std::vector<CspLevelOutcome>& levels, const std::vector<
                       << " cycles)\n";
             // L2 staging's credits (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 4).
             if (prog.l2 > 0)
-                std::cout << "        L2    peak " << o.peak_l2 << " of " << prog.l2 << " staged (in time), "
-                          << o.l2_slots.size() << " stagings, slot-bound " << o.l2_bound << " (" << o.l2_wait_cycles
-                          << " cycles)\n";
+                std::cout << "        L2    peak " << o.peak_l2_held << " of " << prog.l2 << " held (in time; "
+                          << o.peak_l2 << " staged), " << o.l2_slots.size() << " stagings, " << o.l2_copies
+                          << " copies, slot-bound " << o.l2_bound << " (" << o.l2_wait_cycles << " cycles)\n";
             std::cout << "        busy ";
             for (const auto& [p, b] : o.busy)
                 std::cout << " " << p << " " << b << "/" << (o.lanes.count(p) ? o.lanes.at(p) : 0);

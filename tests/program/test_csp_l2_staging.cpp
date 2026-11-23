@@ -465,3 +465,153 @@ TEST_CASE("L2 placement: the walker is the authority, the validator a lower boun
         CHECK_THAT(error_of(p, false), ContainsSubstring("needs an L2 slot"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Slice 2's step 2 (docs/plans/slot-credits-at-lca.md §4): L-T1 executes every L2 slot the walker
+// places -- an unstaged operand's copy and a fabric result's -- under that slot's own credit.
+
+namespace {
+
+using Hold = std::pair<std::string, std::uint32_t>;     // tile, L2 slot
+
+// The copies the walker places: each opens its slot (a copy's Move, a result's Drain).
+std::vector<Hold> walker_copies(const lang::Program& ast) {
+    std::vector<Hold> out;
+    lang::ActionStream s(ast);
+    while (auto e = s.next())
+        if (e->opens_staging && e->action.copy && e->action.l2) out.emplace_back(e->action.tile.to_string(), e->action.l2->slot);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::string with_l2(std::string src, int n) {
+    const std::string from = "l2 = 8", to = "l2 = " + std::to_string(n);
+    src.replace(src.find(from), from.size(), to);
+    return src;
+}
+
+}  // namespace
+
+TEST_CASE("L2 copies at L-T1: each copy holds the walker's slot, credit to L2Release", "[program][csp][run][l2][slots]") {
+    const auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    const lang::Program ast = lang::parse(matmul(false));
+    const auto o = driver::csp_run_level(ExecutionLevel::BlockSequential, ast, &d, driver::csp_inputs(ast));
+    REQUIRE_FALSE(o.skipped);
+    CHECK(o.l2_slots.empty());                  // the program stages nothing of its own
+    // Every copy the walker placed, in the slot it placed it: 2 operand copies per call (64 calls)
+    // and one result per C tile (16).
+    std::vector<Hold> lt1;
+    for (const auto& sl : o.l2_copy_slots) lt1.emplace_back(sl.tile.to_string(), sl.place.slot);
+    std::sort(lt1.begin(), lt1.end());
+    CHECK(lt1.size() == 2 * 64 + 16);
+    CHECK(o.l2_copies == lt1.size());
+    CHECK(lt1 == walker_copies(ast));
+    // No slot is held twice at once, and never more than the program's L2 slots.
+    std::map<std::uint32_t, std::vector<std::pair<std::uint64_t, std::uint64_t>>> by_slot;
+    for (const auto& sl : o.l2_copy_slots) {
+        CAPTURE(sl.tile.to_string(), sl.place.slot);
+        CHECK(sl.t1 >= sl.t0);
+        by_slot[sl.place.slot].emplace_back(sl.t0, sl.t1);
+    }
+    for (auto& [slot, iv] : by_slot) {
+        CAPTURE(slot);
+        std::sort(iv.begin(), iv.end());
+        for (std::size_t i = 1; i < iv.size(); ++i) CHECK(iv[i].first >= iv[i - 1].second);
+    }
+    CHECK(o.peak_l2_held >= 1);
+    CHECK(o.peak_l2_held <= static_cast<std::size_t>(ast.l2));
+    // A result's slot opens at its first call (decision 1): its hold starts where that call starts.
+    std::map<std::string, std::uint64_t> first_call;
+    for (const auto& rec : o.records)
+        if (rec.kind == Action::Kind::Call) first_call.emplace(rec.tile.to_string(), rec.start);
+    std::size_t results = 0;
+    for (const auto& sl : o.l2_copy_slots)
+        if (sl.tile.operand == "C") {
+            ++results;
+            CAPTURE(sl.tile.to_string());
+            REQUIRE(first_call.count(sl.tile.to_string()));
+            CHECK(sl.t0 == first_call.at(sl.tile.to_string()));
+            CHECK(sl.feeds == 0);               // a result is drained into its slot, never fed from it
+        }
+    CHECK(results == 16);
+    // Values do not move: L-T1 against L-B, bit for bit.
+    const auto lb = driver::csp_run_level(ExecutionLevel::Behavioral, ast, &d, driver::csp_inputs(ast));
+    CHECK(o.values.operand("C").values == lb.values.operand("C").values);
+}
+
+TEST_CASE("L2 copies at L-T1: with scarce slots, a credit sets a Move's ready", "[program][csp][run][l2][slots]") {
+    // Three slots, the fewest an output-stationary call needs (A's copy, B's copy, C's result):
+    // every new copy waits for a slot's L2Release.
+    const auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    const lang::Program ast = lang::parse(with_l2(matmul(false), 3));
+    const auto o = driver::csp_run_level(ExecutionLevel::BlockSequential, ast, &d, driver::csp_inputs(ast));
+    REQUIRE_FALSE(o.skipped);
+    CHECK(o.peak_l2_held <= 3);
+    // #476's deferred case: a slot's credit set a Move's ready, but the BlockMover lane (in-order
+    // issue on one lane), not the slot, decided its start, so no L2 wait is charged to it.
+    std::size_t credit_moves_unbound = 0;
+    for (const auto& rec : o.records)
+        if (rec.kind == Action::Kind::Move && rec.ready_by == decltype(rec.ready_by)::Credit && rec.l2_wait == 0) {
+            CHECK(rec.start > rec.ready);
+            ++credit_moves_unbound;
+        }
+    CHECK(credit_moves_unbound > 0);
+    // Scarce slots move the timing, never the values.
+    const auto lb = driver::csp_run_level(ExecutionLevel::Behavioral, ast, &d, driver::csp_inputs(ast));
+    CHECK(o.values.operand("C").values == lb.values.operand("C").values);
+    const auto roomy = driver::csp_run_level(ExecutionLevel::BlockSequential, lang::parse(matmul(false)), &d,
+                                             driver::csp_inputs(ast));
+    CHECK(o.makespan >= roomy.makespan);
+}
+
+TEST_CASE("L2 copies at L-T1: a result's slot holds back its first call (decision 1)", "[program][csp][run][l2][slots]") {
+    // A and B staged, so D's call needs no Move: its operands are fed while C's result still
+    // holds the third slot, the one the ring gives D's result. D's first call waits for C's
+    // L2Release (after its Writeback), and that wait is charged to the slot.
+    const std::string src =
+        "csp 1.1\nprogram t machine flat(l3 = 4, l2 = 3) {\n"
+        "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
+        "  tensor C[16,16] tile 16x16 out;\n  tensor D[16,16] tile 16x16 out;\n"
+        "  resident A[0, 0], B[0, 0];\n"
+        "  stage A[0, 0], B[0, 0] in l2 {\n"
+        "    acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n    store C[0, 0];\n"
+        "    acc D[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> D[0, 0]; }\n    store D[0, 0];\n"
+        "  }\n  release A[0, 0], B[0, 0];\n}\n";
+    const auto d = platform::read_spec_file("tests/program/deploy/kpu_s1.json").device(0);
+    const lang::Program ast = lang::parse(src);
+    const auto o = driver::csp_run_level(ExecutionLevel::BlockSequential, ast, &d, driver::csp_inputs(ast));
+    REQUIRE_FALSE(o.skipped);
+    REQUIRE(o.l2_copy_slots.size() == 2);
+    const auto& c = o.l2_copy_slots[0];
+    const auto& dd = o.l2_copy_slots[1];
+    CHECK(c.tile.to_string() == "C[0,0]");
+    CHECK(dd.tile.to_string() == "D[0,0]");
+    CHECK(c.place.slot == dd.place.slot);       // the ring gives D's result C's slot
+    const auto* d_call = [&]() -> const decltype(o.records)::value_type* {
+        for (const auto& rec : o.records)
+            if (rec.kind == Action::Kind::Call && rec.tile.to_string() == "D[0,0]") return &rec;
+        return nullptr;
+    }();
+    REQUIRE(d_call != nullptr);
+    CHECK(d_call->ready_by == decltype(d_call->ready_by)::Credit);
+    CHECK(d_call->l2_wait > 0);
+    CHECK(d_call->start == c.t1);               // the moment C's L2Release returned the credit
+    CHECK(dd.t0 == d_call->start);
+    CHECK(o.l2_bound == 1);
+    const auto lb = driver::csp_run_level(ExecutionLevel::Behavioral, ast, &d, driver::csp_inputs(ast));
+    CHECK(o.values.operand("D").values == lb.values.operand("D").values);
+}
+
+TEST_CASE("L2 copies at L-T1: on two compute tiles they run unplaced, and say so", "[program][csp][run][l2][slots]") {
+    // A level-1 program places every copy in compute tile 0's L2; L-T1 spreads the calls over the
+    // tiles, so there it can't execute those slots (multi-tile placement is #403).
+    const auto d = platform::read_spec_file("tests/program/deploy/kpu_t4.json").device(0);
+    REQUIRE(d.compute_tiles == 2);
+    const lang::Program ast = lang::parse(matmul(false));
+    const auto o = driver::csp_run_level(ExecutionLevel::BlockSequential, ast, &d, driver::csp_inputs(ast));
+    REQUIRE_FALSE(o.skipped);
+    CHECK(o.l2_copies == 0);
+    CHECK(o.l2_copy_slots.empty());
+    CHECK(std::any_of(o.unmodelled.begin(), o.unmodelled.end(),
+                      [](const std::string& u) { return u.find("L2 copies on 2 compute tiles") != std::string::npos; }));
+}
