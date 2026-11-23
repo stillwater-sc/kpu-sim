@@ -287,9 +287,15 @@ flight.
 
 ### About `examples/`
 
-`examples/` (basic, behavioral, blas, …) still builds, but most of it predates the CSP program
-stack. It exercises the hardware components' APIs directly, not the program path above. Use it
-to learn a component's interface, not as a model of how programs run.
+The program path above, as code: [`examples/program/`](../examples/program/README.md).
+`program_run_levels` loads a `.csp` program on the virtual platform, runs it at every level,
+checks every operand per tile against L-B, and with `--placement` checks that L-T1 and L-CA
+execute the walker's L3 and L2 slots. Read `run_levels.cpp` to see the API that `kpu-run` is
+built on.
+
+The rest of `examples/` (basic, behavioral, blas, …) predates the CSP program stack. It
+exercises the hardware components' APIs directly, not the program path. Use it to learn a
+component's interface, not as a model of how programs run.
 
 ## 5. How we work
 
