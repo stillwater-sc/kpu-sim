@@ -15,10 +15,9 @@ to graph compilation for a simple two-layer neural network.
 import sys
 import os
 
-# Add the build directory to the path
-# Adjust this path based on your build configuration
-build_dir = os.path.join(os.path.dirname(__file__), '../../build/src/bindings/python/Release')
-sys.path.insert(0, build_dir)
+# Fall back to the default build tree when PYTHONPATH doesn't provide the module.
+build_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'build', 'src', 'tools', 'bindings', 'python', 'Release')
+sys.path.append(build_dir)
 
 import stillwater_kpu as kpu
 
@@ -144,7 +143,7 @@ def demo_kernel_graph():
     if valid:
         print("  Graph validation: PASSED")
     else:
-        print(f"  Graph validation: FAILED - {error}")
+        raise RuntimeError(f"graph validation failed: {error}")
     print()
 
     # Get execution order
@@ -195,7 +194,7 @@ def demo_kernel_graph():
         print(f"  Fused pairs: {len(result.fused_pairs)}")
         print(f"  Workspace required: {result.workspace_required / 1024:.1f} KB")
     else:
-        print(f"  Failed: {result.error_message}")
+        raise RuntimeError(f"graph compilation failed: {result.error_message}")
 
 def demo_diamond_graph():
     """Demonstrate a diamond-shaped graph with parallel branches"""

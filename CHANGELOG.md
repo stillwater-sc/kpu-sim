@@ -34,6 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `kpu` package no longer swallows stderr** (#502). Its NNPACK-warning filter pointed fd 2 at a pipe and
+  read it only at exit, writing what it read back into the same pipe. So everything a program importing `kpu` wrote
+  to stderr was lost, tracebacks included, and a program that wrote more than the pipe buffer blocked forever. A
+  reader thread now forwards each line as it arrives, dropping only the NNPACK ones.
+  `python/tests/test_stderr_filter.py` (CTest `python_kpu_stderr_filter`) checks a traceback, forwarding and
+  suppression, and a 1 MB write. All three checks fail on the old filter.
+- **`examples/torch/model_compatibility.py` runs again** (#502). It exited 1 with no output after "Testing 35
+  models…", because it built each `ModelTestResult` without its required `status` and the filter above hid the
+  `TypeError`.
+- **`examples/python/` runs against the current native binding, under CTest** (#502).
+  - The four kernel scripts put a stale build path (`build/src/bindings/...`) ahead of `PYTHONPATH` and imported an
+    old module. They now fall back to `build/src/tools/bindings/...` only when `PYTHONPATH` doesn't provide it.
+  - `address_based_dma_example.py` used a removed scratchpad API. It now moves Host → External → L3, reads back and
+    checks every destination, and exits non-zero on a mismatch.
+  - CTest runs all five as `python_example_*` (label `python`).
+  - Deleted the seven `baseline/` and `educational/` scripts. They were written for the legacy
+    `tools/python/stillwater_kpu` package, whose native module no longer exists, so they ran on its NumPy mock.
+  - `examples/python/README.md` and the top-level `README.md`'s Python section describe what exists: the `kpu`
+    package first, then the native module.
 - **`examples/basic/data_movement_pipeline` no longer aborts** (#498). It never set
   `memory_bank_capacity_mb`, which `KPUSimulator::Config` defaults to 0, so its first write threw
   `Memory write out of bounds`. `README.md` links to it as the data-movement example. It now

@@ -53,39 +53,93 @@ def _install_cpp_warning_filter():
 
     _suppressed = [b'NNPACK', b'Could not initialize NNPACK']
 
-    # Save original stderr fd
+    # Save the original stderr, then point fd 2 at a pipe. A reader thread
+    # forwards every line that isn't suppressed to the original stderr as it
+    # arrives, so nothing written to stderr (a traceback included) is lost, and
+    # the pipe never fills and blocks the writer.
     _saved_fd = _os.dup(_stderr_fd)
-
-    # Create pipe to capture stderr
     _read_fd, _write_fd = _os.pipe()
     _os.dup2(_write_fd, _stderr_fd)
     _os.close(_write_fd)
 
-    def _flush_filtered_stderr():
-        """Read captured stderr and write filtered content."""
-        try:
-            _os.set_blocking(_read_fd, False)
-            captured = _os.read(_read_fd, 1024 * 1024)
-            for line in captured.split(b'\n'):
-                if line and not any(s in line for s in _suppressed):
-                    _sys.stderr.buffer.write(line + b'\n')
-                    _sys.stderr.buffer.flush()
-        except (BlockingIOError, OSError):
-            pass
+    import re
+    import threading
+    _record_end = re.compile(rb'(?<=[\r\n])')
+    _max_pending = 65536
+    _lock = threading.Lock()
+    # 'overflowed': the current record passed the bound, so the rest of it, up
+    # to its terminator, is forwarded as is.
+    _state = {'pending': b'', 'done': False, 'overflowed': False}
 
-    def _restore_stderr():
-        """Restore original stderr."""
-        _flush_filtered_stderr()
+    def _write_all(data):
+        while data:
+            data = data[_os.write(_saved_fd, data):]
+
+    def _emit(record):
+        # Suppression applies to ordinary lines only: a record past the bound,
+        # whole or the end of one already passed through, is forwarded as is.
+        if _state['overflowed'] or len(record) > _max_pending:
+            _write_all(record)
+        elif record and not any(s in record for s in _suppressed):
+            _write_all(record)
+
+    def _forward():
+        with _os.fdopen(_read_fd, 'rb', buffering=0) as pipe:
+            while True:
+                chunk = pipe.read(65536)
+                with _lock:
+                    if _state['done']:
+                        return
+                    if not chunk:
+                        _emit(_state['pending'])
+                        _state['done'] = True
+                        return
+                    # A record ends at '\n' or '\r' (progress output). An overlong
+                    # unterminated record is forwarded as is, so `pending` stays bounded.
+                    *records, rest = _record_end.split(_state['pending'] + chunk)
+                    for record in records:
+                        _emit(record)
+                        _state['overflowed'] = False  # the record ended
+                    if _state['overflowed'] or len(rest) > _max_pending:
+                        _write_all(rest)  # as is: no whole line to judge suppression on
+                        _state['overflowed'] = True
+                        rest = b''
+                    _state['pending'] = rest
+
+    _reader = threading.Thread(target=_forward, name='kpu-stderr-filter', daemon=True)
+    try:
+        _reader.start()
+    except BaseException:
+        # No reader to drain the pipe: put stderr back before failing.
         _os.dup2(_saved_fd, _stderr_fd)
         _os.close(_saved_fd)
         _os.close(_read_fd)
+        raise
 
-    # Register cleanup at exit
+    def _flush():
+        try:
+            _sys.stderr.flush()
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    def _restore_stderr():
+        """Restore the original stderr once the reader has forwarded everything."""
+        _flush()
+        # fd 2 holds the pipe's write end. Restoring it closes that end, so the
+        # reader reaches EOF and finishes, unless a child process inherited fd 2
+        # and is still running: then stop waiting after a bounded join, and
+        # forward the unterminated tail the reader is holding.
+        _os.dup2(_saved_fd, _stderr_fd)
+        _reader.join(timeout=2.0)
+        with _lock:
+            if not _state['done']:
+                _emit(_state['pending'])
+                _state['done'] = True
+
     import atexit
     atexit.register(_restore_stderr)
 
-    # Also flush periodically during imports
-    return _flush_filtered_stderr
+    return _flush
 
 _flush_stderr = _install_cpp_warning_filter()
 

@@ -1,148 +1,66 @@
-# KPU Python Examples
+# Native `stillwater_kpu` Examples
 
-This directory contains Python examples demonstrating the Stillwater KPU simulator.
+These scripts use the native `stillwater_kpu` module (`src/tools/bindings/python`), which exposes the simulator's
+components directly. For compiling Python functions and PyTorch models, use the `kpu` package in
+[`python/`](../../python/README.md) instead; its examples are in [`fusion/`](../fusion/), [`torch/`](../torch/) and
+[`applications/`](../applications/).
 
 ## Setup
 
-Before running examples, ensure the Python bindings are built:
-
 ```bash
-# From repository root
+# From the repository root, with `build` configured as Release (`cmake --preset release`)
 cmake --build build --target stillwater_kpu
+export PYTHONPATH=build/src/tools/bindings/python/Release
 ```
 
-The examples automatically add the build directory to the Python path.
+The module goes to the directory of the build's configuration: for a Debug build, use
+`build/src/tools/bindings/python/Debug`. Each script falls back to the Release directory only when `PYTHONPATH`
+doesn't provide the module, so set `PYTHONPATH` for any other configuration.
 
-## Kernel and Graph Examples
+## Scripts
 
-### Main Examples
-
-| Script | Description |
+| Script | What it does |
 |--------|-------------|
-| `kernel_graph_example.py` | Comprehensive demo of kernels, compilation, and graphs |
-| `address_based_dma_example.py` | DMA transfers using unified address space |
+| `address_based_dma_example.py` | DMA transfers through the unified address space: Host → External → L3, per level and routed by address. Checks every destination. |
+| `kernel_graph_example.py` | Creates matmul and MLP kernels, compiles them, builds a two-layer kernel graph, and validates it. |
+| `test_kernel_validation.py` | Kernel creation and metadata checks. |
+| `test_graph_validation.py` | Kernel-graph construction and analysis checks. |
+| `test_compiler_regression.py` | Kernel compiler regression checks. |
 
-### Running the Kernel Graph Example
+Each exits non-zero when a check fails. CTest runs all five as `python_example_*`
+(`ctest --test-dir build -L python`), so an API change that breaks one fails the build's tests. They are registered only when tests and the
+Python bindings are enabled (`KPU_BUILD_TESTS`, `KPU_BUILD_PYTHON_BINDINGS`, pybind11 available) and CMake knows the
+interpreter the module was built for. Otherwise `ctest -L python` runs none of them, and CMake warns when the
+binding is built but no interpreter is found.
 
-```bash
-python3 examples/python/kernel_graph_example.py
-```
+The kernel scripts use the kernel path behind `isa::ConcurrentExecutor`, which ADR 0001 D6 freezes (#266). They
+report structure and cycles, not values, and they are deleted or ported with that engine.
 
-This demonstrates:
-- Creating matmul and MLP kernels
-- Using the KernelCompiler with auto-optimization
-- Building multi-kernel computation graphs
-- Analyzing execution order and parallelism
-- DOT graph visualization
-- Configuring the concurrent executor
-
-## Test Suites
-
-### Validation and Regression Tests
-
-| Script | Description |
-|--------|-------------|
-| `test_kernel_validation.py` | Validates kernel creation and metadata |
-| `test_graph_validation.py` | Validates graph construction and analysis |
-| `test_compiler_regression.py` | Regression tests for the compiler |
-
-### Running Tests
-
-```bash
-# Run all test suites
-python3 examples/python/test_kernel_validation.py
-python3 examples/python/test_graph_validation.py
-python3 examples/python/test_compiler_regression.py
-
-# Or run a specific test
-python3 -c "
-import sys; sys.path.insert(0, 'build/src/bindings/python/Release')
-import stillwater_kpu as kpu
-kernel = kpu.Kernel.create_matmul(64, 64, 64)
-print(f'Kernel: {kernel.name()}, FLOPs: {kernel.total_flops():,}')
-"
-```
-
-## Legacy Examples
-
-### Basic Examples (`baseline/`)
-- `simple_kpu.py` - First steps with KPU
-- `core_features_demo.py` - Core module utilities
-- `system_info_demo.py` - System diagnostics
-- `timing_demo.py` - Performance measurement
-
-### Educational Examples (`educational/`)
-- `neural_network_demo.py` - Neural network layer computation
-- `performance_analysis.py` - Scaling analysis
-- `blocked_matmul.py` - Memory-efficient algorithms
-
-## Quick Reference
-
-### Import the Module
+## Quick reference
 
 ```python
-import sys
-sys.path.insert(0, 'build/src/bindings/python/Release')
 import stillwater_kpu as kpu
-```
 
-### Create Kernels
-
-```python
-# Matrix multiplication
+# Kernels
 matmul = kpu.Kernel.create_matmul(M=1024, N=1024, K=1024)
+mlp = kpu.Kernel.create_mlp(M=64, N=512, K=256, activation=kpu.ActivationType.GELU, has_bias=True)
 
-# MLP with activation
-mlp = kpu.Kernel.create_mlp(
-    M=64, N=512, K=256,
-    activation=kpu.ActivationType.GELU,
-    has_bias=True
-)
-```
-
-### Compile with Optimization
-
-```python
+# Compile, with tiling statistics
 compiler = kpu.KernelCompiler()
 kernel = compiler.compile_matmul(1024, 1024, 1024)
-
 stats = compiler.last_stats()
-print(f"Tiles: {stats.total_tiles}")
-print(f"Arithmetic Intensity: {stats.estimated_arithmetic_intensity:.2f}")
-```
+print(f"Tiles: {stats.total_tiles}, arithmetic intensity: {stats.estimated_arithmetic_intensity:.2f}")
 
-### Build Kernel Graphs
-
-```python
+# Kernel graphs
 graph = kpu.KernelGraph("my_network")
-
 fc1 = graph.add_kernel(kpu.Kernel.create_mlp(64, 256, 128, kpu.ActivationType.RELU, True), "fc1")
 fc2 = graph.add_kernel(kpu.Kernel.create_mlp(64, 64, 256, kpu.ActivationType.NONE, True), "fc2")
 graph.add_edge(fc1, fc2, "C", "A")
-
 result = graph.compile()
 ```
 
 ## Documentation
 
-For comprehensive documentation, see:
-- `docs/python-integration-guide.md` - Complete Python API guide
-- `docs/multi-kernel-fusion-support.md` - Multi-kernel graph documentation
-
-## Directory Structure
-
-```
-examples/python/
-├── README.md                      # This file
-├── kernel_graph_example.py        # Main kernel/graph demo
-├── address_based_dma_example.py   # DMA example
-├── test_kernel_validation.py      # Kernel tests
-├── test_graph_validation.py       # Graph tests
-├── test_compiler_regression.py    # Compiler tests
-├── baseline/                      # Basic examples
-│   ├── simple_kpu.py
-│   └── ...
-└── educational/                   # Learning examples
-    ├── neural_network_demo.py
-    └── ...
-```
+- [`docs/07-runtime/python-bindings.md`](../../docs/07-runtime/python-bindings.md): the native bindings
+- [`docs/07-runtime/python-integration-guide.md`](../../docs/07-runtime/python-integration-guide.md): the Python API guide
+- [`docs/design/multi-kernel-fusion-support.md`](../../docs/design/multi-kernel-fusion-support.md): kernel graphs
