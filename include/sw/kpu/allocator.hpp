@@ -220,15 +220,27 @@ public:
             // Split: [start, aligned) stays free, [aligned, aligned + size) is taken,
             // [aligned + size, end) stays free. The block was free and coalesced, so
             // its neighbours are allocated, and I2 holds for the pieces.
-            if (aligned > start) {
-                it->second.size = aligned - start;
-            } else {
-                blocks_.erase(it);
-            }
+            //
+            // Strong exception guarantee: everything that can throw (the label's copy, a
+            // map node's allocation) happens before the existing block changes, and an
+            // insertion that throws is undone. A failed call leaves the allocator as it was.
+            Block taken{size, alignment, label, false};
+            auto suffix = blocks_.end();
             if (aligned + size < end) {
-                blocks_[aligned + size] = Block{end - (aligned + size), 0, std::string(), true};
+                suffix = blocks_.emplace(aligned + size,
+                                         Block{end - (aligned + size), 0, std::string(), true}).first;
             }
-            blocks_[aligned] = Block{size, alignment, label, false};
+            if (aligned > start) {
+                try {
+                    blocks_.emplace(aligned, std::move(taken));
+                } catch (...) {
+                    if (suffix != blocks_.end()) blocks_.erase(suffix);
+                    throw;
+                }
+                it->second.size = aligned - start;   // the prefix stays free
+            } else {
+                it->second = std::move(taken);       // reuse the node: no allocation
+            }
             record_allocation(size);
             return aligned;
         }
@@ -239,11 +251,21 @@ public:
         if (aligned < next_free_ || aligned > limit || size > limit - aligned) {
             return std::nullopt;  // Out of memory
         }
+        // Strong exception guarantee, as above: the padding is inserted first, and removed
+        // again if the allocation's own insertion throws.
+        Block taken{size, alignment, label, false};
+        auto padding = blocks_.end();
         if (aligned > next_free_) {
             // The padding: the last block is allocated (I3), so it can't coalesce
-            blocks_[next_free_] = Block{aligned - next_free_, 0, std::string(), true};
+            padding = blocks_.emplace(next_free_,
+                                      Block{aligned - next_free_, 0, std::string(), true}).first;
         }
-        blocks_[aligned] = Block{size, alignment, label, false};
+        try {
+            blocks_.emplace(aligned, std::move(taken));
+        } catch (...) {
+            if (padding != blocks_.end()) blocks_.erase(padding);
+            throw;
+        }
         next_free_ = aligned + size;
         record_allocation(size);
         return aligned;

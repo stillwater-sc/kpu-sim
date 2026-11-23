@@ -55,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     size, so the byte count drifted and could wrap. It now tiles its used span with blocks and
     checks four invariants (`is_consistent()`).
   - `try_allocate` returns `std::optional`, so a region based at address 0 can hand out 0.
+  - `try_allocate` has a strong exception guarantee: if a map node or a label copy throws, the
+    allocator is left as it was.
   - The peak, which `ResourceManager::allocate` never updated, now tracks the high watermark.
 
 - **A stale corpus result:** `lu_64_t16.result.l0` no longer matched what `main` computes (23 rows
