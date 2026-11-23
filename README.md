@@ -313,55 +313,31 @@ data at each stage.
 
 ### Python API
 
-#### Basic Usage
+The Python surface is the `kpu` package in [`python/kpu`](python/) (see [`python/README.md`](python/README.md)).
+It compiles Python functions and PyTorch models for the KPU and computes their values:
 
 ```python
-import stillwater_kpu as kpu
+import kpu
 import numpy as np
 
-# Create simulator with context manager
-with kpu.Simulator() as sim:
-    print(f"Main memory: {sim.main_memory_size // (1024**3)} GB")
-    print(f"Scratchpad: {sim.scratchpad_size // (1024**2)} MB")
+@kpu.compile
+def mlp(x, w1, w2):
+    h = kpu.relu(x @ w1)
+    return h @ w2
 
-    # Matrix multiplication
-    A = np.random.randn(100, 200).astype(np.float32)
-    B = np.random.randn(200, 150).astype(np.float32)
+x = np.random.randn(32, 784).astype(np.float32)
+w1 = np.random.randn(784, 128).astype(np.float32)
+w2 = np.random.randn(128, 10).astype(np.float32)
 
-    # KPU computation
-    C = sim.matmul(A, B)
-
-    # Verify against NumPy
-    C_numpy = A @ B
-    assert np.allclose(C, C_numpy), "Results don't match!"
-    print("✓ Results match NumPy reference")
+result = mlp(kpu.Tensor(x), kpu.Tensor(w1), kpu.Tensor(w2))
+assert np.allclose(result.numpy(), np.maximum(x @ w1, 0) @ w2, rtol=1e-4, atol=1e-3)
 ```
 
-#### Performance Benchmarking
+Its examples are in [`examples/fusion/`](examples/fusion/), [`examples/torch/`](examples/torch/) and
+[`examples/applications/`](examples/applications/).
 
-```python
-import stillwater_kpu as kpu
-
-with kpu.Simulator() as sim:
-    # Benchmark matrix multiplication
-    results = sim.benchmark_matmul(
-        M=256, N=256, K=256,
-        iterations=10
-    )
-
-    print(f"Matrix size: {results['matrix_size']}")
-    print(f"KPU time: {results['kpu_time_ms']:.2f} ms")
-    print(f"NumPy time: {results['numpy_time_ms']:.2f} ms")
-    print(f"KPU GFLOPS: {results['kpu_gflops']:.2f}")
-```
-
-#### Advanced Examples
-
-See the [`examples/python/`](examples/python/) directory for:
-- Neural network layer computation
-- Performance scaling analysis
-- Matrix chain optimization
-- Educational demonstrations
+The native `stillwater_kpu` module (`src/tools/bindings/python`) exposes the simulator's components directly. Its
+examples are in [`examples/python/`](examples/python/), and CTest runs each of them (label `python`).
 
 ## Testing
 

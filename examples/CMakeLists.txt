@@ -71,5 +71,23 @@ if(KPU_BUILD_PYTHON_BINDINGS)
             COMPONENT Examples
         )
     endif()
+
+    # Run the native-binding examples, so an API change can't silently break
+    # them (#502). They use the interpreter pybind11 built the module for.
+    if(KPU_BUILD_TESTS AND TARGET stillwater_kpu AND PYTHON_EXECUTABLE)
+        foreach(_script
+                address_based_dma_example
+                kernel_graph_example
+                test_kernel_validation
+                test_graph_validation
+                test_compiler_regression)
+            add_test(NAME python_example_${_script}
+                COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/${_script}.py)
+            set_tests_properties(python_example_${_script} PROPERTIES
+                ENVIRONMENT "PYTHONPATH=$<SHELL_PATH:$<TARGET_FILE_DIR:stillwater_kpu>>"
+                LABELS "python"
+                TIMEOUT 120)
+        endforeach()
+    endif()
 endif()
 

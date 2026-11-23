@@ -58,7 +58,7 @@ class ModelTestResult:
     """Result of testing a single model."""
     name: str
     category: str
-    status: TestStatus
+    status: TestStatus = TestStatus.SKIPPED
     compile_time: float = 0.0
     inference_time: float = 0.0
     max_diff: float = 0.0

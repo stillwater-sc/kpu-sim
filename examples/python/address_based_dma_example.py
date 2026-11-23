@@ -1,38 +1,67 @@
 """
-Example demonstrating the new address-based DMA API in Python.
+Address-based DMA through the native `stillwater_kpu` binding.
 
-This example shows how to use the unified address space and address-based
-DMA operations in the KPU simulator Python bindings.
+Every memory in the KPU sits in one unified address space. A DMA transfer
+names a source and a destination address, and the address decoder routes it.
+This example moves data Host -> External -> L3 with the per-level calls and
+with the any-to-any `start_dma_transfer`, then reads every destination back
+and checks it. It exits non-zero if any check fails.
+
+Run it with the module on PYTHONPATH, e.g.
+    PYTHONPATH=build/src/tools/bindings/python/Release \
+        python3 examples/python/address_based_dma_example.py
 """
 
+import os
+import sys
+
+# Fall back to the default build tree when PYTHONPATH doesn't provide the module.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             '..', '..', 'build', 'src', 'tools', 'bindings', 'python', 'Release'))
+
 import stillwater_kpu as kpu
-import numpy as np
+
+FLOAT_BYTES = 4
+failures = 0
+
+
+def check(label, got, expected):
+    global failures
+    if got == expected:
+        print(f"   PASS {label}")
+    else:
+        failures += 1
+        mismatch = next(i for i, (g, e) in enumerate(zip(got, expected)) if g != e) \
+            if len(got) == len(expected) else None
+        detail = f"first mismatch at [{mismatch}]: {got[mismatch]} != {expected[mismatch]}" \
+            if mismatch is not None else f"length {len(got)} != {len(expected)}"
+        print(f"   FAIL {label}: {detail}")
+
 
 def main():
     print("=" * 60)
     print("Address-Based DMA API Example")
     print("=" * 60)
 
-    # Configure simulator with all memory hierarchy levels
     config = kpu.SimulatorConfig()
 
-    # Host memory (external to KPU - models system memory)
+    # Host memory (system memory, outside the KPU)
     config.host_memory_region_count = 1
-    config.host_memory_region_capacity_mb = 1024  # 1GB
+    config.host_memory_region_capacity_mb = 64
     config.host_memory_bandwidth_gbps = 50
 
-    # External memory (local to KPU - HBM/GDDR)
+    # External memory (the KPU's own HBM/GDDR banks)
     config.memory_bank_count = 2
-    config.memory_bank_capacity_mb = 256  # 256MB per bank
+    config.memory_bank_capacity_mb = 64
     config.memory_bandwidth_gbps = 100
 
-    # On-chip memory hierarchy
+    # On-chip buffers
     config.l3_tile_count = 2
-    config.l3_tile_capacity_kb = 512  # 512KB per tile
+    config.l3_tile_capacity_kb = 512
     config.l2_bank_count = 4
-    config.l2_bank_capacity_kb = 128  # 128KB per bank
-    config.scratchpad_count = 2
-    config.scratchpad_capacity_kb = 64  # 64KB per scratchpad
+    config.l2_bank_capacity_kb = 128
+    config.l1_buffer_count = 2
+    config.l1_buffer_capacity_kb = 64
 
     # Compute and data movement engines
     config.compute_tile_count = 2
@@ -40,129 +69,49 @@ def main():
     config.block_mover_count = 2
     config.streamer_count = 4
 
-    # Create simulator
     sim = kpu.KPUSimulator(config)
 
-    print(f"\nMemory Configuration:")
-    print(f"  Host memory regions: {sim.get_host_memory_region_count()}")
-    print(f"  External banks: {sim.get_memory_bank_count()}")
-    print(f"  L3 tiles: {sim.get_l3_tile_count()}")
-    print(f"  L2 banks: {sim.get_l2_bank_count()}")
-    print(f"  Scratchpads: {sim.get_scratchpad_count()}")
-    print(f"  DMA engines: {sim.get_dma_engine_count()}")
+    print("\nUnified address space:")
+    print(f"  Host[0]     0x{sim.get_host_memory_region_base(0):08x}")
+    print(f"  External[0] 0x{sim.get_external_bank_base(0):08x}")
+    print(f"  External[1] 0x{sim.get_external_bank_base(1):08x}")
+    print(f"  L3[0]       0x{sim.get_l3_tile_base(0):08x}")
+    print(f"  L3[1]       0x{sim.get_l3_tile_base(1):08x}")
 
-    # Print unified address space layout
-    print(f"\nUnified Address Space Layout:")
-    print(f"  Host[0] base:       0x{sim.get_host_memory_region_base(0):08x}")
-    print(f"  External[0] base:   0x{sim.get_external_bank_base(0):08x}")
-    print(f"  External[1] base:   0x{sim.get_external_bank_base(1):08x}")
-    if sim.get_l3_tile_count() > 0:
-        print(f"  L3[0] base:         0x{sim.get_l3_tile_base(0):08x}")
-    if sim.get_l2_bank_count() > 0:
-        print(f"  L2[0] base:         0x{sim.get_l2_bank_base(0):08x}")
-    print(f"  Scratchpad[0] base: 0x{sim.get_scratchpad_base(0):08x}")
+    # === 1: Host -> External -> L3, one call per level ===
+    print("\n1. Host -> External -> L3 (per-level calls)")
+    data = [float(i) for i in range(256)]
+    size = len(data) * FLOAT_BYTES
+    sim.write_host_memory(0, 0, data)
 
-    # === Example 1: Host → External → Scratchpad ===
-    print("\n" + "=" * 60)
-    print("Example 1: Host → External → Scratchpad data flow")
-    print("=" * 60)
-
-    # Create test data
-    test_data = [float(i) for i in range(256)]
-
-    # Step 1: Write data to host memory
-    print("\n1. Writing test data to host memory...")
-    sim.write_host_memory(0, 0, test_data)
-
-    # Step 2: DMA from host to external memory
-    print("2. DMA transfer: Host → External...")
-    host_addr = sim.get_host_memory_region_base(0) + 0
-    ext_addr = sim.get_external_bank_base(0) + 0
-    transfer_size = len(test_data) * 4  # 4 bytes per float
-
-    transfer_complete = False
-    def on_complete():
-        nonlocal transfer_complete
-        transfer_complete = True
-        print("   Transfer complete!")
-
-    sim.dma_host_to_external(0, host_addr, ext_addr, transfer_size, on_complete)
+    done = []
+    sim.dma_host_to_external(0, sim.get_host_memory_region_base(0),
+                             sim.get_external_bank_base(0), size,
+                             lambda: done.append("host->external"))
     sim.run_until_idle()
+    check("external[0] holds the host data", sim.read_memory_bank(0, 0, len(data)), data)
 
-    # Step 3: DMA from external to scratchpad
-    print("3. DMA transfer: External → Scratchpad...")
-    ext_addr = sim.get_external_bank_base(0) + 0
-    scratch_addr = sim.get_scratchpad_base(0) + 0
-
-    transfer_complete = False
-    sim.dma_external_to_scratchpad(0, ext_addr, scratch_addr, transfer_size, on_complete)
+    sim.dma_external_to_l3(0, sim.get_external_bank_base(0),
+                           sim.get_l3_tile_base(0), size,
+                           lambda: done.append("external->l3"))
     sim.run_until_idle()
+    check("L3[0] holds the host data", sim.read_l3_tile(0, 0, len(data)), data)
+    check("both completion callbacks ran", done, ["host->external", "external->l3"])
 
-    # Step 4: Verify data in scratchpad
-    print("4. Verifying data in scratchpad...")
-    result = sim.read_scratchpad(0, 0, len(test_data))
-
-    if result == test_data:
-        print("   ✓ Data verification PASSED")
-    else:
-        print("   ✗ Data verification FAILED")
-
-    # === Example 2: Multi-level cache hierarchy ===
-    print("\n" + "=" * 60)
-    print("Example 2: Multi-level cache hierarchy (External → L3 → L2)")
-    print("=" * 60)
-
-    if sim.get_l3_tile_count() > 0 and sim.get_l2_bank_count() > 0:
-        # Write data to external memory
-        cache_data = [float(i * 2) for i in range(128)]
-        sim.write_memory_bank(0, 1024, cache_data)
-
-        # Transfer through cache hierarchy
-        print("\n1. DMA transfer: External → L3...")
-        ext_addr = sim.get_external_bank_base(0) + 1024
-        l3_addr = sim.get_l3_tile_base(0) + 0
-        transfer_size = len(cache_data) * 4
-
-        sim.dma_external_to_l3(0, ext_addr, l3_addr, transfer_size)
-        sim.run_until_idle()
-
-        print("2. Reading back from L3...")
-        l3_result = sim.read_l3_tile(0, 0, len(cache_data))
-
-        if l3_result == cache_data:
-            print("   ✓ L3 data verification PASSED")
-        else:
-            print("   ✗ L3 data verification FAILED")
-    else:
-        print("\nL3/L2 caches not configured in this simulation")
-
-    # === Example 3: Using the primary address-based API ===
-    print("\n" + "=" * 60)
-    print("Example 3: Primary address-based API (any-to-any transfer)")
-    print("=" * 60)
-
-    # The primary API automatically routes based on addresses
-    print("\n1. Arbitrary transfer using start_dma_transfer()...")
-    src_addr = sim.get_external_bank_base(0) + 0
-    dst_addr = sim.get_scratchpad_base(1) + 0  # Different scratchpad
-    transfer_size = 128 * 4  # 128 floats
-
-    sim.start_dma_transfer(0, src_addr, dst_addr, transfer_size)
+    # === 2: any-to-any, routed by address ===
+    print("\n2. External[1] -> L3[1] (start_dma_transfer, routed by address)")
+    data2 = [float(2 * i) for i in range(128)]
+    sim.write_memory_bank(1, 0, data2)
+    sim.start_dma_transfer(1, sim.get_external_bank_base(1),
+                           sim.get_l3_tile_base(1), len(data2) * FLOAT_BYTES)
     sim.run_until_idle()
-    print("   ✓ Transfer complete (address decoder automatically routed)")
+    check("L3[1] holds external[1]'s data", sim.read_l3_tile(1, 0, len(data2)), data2)
 
-    # === Statistics ===
-    print("\n" + "=" * 60)
-    print("Simulation Statistics")
+    print(f"\nTotal cycles: {sim.get_current_cycle()}")
     print("=" * 60)
-    print(f"Total cycles: {sim.get_current_cycle()}")
-    print(f"Elapsed time: {sim.get_elapsed_time_ms():.2f} ms")
+    print("All checks passed" if failures == 0 else f"{failures} check(s) FAILED")
+    return 0 if failures == 0 else 1
 
-    sim.print_component_status()
-
-    print("\n" + "=" * 60)
-    print("Example completed successfully!")
-    print("=" * 60)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

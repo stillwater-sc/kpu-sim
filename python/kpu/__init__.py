@@ -53,39 +53,54 @@ def _install_cpp_warning_filter():
 
     _suppressed = [b'NNPACK', b'Could not initialize NNPACK']
 
-    # Save original stderr fd
+    # Save the original stderr, then point fd 2 at a pipe. A reader thread
+    # forwards every line that isn't suppressed to the original stderr as it
+    # arrives, so nothing written to stderr (a traceback included) is lost, and
+    # the pipe never fills and blocks the writer.
     _saved_fd = _os.dup(_stderr_fd)
-
-    # Create pipe to capture stderr
     _read_fd, _write_fd = _os.pipe()
     _os.dup2(_write_fd, _stderr_fd)
     _os.close(_write_fd)
 
-    def _flush_filtered_stderr():
-        """Read captured stderr and write filtered content."""
+    def _forward():
+        with _os.fdopen(_read_fd, 'rb', buffering=0) as pipe:
+            pending = b''
+            while True:
+                chunk = pipe.read(65536)
+                if not chunk:
+                    break
+                pending += chunk
+                *lines, pending = pending.split(b'\n')
+                for line in lines:
+                    if not any(s in line for s in _suppressed):
+                        _os.write(_saved_fd, line + b'\n')
+            if pending and not any(s in pending for s in _suppressed):
+                _os.write(_saved_fd, pending)
+
+    import threading
+    _reader = threading.Thread(target=_forward, name='kpu-stderr-filter', daemon=True)
+    _reader.start()
+
+    def _flush():
         try:
-            _os.set_blocking(_read_fd, False)
-            captured = _os.read(_read_fd, 1024 * 1024)
-            for line in captured.split(b'\n'):
-                if line and not any(s in line for s in _suppressed):
-                    _sys.stderr.buffer.write(line + b'\n')
-                    _sys.stderr.buffer.flush()
-        except (BlockingIOError, OSError):
+            _sys.stderr.flush()
+        except (AttributeError, OSError, ValueError):
             pass
 
     def _restore_stderr():
-        """Restore original stderr."""
-        _flush_filtered_stderr()
+        """Restore the original stderr once the reader has forwarded everything."""
+        _flush()
+        # fd 2 holds the pipe's only write end (unless a child inherited it):
+        # restoring it closes that end, so the reader reaches EOF and finishes.
         _os.dup2(_saved_fd, _stderr_fd)
-        _os.close(_saved_fd)
-        _os.close(_read_fd)
+        _reader.join(timeout=2.0)
+        if not _reader.is_alive():
+            _os.close(_saved_fd)
 
-    # Register cleanup at exit
     import atexit
     atexit.register(_restore_stderr)
 
-    # Also flush periodically during imports
-    return _flush_filtered_stderr
+    return _flush
 
 _flush_stderr = _install_cpp_warning_filter()
 

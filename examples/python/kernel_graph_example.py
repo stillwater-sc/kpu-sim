@@ -15,10 +15,9 @@ to graph compilation for a simple two-layer neural network.
 import sys
 import os
 
-# Add the build directory to the path
-# Adjust this path based on your build configuration
-build_dir = os.path.join(os.path.dirname(__file__), '../../build/src/bindings/python/Release')
-sys.path.insert(0, build_dir)
+# Fall back to the default build tree when PYTHONPATH doesn't provide the module.
+build_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'build', 'src', 'tools', 'bindings', 'python', 'Release')
+sys.path.append(build_dir)
 
 import stillwater_kpu as kpu
 

@@ -252,6 +252,24 @@ if(KPU_BUILD_PYTHON_BINDINGS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/python/kpu/
     endif()
 endif()
 
+# The kpu package's stderr filter must forward stderr, not swallow it (#502).
+# Exits 77 (skipped) where the interpreter can't import kpu (no numpy, say).
+if(KPU_BUILD_TESTS)
+    set(_kpu_test_python "${PYTHON_EXECUTABLE}")
+    if(NOT _kpu_test_python)
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        set(_kpu_test_python "${Python3_EXECUTABLE}")
+    endif()
+endif()
+if(KPU_BUILD_TESTS AND _kpu_test_python)
+    add_test(NAME python_kpu_stderr_filter
+        COMMAND ${_kpu_test_python} ${CMAKE_CURRENT_SOURCE_DIR}/python/tests/test_stderr_filter.py)
+    set_tests_properties(python_kpu_stderr_filter PROPERTIES
+        SKIP_RETURN_CODE 77
+        LABELS "python"
+        TIMEOUT 300)
+endif()
+
 # Installation of headers
 install(DIRECTORY include/
     DESTINATION include
