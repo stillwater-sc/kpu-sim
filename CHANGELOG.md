@@ -34,6 +34,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`examples/` no longer tracks binaries, dead sources or run output** (#499). Removed:
+  - three ELF executables in `examples/test/`, and its four sources, which no CMake file built;
+  - `basic/kernel_demo.cpp` (moved to `kernel/matmul_kernel.cpp` long ago) and
+    `blas/trace_infrastructure.cpp`, also never built;
+  - run output: three `.log` files, `basic/data_movement_schedule.txt`, and `compiler/`'s design-space
+    CSV and PNG (which `hardware_design_explorer` writes when it runs);
+  - 41 downloaded images and class lists in the examples' `.cache/` directories, which the scripts
+    download again when missing;
+  - `python/generate.py`, a torchvision export snippet with no KPU use, and
+    `blas/big_matmul_fsim_bug.txt`, a note on a timing bug that `big_matmul` no longer shows (85%
+    efficiency, 4 tiles in flight).
+
+  `.gitignore` now covers the logs and the design-space output.
+
 - **Three runtime examples no longer claim values the runtime doesn't compute** (#497, part 1).
   `KPURuntime` is timing only: a launch runs the program through `isa::ConcurrentExecutor` and
   never writes its outputs (#257 makes it return values).

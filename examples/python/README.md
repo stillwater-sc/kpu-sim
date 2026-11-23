@@ -139,7 +139,6 @@ examples/python/
 ├── test_kernel_validation.py      # Kernel tests
 ├── test_graph_validation.py       # Graph tests
 ├── test_compiler_regression.py    # Compiler tests
-├── generate.py                    # Code generation utilities
 ├── baseline/                      # Basic examples
 │   ├── simple_kpu.py
 │   └── ...
