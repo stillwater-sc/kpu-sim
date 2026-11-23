@@ -76,8 +76,10 @@ def _install_cpp_warning_filter():
             data = data[_os.write(_saved_fd, data):]
 
     def _emit(record):
-        if _state['overflowed']:
-            _write_all(record)  # the end of an overlong record: as is
+        # Suppression applies to ordinary lines only: a record past the bound,
+        # whole or the end of one already passed through, is forwarded as is.
+        if _state['overflowed'] or len(record) > _max_pending:
+            _write_all(record)
         elif record and not any(s in record for s in _suppressed):
             _write_all(record)
 

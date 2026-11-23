@@ -123,6 +123,17 @@ def test_nnpack_after_the_overflow_boundary_is_still_forwarded():
     assert r.stderr == b"a" * 131072 + b" NNPACK tail\nafter\n"
 
 
+def test_record_completed_just_past_the_bound_is_forwarded():
+    # 64 KB unterminated (not over the bound), then the rest of the same record
+    # with NNPACK in it: the completed record is overlong, so it is forwarded.
+    r = _run("import kpu, os, time\n"
+             "os.write(2, b'a' * 65536)\n"
+             "time.sleep(0.2)\n"
+             "os.write(2, b' NNPACK tail\\n')\n")
+    assert r.returncode == 0
+    assert r.stderr == b"a" * 65536 + b" NNPACK tail\n"
+
+
 def test_large_stderr_output_does_not_block():
     r = _run("import kpu, sys\nsys.stderr.write('x' * 1000000 + '\\n')\nprint('done')")
     assert r.returncode == 0
@@ -141,6 +152,7 @@ if __name__ == "__main__":
              test_unterminated_output_is_forwarded_while_running,
              test_overlong_record_is_forwarded_whole_even_if_it_mentions_nnpack,
              test_nnpack_after_the_overflow_boundary_is_still_forwarded,
+             test_record_completed_just_past_the_bound_is_forwarded,
              test_large_stderr_output_does_not_block]
     failed = 0
     for t in tests:
