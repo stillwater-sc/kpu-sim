@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`examples/program/`: the program stack as an example** (#503). `program_run_levels` loads a `.csp` program and
+  a deployment spec on the `VirtualPlatform`. It runs L-B as the oracle (checking that L-B's trace replays), then
+  L-B, L-T1 and L-CA; L-T2 is reported as not implemented (#283). For each level it prints the makespan and checks
+  every operand, per tile, against L-B with `check_operands`.
+  - `--placement` lists the walker's L3 residencies (tile and slot) and its L2 stagings, and checks that L-T1 and
+    L-CA hold each tile in the walker's slot.
+  - `matmul_48_stage_a.csp`, generated with `kpu-csp-gen --stage-a`, exercises both L3 and L2 placement.
+  - CTest `example_program_run_levels` and `example_program_placement` fail on a value or placement mismatch. The
+    example also passes on every corpus program, on `kpu_s1` and `kpu_t4`.
+  - The README shows where the bubble report and the `.tflow`/`.dflow` records come from (`kpu-run`), and
+    `docs/ONBOARDING.md`'s note on `examples/` points to it.
 - **Every L2 copy has a slot the program places; csp 1.1** (#387 step 1,
   `docs/plans/slot-credits-at-lca.md`; #401's slice 2). The user decided the design on 2026-11-18.
   - **The language:** csp 1.1 requires `l2 = N`, the L2 slots a program declares. A csp 1.0
