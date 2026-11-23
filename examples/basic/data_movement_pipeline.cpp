@@ -1,13 +1,41 @@
+// Data movement pipeline: one 2x2 matmul through every stage of the memory hierarchy,
+// memory bank -> L3 -> (BlockMover) L2 -> (Streamer) L1 -> compute, checking the data
+// at each stage. It exits non-zero if any stage's data, callback or result is wrong.
+
 #include <sw/kpu/kpu_simulator.hpp>
 #include <iostream>
+#include <string>
 #include <vector>
 
 using namespace sw::kpu;
+
+namespace {
+
+int failures = 0;
+
+// The data copies are exact, and the 2x2 result is small integers, so compare exactly.
+void check(const std::string& what, const std::vector<float>& got,
+           const std::vector<float>& expected) {
+    if (got != expected) {
+        std::cout << "  MISMATCH: " << what << "\n";
+        ++failures;
+    }
+}
+
+void check(const std::string& what, bool done) {
+    if (!done) {
+        std::cout << "  MISSING: " << what << " never completed\n";
+        ++failures;
+    }
+}
+
+}  // namespace
 
 int main() {
     // Create minimal config
     KPUSimulator::Config config;
     config.memory_bank_count = 1;
+    config.memory_bank_capacity_mb = 1;   // without it the bank holds 0 bytes (#498)
     config.l3_layer.tile_groups = { {"l3", {128}, 1} };
     config.l2_layer.bank_groups = { {"l2", {64}, 1} };
     config.l1_layer.buffer_groups = { {"l1", {64 * 1024}, 1} };
@@ -37,6 +65,8 @@ int main() {
     kpu.read_memory_bank(0, 0x1000, verify_B.data(), verify_B.size() * sizeof(float));
     std::cout << "Memory Bank A: " << verify_A[0] << ", " << verify_A[1] << ", " << verify_A[2] << ", " << verify_A[3] << "\n";
     std::cout << "Memory Bank B: " << verify_B[0] << ", " << verify_B[1] << ", " << verify_B[2] << ", " << verify_B[3] << "\n";
+    check("memory bank A", verify_A, A);
+    check("memory bank B", verify_B, B);
 
     std::cout << "\n=== Step 2: Write to L3 ===\n";
     kpu.write_l3_tile(0, 0x0000, A.data(), A.size() * sizeof(float));
@@ -47,6 +77,8 @@ int main() {
     kpu.read_l3_tile(0, 0x1000, verify_B.data(), verify_B.size() * sizeof(float));
     std::cout << "L3 A: " << verify_A[0] << ", " << verify_A[1] << ", " << verify_A[2] << ", " << verify_A[3] << "\n";
     std::cout << "L3 B: " << verify_B[0] << ", " << verify_B[1] << ", " << verify_B[2] << ", " << verify_B[3] << "\n";
+    check("L3 A", verify_A, A);
+    check("L3 B", verify_B, B);
 
     std::cout << "\n=== Step 3: BlockMover L3->L2 ===\n";
     bool block_a_done = false, block_b_done = false;
@@ -58,12 +90,16 @@ int main() {
                              [&](){ block_b_done = true; });
     kpu.run_until_idle();
     std::cout << "BlockMover callbacks: A=" << block_a_done << ", B=" << block_b_done << "\n";
+    check("BlockMover transfer of A", block_a_done);
+    check("BlockMover transfer of B", block_b_done);
     
     // Verify L2
     kpu.read_l2_bank(0, 0x0000, verify_A.data(), verify_A.size() * sizeof(float));
     kpu.read_l2_bank(0, 0x1000, verify_B.data(), verify_B.size() * sizeof(float));
     std::cout << "L2 A: " << verify_A[0] << ", " << verify_A[1] << ", " << verify_A[2] << ", " << verify_A[3] << "\n";
     std::cout << "L2 B: " << verify_B[0] << ", " << verify_B[1] << ", " << verify_B[2] << ", " << verify_B[3] << "\n";
+    check("L2 A", verify_A, A);
+    check("L2 B", verify_B, B);
 
     std::cout << "\n=== Step 4: Streamer L2->L1 ===\n";
     bool stream_a_done = false, stream_b_done = false;
@@ -75,12 +111,16 @@ int main() {
                             [&](){ stream_b_done = true; });
     kpu.run_until_idle();
     std::cout << "Streamer callbacks: A=" << stream_a_done << ", B=" << stream_b_done << "\n";
+    check("Streamer feed of A", stream_a_done);
+    check("Streamer feed of B", stream_b_done);
     
     // Verify L1
     kpu.read_l1_buffer(0, 0x0000, verify_A.data(), verify_A.size() * sizeof(float));
     kpu.read_l1_buffer(0, 0x1000, verify_B.data(), verify_B.size() * sizeof(float));
     std::cout << "L1 A: " << verify_A[0] << ", " << verify_A[1] << ", " << verify_A[2] << ", " << verify_A[3] << "\n";
     std::cout << "L1 B: " << verify_B[0] << ", " << verify_B[1] << ", " << verify_B[2] << ", " << verify_B[3] << "\n";
+    check("L1 A", verify_A, A);
+    check("L1 B", verify_B, B);
 
     std::cout << "\n=== Step 5: Compute ===\n";
     bool compute_done = false;
@@ -88,6 +128,7 @@ int main() {
                      [&](){ compute_done = true; });
     kpu.run_until_idle();
     std::cout << "Compute callback: " << compute_done << "\n";
+    check("matmul", compute_done);
     
     // Verify result
     std::vector<float> C(4);
@@ -96,6 +137,10 @@ int main() {
     std::cout << "  [" << C[0] << ", " << C[1] << "]\n";
     std::cout << "  [" << C[2] << ", " << C[3] << "]\n";
     std::cout << "Expected: [[19, 22], [43, 50]]\n";
+    check("result C", C, {19.0f, 22.0f, 43.0f, 50.0f});
 
-    return 0;
+    std::cout << "\n" << (failures == 0 ? "PASS: every stage carried the data, and C is correct"
+                                         : "FAIL: " + std::to_string(failures) + " check(s) failed")
+              << "\n";
+    return failures == 0 ? 0 : 1;
 }

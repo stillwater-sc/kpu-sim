@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`examples/basic/data_movement_pipeline` no longer aborts** (#498). It never set
+  `memory_bank_capacity_mb`, which `KPUSimulator::Config` defaults to 0, so its first write threw
+  `Memory write out of bounds`. `README.md` links to it as the data-movement example. It now
+  sizes its bank, checks every stage's data, callbacks and the result (`[[19, 22], [43, 50]]`),
+  exits non-zero on a mismatch, and runs as the CTest `example_data_movement_pipeline`. The
+  README's description of it no longer mentions DMA, which it doesn't use.
+
 - **Three runtime examples no longer claim values the runtime doesn't compute** (#497, part 1).
   `KPURuntime` is timing only: a launch runs the program through `isa::ConcurrentExecutor` and
   never writes its outputs (#257 makes it return values).

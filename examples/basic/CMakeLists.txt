@@ -45,6 +45,13 @@ kpu_add_example(data_movement_pipeline
     SOURCES data_movement_pipeline.cpp
 )
 
+# The README's data-movement example checks every stage and exits non-zero on a mismatch. It
+# aborted for months before anyone noticed, because nothing ran it (#498).
+if(KPU_BUILD_TESTS)
+    add_test(NAME example_data_movement_pipeline COMMAND example_data_movement_pipeline)
+    set_tests_properties(example_data_movement_pipeline PROPERTIES TIMEOUT 60)
+endif()
+
 kpu_add_example(data_movement_isa_matmul
     FOLDER "basic"
     DESCRIPTION "Matrix multiplication using Data Movement ISA"
