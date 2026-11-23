@@ -104,14 +104,15 @@ TEST_CASE("Dataflow: the WS and IS programs are generated, validated and describ
         CAPTURE(df);
         const std::string src = program(df);
         // The stationary operand staged across the reuse loop; C's partials an L2 accumulator.
-        CHECK_THAT(src, ContainsSubstring("machine flat(l3 = 9, l2 = 5)"));
+        // 4 partials, the staged tile, and 2 rounds of a copy and an init (slot-credits-at-lca.md).
+        CHECK_THAT(src, ContainsSubstring("machine flat(l3 = 9, l2 = 9)"));
         CHECK_THAT(src, ContainsSubstring(std::string(df) == "ws" ? "acc C[:, j] in l2 dataflow ws {" : "acc C[i, :] in l2 dataflow is {"));
         CHECK_THAT(src, ContainsSubstring(std::string(df) == "ws" ? "stage B[k, j] in l2 {" : "stage A[i, k] in l2 {"));
         CHECK_THAT(src, ContainsSubstring(std::string(df) == "ws" ? "weight-stationary" : "input-stationary"));
         CHECK_THAT(src, ContainsSubstring("(5 used at peak)"));
         const lang::Validation v = lang::validate(src);
         CHECK(v.peak_l3 == 5);                           // a panel of 4 and the stationary tile
-        CHECK(v.peak_l2 == 5);                           // 4 partials and the stationary tile
+        CHECK(v.peak_l2 == 6);                           // 4 partials, the stationary tile, a copy
         REQUIRE(v.calls);
         CHECK(*v.calls == 64);
         CHECK(*v.stores == 16);
@@ -185,12 +186,13 @@ TEST_CASE("Dataflow: the stationary operand leaves L3 once per reuse loop; every
         CHECK(r.staged_feeds == 64);
         CHECK(r.partials == 16);
         CHECK(r.merges == 64);
-        CHECK(r.peak_l2 == 5);
+        CHECK(r.peak_l2 == 6);                  // 4 partials, the stationary tile, a copy
         CHECK(r.stores == 16);
         // Each partial: opened by its first merge (overwrite), merged into 4 times, written back,
         // then its L2 slot freed.
         std::size_t partials = 0;
         for (const Staging& st : p.stagings) {
+            if (st.copy) continue;               // an operand's one-Feed copy, placed by the walker
             if (!st.partial) {
                 CHECK(st.feeds == 4);                    // the stationary tile, fed across the reuse loop
                 continue;
@@ -283,7 +285,7 @@ TEST_CASE("Dataflow: the trace records MATMUL_MERGE, and its replay reproduces L
         const auto sum = TileProgramReference().run(replay);
         CHECK(sum.merges == 64);
         CHECK(sum.computes == 64);
-        CHECK(sum.peak_l2 == 5);
+        CHECK(sum.peak_l2 == 6);                // 4 partials, the stationary tile, a copy
         // Opset 1.5, and a round trip keeps each merge's mode and slot.
         std::ostringstream os;
         serialize::WriteOptions with_values;
@@ -356,7 +358,7 @@ TEST_CASE("Dataflow: L-B refuses a broken merge, by name", "[program][csp][dataf
 }
 
 TEST_CASE("Dataflow: what the language refuses for an L2 accumulator, by line", "[program][csp][lang][dataflow]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
                              "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
                              "  tensor C[32,32] tile 16x16 out;\n";
     auto both = [&](const std::string& body, const std::string& walk, const std::string& symbolic) {
@@ -369,7 +371,7 @@ TEST_CASE("Dataflow: what the language refuses for an L2 accumulator, by line", 
     REQUIRE(error_of(head + ok + "  store C[0, :];\n}\n", false) == "accepted");
     REQUIRE(error_of(head + ok + "  store C[0, :];\n}\n", true) == "accepted");
     // No L2 declared.
-    const std::string no_l2 = "csp 1.0\nprogram t machine flat(l3 = 8) {\n  tensor C[32,32] tile 16x16 out;\n"
+    const std::string no_l2 = "csp 1.1\nprogram t machine flat(l3 = 8) {\n  tensor C[32,32] tile 16x16 out;\n"
                               "  acc C[0, 0] in l2 { }\n}\n";
     CHECK_THAT(error_of(no_l2, false), ContainsSubstring("csp line 4: acc ... in l2: the machine clause declares no L2"));
     CHECK_THAT(error_of(no_l2, true), ContainsSubstring("csp line 4: acc ... in l2: the machine clause declares no L2"));
@@ -533,7 +535,7 @@ TEST_CASE("Dataflow: L-CA keeps each drain's tile context with its own drain", "
     // place through a ReLU on the Combiner. Every drain of a tile takes its own entry in the
     // tile's stage queue, so the merges' completions never consume the later drain's ReLU: a
     // ReLU applied to the first partial would give relu(relu(p0) + p1), not relu(p0 + p1).
-    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+    const std::string src = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 7) {\n"
                             "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
                             "  tensor C[32,32] tile 16x16 inout;\n"
                             "  acc C[0, 0] in l2 {\n    resident A[0, :], B[:, 0];\n"
@@ -668,7 +670,7 @@ TEST_CASE("Final merge: the fused-operation matrix computes one result in every 
 }
 
 TEST_CASE("Final merge: what the language and the generator refuse", "[program][csp][lang][dataflow][epilogue]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 7) {\n"
                              "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
                              "  vector b[32] tile 16 in;\n  tensor C[32,32] tile 16x16 out;\n";
     const std::string open = "  acc C[0, 0] in l2 {\n    resident A[0, :], B[:, 0], b[0];\n";
@@ -688,7 +690,7 @@ TEST_CASE("Final merge: what the language and the generator refuse", "[program][
          "csp line 9: call gemm into C[0,0] after its final merge (csp line 9)",
          "csp line 9: call gemm into C[0, 0] via ...: the final merge runs in every iteration of the loop over k");
     // After a loop of final merges over j, every tile it ranged over is final.
-    const std::string row = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+    const std::string row = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 7) {\n"
                             "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
                             "  tensor C[32,32] tile 16x16 out;\n"
                             "  acc C[0, :] in l2 {\n    resident A[0, 0], B[0, :];\n"
@@ -727,7 +729,7 @@ TEST_CASE("L-CA: a vector tile resident for one result's context, then released 
     // right after. The window hands the next tile's store over before this Release is due: the
     // Release waits for the reads scheduled before it only, never for a later residency's, which
     // wait for this Release to load b[j] again.
-    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 12) {\n"
+    const std::string src = "csp 1.1\nprogram t machine flat(l3 = 12, l2 = 8) {\n"
                             "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
                             "  vector b[32] tile 16 in;\n  tensor C[32,32] tile 16x16 out;\n"
                             "  for i in 0..2 {\n    resident A[i, :];\n    for j in 0..2 {\n      resident B[:, j];\n"
@@ -755,7 +757,7 @@ TEST_CASE("L-CA: a tile context's add waits for its vector's Load to land", "[pr
     // waits for the Loads of b scheduled before it.
     // A's tiles 2..5 are filler the gemm does not read: their Loads queue ahead of b[j]'s on the
     // DMA, so b[j] lands well after C's gemm is done.
-    const std::string src = "csp 1.0\nprogram t machine flat(l3 = 16) {\n"
+    const std::string src = "csp 1.1\nprogram t machine flat(l3 = 16, l2 = 8) {\n"
                             "  tensor A[32,96] tile 16x16 in;\n  tensor B[96,32] tile 16x16 in;\n"
                             "  vector b[32] tile 16 in;\n  tensor C[32,32] tile 16x16 out;\n"
                             "  for i in 0..2 {\n    for j in 0..2 {\n"
@@ -813,7 +815,7 @@ TEST_CASE("Dataflow: the program states it on the accumulator, and every Call an
 }
 
 TEST_CASE("Dataflow: ws and is need an L2 accumulator, in the walker and the validator", "[program][csp][dataflow][decl]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 8, l2 = 2) {\n"
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 8, l2 = 5) {\n"
                              "  tensor A[16,16] tile 16x16 in;\n  tensor B[16,16] tile 16x16 in;\n"
                              "  tensor C[16,16] tile 16x16 out;\n  resident A[0, 0], B[0, 0];\n";
     const std::string tail = " {\n    call gemm(A[0, 0], B[0, 0]) +-> C[0, 0];\n  }\n"
@@ -939,7 +941,7 @@ TEST_CASE("Dataflow: an accumulator's dataflow ends with it; a later Call on its
     // place through a ReLU. The ReLU is not the reduction's: it and its Drain carry no dataflow.
     for (const char* acc : {"in l2 dataflow ws", "in fabric"}) {
         CAPTURE(acc);
-        const std::string src = std::string("csp 1.0\nprogram t machine flat(l3 = 8, l2 = 4) {\n"
+        const std::string src = std::string("csp 1.1\nprogram t machine flat(l3 = 8, l2 = 7) {\n"
                                 "  tensor A[32,32] tile 16x16 in;\n  tensor B[32,32] tile 16x16 in;\n"
                                 "  tensor C[32,32] tile 16x16 inout;\n  acc C[0, 0] ") + acc +
                                 " {\n    resident A[0, :], B[:, 0];\n"

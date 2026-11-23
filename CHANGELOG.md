@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every L2 copy has a slot the program places; csp 1.1** (#387 step 1,
+  `docs/plans/slot-credits-at-lca.md`; #401's slice 2). The user decided the design on 2026-11-18.
+  - **The language:** csp 1.1 requires `l2 = N`, the L2 slots a program declares. A csp 1.0
+    program is refused by its version, with the reason.
+  - **The walker** places every tile it copies into L2, in ring order (the next slot after the
+    last, skipping live ones), so `l2 = N` is the buffering depth:
+    - an unstaged operand's copy is a one-Feed staging (Move, Feed, L2Release);
+    - a fabric accumulator's result takes a slot at its first call, and leaves through it
+      (Drain, Writeback, L2Release);
+    - a writing call's result takes one at the call.
+  - **L-B** executes all of it as addressed storage, and the trace's replay checks every slot.
+  - **The walker is the authority for L2 capacity.** It refuses, by line, a program whose ring
+    runs out. The validator checks the slots a program states (stage blocks, partials) and one
+    more per call: a lower bound that never refuses a program the walker accepts.
+  - **`kpu-csp-gen --l2-buffers 1|2`** sizes `l2 = N` (default 2: a double-buffered
+    output-stationary matmul declares 6).
+  - **The records:** the L-B record marks each copy's steps (flag 128), and records a result's
+    slot as a partial with one merge.
+  - **L-T1 and L-CA** run the copies unplaced in this step: their timing is unchanged. The next
+    steps make them execute the slots.
+  - **Regenerated:** the L0 corpus traces (every trace is now opset 1.3) and the `.kpuld` fixture.
+    The corpus programs only gain `l2 = N`.
+
+### Fixed
+
+- **A stale corpus result:** `lu_64_t16.result.l0` no longer matched what `main` computes (23 rows
+  differed, by at most 4.2e-7 relative); `test_csp_corpus` compares within a tolerance, so it never
+  failed. It is regenerated, and the build matches `main` bit for bit.
+
 - **The memory hierarchy's roles** (`docs/01-architecture/memory-hierarchy-roles.md`; an
   architecture decision, 2026-11-18). L3 holds (reuse, double buffering against DRAM's latency),
   L2 feeds (the concurrency that keeps the fabric busy), and L1 transforms (parallel vector in,

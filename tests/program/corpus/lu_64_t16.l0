@@ -1,7 +1,7 @@
 KPUL0 1.2.0
 MIN_CONSUMER 1.1.0
-OPSET tile 1.2.0
-PRODUCER kpu-sim 0.8.0
+OPSET tile 1.3.0
+PRODUCER kpu-sim 0.9.0
 PROGRAM "lu"
 VALUES inline
 OPERAND "A" rows=64 cols=64 tile_rows=16 tile_cols=16
@@ -86,171 +86,419 @@ OP kind=L3_LOAD out=A:3,1 l3=0 slot=13 bank=0
 OP kind=L3_LOAD out=A:3,2 l3=0 slot=14 bank=0
 OP kind=L3_LOAD out=A:3,3 l3=0 slot=15 bank=0
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=0
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=0
 OP kind=LU_DIAG_FACTOR out=A:0,0 pivot=0 label="line 7"
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=1
 OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=2
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=2
 OP kind=PIVOT_APPLY out=A:0,1 pivot=0 label="line 9"
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=3
 OP kind=L3_WRITEBACK out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=3
 OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L2_STAGE out=A:0,2 l2=0 slot=4
+OP kind=L2_RELEASE out=A:0,2 l2=0 slot=4
 OP kind=PIVOT_APPLY out=A:0,2 pivot=0 label="line 9"
+OP kind=L2_STAGE out=A:0,2 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L2_RELEASE out=A:0,2 l2=0 slot=5
 OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L2_STAGE out=A:0,3 l2=0 slot=6
+OP kind=L2_RELEASE out=A:0,3 l2=0 slot=6
 OP kind=PIVOT_APPLY out=A:0,3 pivot=0 label="line 9"
+OP kind=L2_STAGE out=A:0,3 l2=0 slot=7
 OP kind=L3_WRITEBACK out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L2_RELEASE out=A:0,3 l2=0 slot=7
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=0
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=0
 OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=1
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=1
 OP kind=TRSM_LOWER_LEFT in=A:0,0 out=A:0,1 label="line 10"
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=2
 OP kind=L3_WRITEBACK out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=2
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=3
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=3
 OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L2_STAGE out=A:0,2 l2=0 slot=4
+OP kind=L2_RELEASE out=A:0,2 l2=0 slot=4
 OP kind=TRSM_LOWER_LEFT in=A:0,0 out=A:0,2 label="line 10"
+OP kind=L2_STAGE out=A:0,2 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L2_RELEASE out=A:0,2 l2=0 slot=5
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=6
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=6
 OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L2_STAGE out=A:0,3 l2=0 slot=7
+OP kind=L2_RELEASE out=A:0,3 l2=0 slot=7
 OP kind=TRSM_LOWER_LEFT in=A:0,0 out=A:0,3 label="line 10"
+OP kind=L2_STAGE out=A:0,3 l2=0 slot=0
 OP kind=L3_WRITEBACK out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L2_RELEASE out=A:0,3 l2=0 slot=0
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=1
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=1
 OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=2
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=2
 OP kind=TRSM_UPPER_RIGHT in=A:0,0 out=A:1,0 label="line 11"
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=3
 OP kind=L3_WRITEBACK out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=3
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=4
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=4
 OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L2_STAGE out=A:2,0 l2=0 slot=5
+OP kind=L2_RELEASE out=A:2,0 l2=0 slot=5
 OP kind=TRSM_UPPER_RIGHT in=A:0,0 out=A:2,0 label="line 11"
+OP kind=L2_STAGE out=A:2,0 l2=0 slot=6
 OP kind=L3_WRITEBACK out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L2_RELEASE out=A:2,0 l2=0 slot=6
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=7
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=7
 OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L2_STAGE out=A:3,0 l2=0 slot=0
+OP kind=L2_RELEASE out=A:3,0 l2=0 slot=0
 OP kind=TRSM_UPPER_RIGHT in=A:0,0 out=A:3,0 label="line 11"
+OP kind=L2_STAGE out=A:3,0 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L2_RELEASE out=A:3,0 l2=0 slot=1
 OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=2
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=2
 OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=3
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=3
 OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=4
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=4
 OP kind=MATMUL_ACCUM in=A:1,0;A:0,1 out=A:1,1 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=5
 OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=6
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=6
 OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L2_STAGE out=A:0,2 l2=0 slot=7
+OP kind=L2_RELEASE out=A:0,2 l2=0 slot=7
 OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L2_STAGE out=A:1,2 l2=0 slot=0
+OP kind=L2_RELEASE out=A:1,2 l2=0 slot=0
 OP kind=MATMUL_ACCUM in=A:1,0;A:0,2 out=A:1,2 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:1,2 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L2_RELEASE out=A:1,2 l2=0 slot=1
 OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=2
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=2
 OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L2_STAGE out=A:0,3 l2=0 slot=3
+OP kind=L2_RELEASE out=A:0,3 l2=0 slot=3
 OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L2_STAGE out=A:1,3 l2=0 slot=4
+OP kind=L2_RELEASE out=A:1,3 l2=0 slot=4
 OP kind=MATMUL_ACCUM in=A:1,0;A:0,3 out=A:1,3 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:1,3 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L2_RELEASE out=A:1,3 l2=0 slot=5
 OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L2_STAGE out=A:2,0 l2=0 slot=6
+OP kind=L2_RELEASE out=A:2,0 l2=0 slot=6
 OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=7
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=7
 OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L2_STAGE out=A:2,1 l2=0 slot=0
+OP kind=L2_RELEASE out=A:2,1 l2=0 slot=0
 OP kind=MATMUL_ACCUM in=A:2,0;A:0,1 out=A:2,1 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:2,1 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L2_RELEASE out=A:2,1 l2=0 slot=1
 OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L2_STAGE out=A:2,0 l2=0 slot=2
+OP kind=L2_RELEASE out=A:2,0 l2=0 slot=2
 OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L2_STAGE out=A:0,2 l2=0 slot=3
+OP kind=L2_RELEASE out=A:0,2 l2=0 slot=3
 OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L2_STAGE out=A:2,2 l2=0 slot=4
+OP kind=L2_RELEASE out=A:2,2 l2=0 slot=4
 OP kind=MATMUL_ACCUM in=A:2,0;A:0,2 out=A:2,2 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:2,2 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L2_RELEASE out=A:2,2 l2=0 slot=5
 OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L2_STAGE out=A:2,0 l2=0 slot=6
+OP kind=L2_RELEASE out=A:2,0 l2=0 slot=6
 OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L2_STAGE out=A:0,3 l2=0 slot=7
+OP kind=L2_RELEASE out=A:0,3 l2=0 slot=7
 OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=0
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=0
 OP kind=MATMUL_ACCUM in=A:2,0;A:0,3 out=A:2,3 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=1
 OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L2_STAGE out=A:3,0 l2=0 slot=2
+OP kind=L2_RELEASE out=A:3,0 l2=0 slot=2
 OP kind=L3_MOVE out=A:0,1 l3=0 slot=1 bank=0
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=3
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=3
 OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L2_STAGE out=A:3,1 l2=0 slot=4
+OP kind=L2_RELEASE out=A:3,1 l2=0 slot=4
 OP kind=MATMUL_ACCUM in=A:3,0;A:0,1 out=A:3,1 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:3,1 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L2_RELEASE out=A:3,1 l2=0 slot=5
 OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L2_STAGE out=A:3,0 l2=0 slot=6
+OP kind=L2_RELEASE out=A:3,0 l2=0 slot=6
 OP kind=L3_MOVE out=A:0,2 l3=0 slot=2 bank=0
+OP kind=L2_STAGE out=A:0,2 l2=0 slot=7
+OP kind=L2_RELEASE out=A:0,2 l2=0 slot=7
 OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=0
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=0
 OP kind=MATMUL_ACCUM in=A:3,0;A:0,2 out=A:3,2 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=1
 OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L2_STAGE out=A:3,0 l2=0 slot=2
+OP kind=L2_RELEASE out=A:3,0 l2=0 slot=2
 OP kind=L3_MOVE out=A:0,3 l3=0 slot=3 bank=0
+OP kind=L2_STAGE out=A:0,3 l2=0 slot=3
+OP kind=L2_RELEASE out=A:0,3 l2=0 slot=3
 OP kind=L3_MOVE out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L2_STAGE out=A:3,3 l2=0 slot=4
+OP kind=L2_RELEASE out=A:3,3 l2=0 slot=4
 OP kind=MATMUL_ACCUM in=A:3,0;A:0,3 out=A:3,3 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:3,3 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L2_RELEASE out=A:3,3 l2=0 slot=5
 OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=6
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=6
 OP kind=LU_DIAG_FACTOR out=A:1,1 pivot=1 label="line 7"
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=7
 OP kind=L3_WRITEBACK out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=7
 OP kind=L3_MOVE out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=0
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=0
 OP kind=PIVOT_APPLY out=A:1,0 pivot=1 label="line 8"
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:1,0 l3=0 slot=4 bank=0
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=1
 OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L2_STAGE out=A:1,2 l2=0 slot=2
+OP kind=L2_RELEASE out=A:1,2 l2=0 slot=2
 OP kind=PIVOT_APPLY out=A:1,2 pivot=1 label="line 9"
+OP kind=L2_STAGE out=A:1,2 l2=0 slot=3
 OP kind=L3_WRITEBACK out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L2_RELEASE out=A:1,2 l2=0 slot=3
 OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L2_STAGE out=A:1,3 l2=0 slot=4
+OP kind=L2_RELEASE out=A:1,3 l2=0 slot=4
 OP kind=PIVOT_APPLY out=A:1,3 pivot=1 label="line 9"
+OP kind=L2_STAGE out=A:1,3 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L2_RELEASE out=A:1,3 l2=0 slot=5
 OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=6
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=6
 OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L2_STAGE out=A:1,2 l2=0 slot=7
+OP kind=L2_RELEASE out=A:1,2 l2=0 slot=7
 OP kind=TRSM_LOWER_LEFT in=A:1,1 out=A:1,2 label="line 10"
+OP kind=L2_STAGE out=A:1,2 l2=0 slot=0
 OP kind=L3_WRITEBACK out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L2_RELEASE out=A:1,2 l2=0 slot=0
 OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=1
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=1
 OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L2_STAGE out=A:1,3 l2=0 slot=2
+OP kind=L2_RELEASE out=A:1,3 l2=0 slot=2
 OP kind=TRSM_LOWER_LEFT in=A:1,1 out=A:1,3 label="line 10"
+OP kind=L2_STAGE out=A:1,3 l2=0 slot=3
 OP kind=L3_WRITEBACK out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L2_RELEASE out=A:1,3 l2=0 slot=3
 OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=4
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=4
 OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L2_STAGE out=A:2,1 l2=0 slot=5
+OP kind=L2_RELEASE out=A:2,1 l2=0 slot=5
 OP kind=TRSM_UPPER_RIGHT in=A:1,1 out=A:2,1 label="line 11"
+OP kind=L2_STAGE out=A:2,1 l2=0 slot=6
 OP kind=L3_WRITEBACK out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L2_RELEASE out=A:2,1 l2=0 slot=6
 OP kind=L3_MOVE out=A:1,1 l3=0 slot=5 bank=0
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=7
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=7
 OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L2_STAGE out=A:3,1 l2=0 slot=0
+OP kind=L2_RELEASE out=A:3,1 l2=0 slot=0
 OP kind=TRSM_UPPER_RIGHT in=A:1,1 out=A:3,1 label="line 11"
+OP kind=L2_STAGE out=A:3,1 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L2_RELEASE out=A:3,1 l2=0 slot=1
 OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L2_STAGE out=A:2,1 l2=0 slot=2
+OP kind=L2_RELEASE out=A:2,1 l2=0 slot=2
 OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L2_STAGE out=A:1,2 l2=0 slot=3
+OP kind=L2_RELEASE out=A:1,2 l2=0 slot=3
 OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L2_STAGE out=A:2,2 l2=0 slot=4
+OP kind=L2_RELEASE out=A:2,2 l2=0 slot=4
 OP kind=MATMUL_ACCUM in=A:2,1;A:1,2 out=A:2,2 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:2,2 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L2_RELEASE out=A:2,2 l2=0 slot=5
 OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L2_STAGE out=A:2,1 l2=0 slot=6
+OP kind=L2_RELEASE out=A:2,1 l2=0 slot=6
 OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L2_STAGE out=A:1,3 l2=0 slot=7
+OP kind=L2_RELEASE out=A:1,3 l2=0 slot=7
 OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=0
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=0
 OP kind=MATMUL_ACCUM in=A:2,1;A:1,3 out=A:2,3 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=1
 OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L2_STAGE out=A:3,1 l2=0 slot=2
+OP kind=L2_RELEASE out=A:3,1 l2=0 slot=2
 OP kind=L3_MOVE out=A:1,2 l3=0 slot=6 bank=0
+OP kind=L2_STAGE out=A:1,2 l2=0 slot=3
+OP kind=L2_RELEASE out=A:1,2 l2=0 slot=3
 OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=4
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=4
 OP kind=MATMUL_ACCUM in=A:3,1;A:1,2 out=A:3,2 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=5
 OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L2_STAGE out=A:3,1 l2=0 slot=6
+OP kind=L2_RELEASE out=A:3,1 l2=0 slot=6
 OP kind=L3_MOVE out=A:1,3 l3=0 slot=7 bank=0
+OP kind=L2_STAGE out=A:1,3 l2=0 slot=7
+OP kind=L2_RELEASE out=A:1,3 l2=0 slot=7
 OP kind=L3_MOVE out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L2_STAGE out=A:3,3 l2=0 slot=0
+OP kind=L2_RELEASE out=A:3,3 l2=0 slot=0
 OP kind=MATMUL_ACCUM in=A:3,1;A:1,3 out=A:3,3 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:3,3 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L2_RELEASE out=A:3,3 l2=0 slot=1
 OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L2_STAGE out=A:2,2 l2=0 slot=2
+OP kind=L2_RELEASE out=A:2,2 l2=0 slot=2
 OP kind=LU_DIAG_FACTOR out=A:2,2 pivot=2 label="line 7"
+OP kind=L2_STAGE out=A:2,2 l2=0 slot=3
 OP kind=L3_WRITEBACK out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L2_RELEASE out=A:2,2 l2=0 slot=3
 OP kind=L3_MOVE out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L2_STAGE out=A:2,0 l2=0 slot=4
+OP kind=L2_RELEASE out=A:2,0 l2=0 slot=4
 OP kind=PIVOT_APPLY out=A:2,0 pivot=2 label="line 8"
+OP kind=L2_STAGE out=A:2,0 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:2,0 l3=0 slot=8 bank=0
+OP kind=L2_RELEASE out=A:2,0 l2=0 slot=5
 OP kind=L3_MOVE out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L2_STAGE out=A:2,1 l2=0 slot=6
+OP kind=L2_RELEASE out=A:2,1 l2=0 slot=6
 OP kind=PIVOT_APPLY out=A:2,1 pivot=2 label="line 8"
+OP kind=L2_STAGE out=A:2,1 l2=0 slot=7
 OP kind=L3_WRITEBACK out=A:2,1 l3=0 slot=9 bank=0
+OP kind=L2_RELEASE out=A:2,1 l2=0 slot=7
 OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=0
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=0
 OP kind=PIVOT_APPLY out=A:2,3 pivot=2 label="line 9"
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=1
 OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L2_STAGE out=A:2,2 l2=0 slot=2
+OP kind=L2_RELEASE out=A:2,2 l2=0 slot=2
 OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=3
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=3
 OP kind=TRSM_LOWER_LEFT in=A:2,2 out=A:2,3 label="line 10"
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=4
 OP kind=L3_WRITEBACK out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=4
 OP kind=L3_MOVE out=A:2,2 l3=0 slot=10 bank=0
+OP kind=L2_STAGE out=A:2,2 l2=0 slot=5
+OP kind=L2_RELEASE out=A:2,2 l2=0 slot=5
 OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=6
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=6
 OP kind=TRSM_UPPER_RIGHT in=A:2,2 out=A:3,2 label="line 11"
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=7
 OP kind=L3_WRITEBACK out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=7
 OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=0
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=0
 OP kind=L3_MOVE out=A:2,3 l3=0 slot=11 bank=0
+OP kind=L2_STAGE out=A:2,3 l2=0 slot=1
+OP kind=L2_RELEASE out=A:2,3 l2=0 slot=1
 OP kind=L3_MOVE out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L2_STAGE out=A:3,3 l2=0 slot=2
+OP kind=L2_RELEASE out=A:3,3 l2=0 slot=2
 OP kind=MATMUL_ACCUM in=A:3,2;A:2,3 out=A:3,3 alpha=-1 label="line 13"
+OP kind=L2_STAGE out=A:3,3 l2=0 slot=3
 OP kind=L3_WRITEBACK out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L2_RELEASE out=A:3,3 l2=0 slot=3
 OP kind=L3_MOVE out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L2_STAGE out=A:3,3 l2=0 slot=4
+OP kind=L2_RELEASE out=A:3,3 l2=0 slot=4
 OP kind=LU_DIAG_FACTOR out=A:3,3 pivot=3 label="line 7"
+OP kind=L2_STAGE out=A:3,3 l2=0 slot=5
 OP kind=L3_WRITEBACK out=A:3,3 l3=0 slot=15 bank=0
+OP kind=L2_RELEASE out=A:3,3 l2=0 slot=5
 OP kind=L3_MOVE out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L2_STAGE out=A:3,0 l2=0 slot=6
+OP kind=L2_RELEASE out=A:3,0 l2=0 slot=6
 OP kind=PIVOT_APPLY out=A:3,0 pivot=3 label="line 8"
+OP kind=L2_STAGE out=A:3,0 l2=0 slot=7
 OP kind=L3_WRITEBACK out=A:3,0 l3=0 slot=12 bank=0
+OP kind=L2_RELEASE out=A:3,0 l2=0 slot=7
 OP kind=L3_MOVE out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L2_STAGE out=A:3,1 l2=0 slot=0
+OP kind=L2_RELEASE out=A:3,1 l2=0 slot=0
 OP kind=PIVOT_APPLY out=A:3,1 pivot=3 label="line 8"
+OP kind=L2_STAGE out=A:3,1 l2=0 slot=1
 OP kind=L3_WRITEBACK out=A:3,1 l3=0 slot=13 bank=0
+OP kind=L2_RELEASE out=A:3,1 l2=0 slot=1
 OP kind=L3_MOVE out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=2
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=2
 OP kind=PIVOT_APPLY out=A:3,2 pivot=3 label="line 8"
+OP kind=L2_STAGE out=A:3,2 l2=0 slot=3
 OP kind=L3_WRITEBACK out=A:3,2 l3=0 slot=14 bank=0
+OP kind=L2_RELEASE out=A:3,2 l2=0 slot=3
 OP kind=L3_STORE out=A:0,0 l3=0 slot=0 bank=0
 OP kind=L3_STORE out=A:0,1 l3=0 slot=1 bank=0
 OP kind=L3_STORE out=A:0,2 l3=0 slot=2 bank=0

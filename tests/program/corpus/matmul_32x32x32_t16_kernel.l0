@@ -1,7 +1,7 @@
 KPUL0 1.2.0
 MIN_CONSUMER 1.0.0
-OPSET tile 1.2.0
-PRODUCER kpu-sim 0.8.0
+OPSET tile 1.3.0
+PRODUCER kpu-sim 0.9.0
 PROGRAM "matmul"
 VALUES none
 OPERAND "A" rows=32 cols=32 tile_rows=16 tile_cols=16
@@ -12,17 +12,27 @@ OP kind=L3_LOAD out=B:1,0 l3=0 slot=1 bank=0
 OP kind=L3_LOAD out=A:0,0 l3=0 slot=2 bank=0
 OP kind=L3_LOAD out=A:0,1 l3=0 slot=3 bank=0
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=2 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=1
 OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=1
 OP kind=L3_MOVE out=B:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=B:0,0 l2=0 slot=2
 OP kind=FEED in=B:0,0 port_kind=input port="North"
+OP kind=L2_RELEASE out=B:0,0 l2=0 slot=2
 OP kind=MATMUL_ACCUM in=A:0,0;B:0,0 out=C:0,0 label="line 12"
 OP kind=L3_MOVE out=A:0,1 l3=0 slot=3 bank=0
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=3
 OP kind=FEED in=A:0,1 port_kind=input port="West"
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=3
 OP kind=L3_MOVE out=B:1,0 l3=0 slot=1 bank=0
+OP kind=L2_STAGE out=B:1,0 l2=0 slot=4
 OP kind=FEED in=B:1,0 port_kind=input port="North"
+OP kind=L2_RELEASE out=B:1,0 l2=0 slot=4
 OP kind=MATMUL_ACCUM in=A:0,1;B:1,0 out=C:0,0 label="line 12"
 OP kind=DRAIN out=C:0,0 port_kind=output port="South"
+OP kind=L2_STAGE out=C:0,0 l2=0 slot=0
 OP kind=L3_WRITEBACK out=C:0,0 l3=0 slot=4 bank=0
+OP kind=L2_RELEASE out=C:0,0 l2=0 slot=0
 OP kind=L3_STORE out=C:0,0 l3=0 slot=4 bank=0
 OP kind=L3_RELEASE out=C:0,0 l3=0 slot=4 bank=0
 OP kind=L3_RELEASE out=A:0,0 l3=0 slot=2 bank=0
@@ -30,17 +40,27 @@ OP kind=L3_RELEASE out=A:0,1 l3=0 slot=3 bank=0
 OP kind=L3_LOAD out=A:1,0 l3=0 slot=5 bank=0
 OP kind=L3_LOAD out=A:1,1 l3=0 slot=6 bank=0
 OP kind=L3_MOVE out=A:1,0 l3=0 slot=5 bank=0
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=0
 OP kind=FEED in=A:1,0 port_kind=input port="West"
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=0
 OP kind=L3_MOVE out=B:0,0 l3=0 slot=0 bank=0
+OP kind=L2_STAGE out=B:0,0 l2=0 slot=1
 OP kind=FEED in=B:0,0 port_kind=input port="North"
+OP kind=L2_RELEASE out=B:0,0 l2=0 slot=1
 OP kind=MATMUL_ACCUM in=A:1,0;B:0,0 out=C:1,0 label="line 12"
 OP kind=L3_MOVE out=A:1,1 l3=0 slot=6 bank=0
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=2
 OP kind=FEED in=A:1,1 port_kind=input port="West"
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=2
 OP kind=L3_MOVE out=B:1,0 l3=0 slot=1 bank=0
+OP kind=L2_STAGE out=B:1,0 l2=0 slot=3
 OP kind=FEED in=B:1,0 port_kind=input port="North"
+OP kind=L2_RELEASE out=B:1,0 l2=0 slot=3
 OP kind=MATMUL_ACCUM in=A:1,1;B:1,0 out=C:1,0 label="line 12"
 OP kind=DRAIN out=C:1,0 port_kind=output port="South"
+OP kind=L2_STAGE out=C:1,0 l2=0 slot=5
 OP kind=L3_WRITEBACK out=C:1,0 l3=0 slot=7 bank=0
+OP kind=L2_RELEASE out=C:1,0 l2=0 slot=5
 OP kind=L3_STORE out=C:1,0 l3=0 slot=7 bank=0
 OP kind=L3_RELEASE out=C:1,0 l3=0 slot=7 bank=0
 OP kind=L3_RELEASE out=A:1,0 l3=0 slot=5 bank=0
@@ -52,17 +72,27 @@ OP kind=L3_LOAD out=B:1,1 l3=0 slot=9 bank=0
 OP kind=L3_LOAD out=A:0,0 l3=0 slot=10 bank=0
 OP kind=L3_LOAD out=A:0,1 l3=0 slot=11 bank=0
 OP kind=L3_MOVE out=A:0,0 l3=0 slot=10 bank=0
+OP kind=L2_STAGE out=A:0,0 l2=0 slot=5
 OP kind=FEED in=A:0,0 port_kind=input port="West"
+OP kind=L2_RELEASE out=A:0,0 l2=0 slot=5
 OP kind=L3_MOVE out=B:0,1 l3=0 slot=8 bank=0
+OP kind=L2_STAGE out=B:0,1 l2=0 slot=0
 OP kind=FEED in=B:0,1 port_kind=input port="North"
+OP kind=L2_RELEASE out=B:0,1 l2=0 slot=0
 OP kind=MATMUL_ACCUM in=A:0,0;B:0,1 out=C:0,1 label="line 12"
 OP kind=L3_MOVE out=A:0,1 l3=0 slot=11 bank=0
+OP kind=L2_STAGE out=A:0,1 l2=0 slot=1
 OP kind=FEED in=A:0,1 port_kind=input port="West"
+OP kind=L2_RELEASE out=A:0,1 l2=0 slot=1
 OP kind=L3_MOVE out=B:1,1 l3=0 slot=9 bank=0
+OP kind=L2_STAGE out=B:1,1 l2=0 slot=2
 OP kind=FEED in=B:1,1 port_kind=input port="North"
+OP kind=L2_RELEASE out=B:1,1 l2=0 slot=2
 OP kind=MATMUL_ACCUM in=A:0,1;B:1,1 out=C:0,1 label="line 12"
 OP kind=DRAIN out=C:0,1 port_kind=output port="South"
+OP kind=L2_STAGE out=C:0,1 l2=0 slot=4
 OP kind=L3_WRITEBACK out=C:0,1 l3=0 slot=12 bank=0
+OP kind=L2_RELEASE out=C:0,1 l2=0 slot=4
 OP kind=L3_STORE out=C:0,1 l3=0 slot=12 bank=0
 OP kind=L3_RELEASE out=C:0,1 l3=0 slot=12 bank=0
 OP kind=L3_RELEASE out=A:0,0 l3=0 slot=10 bank=0
@@ -70,17 +100,27 @@ OP kind=L3_RELEASE out=A:0,1 l3=0 slot=11 bank=0
 OP kind=L3_LOAD out=A:1,0 l3=0 slot=13 bank=0
 OP kind=L3_LOAD out=A:1,1 l3=0 slot=14 bank=0
 OP kind=L3_MOVE out=A:1,0 l3=0 slot=13 bank=0
+OP kind=L2_STAGE out=A:1,0 l2=0 slot=4
 OP kind=FEED in=A:1,0 port_kind=input port="West"
+OP kind=L2_RELEASE out=A:1,0 l2=0 slot=4
 OP kind=L3_MOVE out=B:0,1 l3=0 slot=8 bank=0
+OP kind=L2_STAGE out=B:0,1 l2=0 slot=5
 OP kind=FEED in=B:0,1 port_kind=input port="North"
+OP kind=L2_RELEASE out=B:0,1 l2=0 slot=5
 OP kind=MATMUL_ACCUM in=A:1,0;B:0,1 out=C:1,1 label="line 12"
 OP kind=L3_MOVE out=A:1,1 l3=0 slot=14 bank=0
+OP kind=L2_STAGE out=A:1,1 l2=0 slot=0
 OP kind=FEED in=A:1,1 port_kind=input port="West"
+OP kind=L2_RELEASE out=A:1,1 l2=0 slot=0
 OP kind=L3_MOVE out=B:1,1 l3=0 slot=9 bank=0
+OP kind=L2_STAGE out=B:1,1 l2=0 slot=1
 OP kind=FEED in=B:1,1 port_kind=input port="North"
+OP kind=L2_RELEASE out=B:1,1 l2=0 slot=1
 OP kind=MATMUL_ACCUM in=A:1,1;B:1,1 out=C:1,1 label="line 12"
 OP kind=DRAIN out=C:1,1 port_kind=output port="South"
+OP kind=L2_STAGE out=C:1,1 l2=0 slot=3
 OP kind=L3_WRITEBACK out=C:1,1 l3=0 slot=15 bank=0
+OP kind=L2_RELEASE out=C:1,1 l2=0 slot=3
 OP kind=L3_STORE out=C:1,1 l3=0 slot=15 bank=0
 OP kind=L3_RELEASE out=C:1,1 l3=0 slot=15 bank=0
 OP kind=L3_RELEASE out=A:1,0 l3=0 slot=13 bank=0

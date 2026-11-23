@@ -1,8 +1,8 @@
-csp 1.0
+csp 1.1
 // The first operator of a chain (kpu-run-csp-programs step 4d): C = relu(A B), left resident in
 // L3 for the operator after it. `retain` writes each accumulator back into a slot it keeps --
 // with its epilogue on the way -- and never stores it.
-program matmul_relu_retain machine flat(l3 = 16) {
+program matmul_relu_retain machine flat(l3 = 16, l2 = 8) {
   tensor A[32,32] tile 16x16 in;
   tensor B[32,32] tile 16x16 in;
   tensor C[32,32] tile 16x16 out;

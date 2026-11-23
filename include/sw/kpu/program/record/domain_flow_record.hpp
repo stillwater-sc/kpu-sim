@@ -46,6 +46,10 @@
 //                   bit per csp::VeOp the action's stages apply, and steps.init_tile, the init
 //                   stage's tile (none: kNone32). And (#395) steps.dataflow, a Call's or its
 //                   Drain's dataflow as the program states it (0 default: the deployment's).
+//                   And (csp 1.1, docs/plans/slot-credits-at-lca.md) every L2 copy is a staging:
+//                   an unstaged operand's one-Feed copy (Move, Feed, L2Release), and a result's
+//                   slot, a partial with one merge (its Drain an overwrite). A step of such a
+//                   copy carries flag kCopy (128), which tells it from a staging the program states.
 //   (version 6)     the record kpu-sim and the KPU RTL share (docs/plans/shared-tile-flow-record.md,
 //                   #386). The manifest names the level and the producer, time (null at L-B), every
 //                   layer's geometry (L-B models DRAM and L3; L2's banks and rows, the accumulator and
@@ -127,7 +131,8 @@ inline constexpr std::uint64_t kNone64 = ~std::uint64_t{0};
 struct DomainFlowRecord {
     // Step flags.
     static constexpr std::uint8_t kOpens = 1, kCloses = 2, kRetains = 4, kHasPlace = 8, kPinned = 16, kHasL2 = 32,
-                                  kStages = 64;
+                                  kStages = 64,
+                                  kCopy = 128;  // a copy the walker places in L2 (slot-credits-at-lca.md)
     // Residency flags.
     static constexpr std::uint8_t kLoaded = 1, kInherited = 2, kRetained = 4, kResPinned = 8;
 
@@ -515,14 +520,17 @@ public:
                 st.slot = a.l2->slot;
                 st.open = i;
                 st.residency = a.residency == csp::kNone ? kNone64 : a.residency;
-                st.partial = a.merge != csp::Merge::None;     // an L2 accumulator's first Drain opens its slot
+                // An L2 accumulator's first Drain opens its slot; so does a fabric result's Drain
+                // (slot-credits-at-lca.md): the Combiner writes the drained result into its slot,
+                // a partial with one merge, written back once and released.
+                st.partial = a.merge != csp::Merge::None || a.kind == csp::Action::Kind::Drain;
                 rec_.stagings.push_back(st);
             } else if (a.kind == csp::Action::Kind::Feed) {
                 ++rec_.stagings.at(a.staging).feeds;
             } else if (a.kind == csp::Action::Kind::L2Release) {
                 rec_.stagings.at(a.staging).close = i;
             }
-            if (a.kind == csp::Action::Kind::Drain && a.merge != csp::Merge::None) ++rec_.stagings.at(a.staging).merges;
+            if (a.kind == csp::Action::Kind::Drain) ++rec_.stagings.at(a.staging).merges;
         }
 
         // The iteration summary: every loop iteration at every depth, for the whole run.
@@ -562,7 +570,8 @@ public:
                                             (a.kind == csp::Action::Kind::Release ? DFR::kCloses : 0) |
                                             (a.kind == csp::Action::Kind::Retain ? DFR::kRetains : 0) |
                                             (a.place ? DFR::kHasPlace : 0) | (e.pinned ? DFR::kPinned : 0) |
-                                            (a.l2 ? DFR::kHasL2 : 0) | (e.opens_staging ? DFR::kStages : 0));
+                                            (a.l2 ? DFR::kHasL2 : 0) | (e.opens_staging ? DFR::kStages : 0) |
+                                            (a.copy ? DFR::kCopy : 0));
         s.where = where_index(e.where);
         s.held = held;
         if (a.place) {
@@ -576,6 +585,9 @@ public:
             s.staging = a.staging;
         }
         s.merge = static_cast<std::uint8_t>(a.merge);
+        // A fabric result's Drain into its L2 slot is that partial's one merge: an overwrite.
+        if (a.kind == csp::Action::Kind::Drain && a.l2 && a.merge == csp::Merge::None)
+            s.merge = static_cast<std::uint8_t>(csp::Merge::Overwrite);
         s.dataflow = static_cast<std::uint8_t>(a.dataflow);
         for (const csp::Stage& st : a.context) {
             s.stages = static_cast<std::uint16_t>(s.stages | (1u << static_cast<unsigned>(st.op)));

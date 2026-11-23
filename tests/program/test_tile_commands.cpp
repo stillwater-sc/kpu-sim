@@ -124,7 +124,7 @@ TEST_CASE("tile commands: the JSON is pinned", "[program][tilecmd]") {
 }
 
 TEST_CASE("tile commands: what version 1 does not lower is refused by name", "[program][tilecmd]") {
-    const std::string head = "csp 1.0\nprogram t machine flat(l3 = 3) {\n";
+    const std::string head = "csp 1.1\nprogram t machine flat(l3 = 3, l2 = 8) {\n";
     // fp32 operands: the tile computes int8 x int8 -> int32.
     CHECK_THAT(refusal(head + "  tensor A[4,4] tile 4x4 in;\n  tensor B[4,4] tile 4x4 in;\n  tensor C[4,4] tile 4x4 out;\n"
                               "  resident A[0, 0], B[0, 0];\n  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
@@ -136,7 +136,7 @@ TEST_CASE("tile commands: what version 1 does not lower is refused by name", "[p
                               "  store C[0, 0];\n  release A[0, 0], B[0, 0];\n}\n"),
                ContainsSubstring("the 4x4 array's"));
     // An L3 slot reused: the host fills L3 once.
-    CHECK_THAT(refusal("csp 1.0\nprogram t machine flat(l3 = 2) {\n"
+    CHECK_THAT(refusal("csp 1.1\nprogram t machine flat(l3 = 2, l2 = 8) {\n"
                        "  tensor A[4,8] int8 tile 4x4 in;\n  tensor B[8,4] int8 tile 4x4 in;\n  tensor C[4,4] int32 tile 4x4 out;\n"
                        "  acc C[0, 0] in fabric {\n    for k in 0..2 {\n      resident A[0, k], B[k, 0];\n"
                        "      call gemm(A[0, k], B[k, 0]) +-> C[0, 0];\n      release A[0, k], B[k, 0];\n    }\n  }\n"

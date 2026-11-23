@@ -566,7 +566,7 @@ if(KPU_BUILD_TESTS)
                 -DCMD=$<TARGET_FILE:run>
                 -DARGS=--program$<SEMICOLON>${_corpus}/matmul_48x48x48_t16.csp$<SEMICOLON>--level$<SEMICOLON>behavioral$<SEMICOLON>--dflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/csp_cut.dflow$<SEMICOLON>--dflow-limit$<SEMICOLON>50
                 -DEXPECT_CODE=0
-                -DMUST_MATCH=wrote.*csp_cut.dflow.*50.of.243.steps.*steps.cut.at.--dflow-limit
+                -DMUST_MATCH=wrote.*csp_cut.dflow.*50.of.306.steps.*steps.cut.at.--dflow-limit
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
         )
         add_test(NAME dflow_check_cut

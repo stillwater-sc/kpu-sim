@@ -50,8 +50,11 @@ std::vector<std::uint8_t> tile_bytes(const TensorOperand& t, const TileCoord& c)
 
 }  // namespace
 
-TileCommandStream lower_tile_commands(const CspProgram& p, const TileTarget& t, const TileProgram* inputs,
+TileCommandStream lower_tile_commands(const CspProgram& placed, const TileTarget& t, const TileProgram* inputs,
                                       const TileProgram* expected) {
+    // The RTL's slots are its own pair ring (TileTarget); the copies the walker places in L2 lower
+    // as before, and the RTL's COMPUTE releases its pair (slot-credits-at-lca.md §3.2).
+    const CspProgram p = without_copies(placed);
     if (t.dim == 0 || t.buffers == 0 || t.acc_slots == 0 || t.buffers > 8 || t.acc_slots > 16)
         refuse("the tile target needs dim >= 1, 1..8 pair buffers and 1..16 accumulator slots (4-bit slot tags)");
     TileCommandStream s;

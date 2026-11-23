@@ -252,7 +252,22 @@ struct Action {
     // accumulator's first call, and its values (a vector's broadcast down the rows) are the
     // accumulator's from then on. None on every other action.
     std::optional<TileCoord> seeds;
+    // A copy the walker places in L2 as of slice 2 (an unstaged operand's Move and Feed; a result's
+    // Drain, Writeback and L2Release): the timed levels execute these slots from slice 2's later
+    // steps (docs/plans/slot-credits-at-lca.md §4), and see them through unplaced() until then.
+    bool copy = false;
 };
+
+// The action as the timed levels execute it in slice 2's step 1: a copy without its L2 slot,
+// as every level ran it before the walker placed it.
+inline Action unplaced(const Action& a) {
+    Action b = a;
+    if (b.copy) {
+        b.l2.reset();
+        b.staging = kNone;
+    }
+    return b;
+}
 
 inline const char* to_string(Action::Kind k) {
     switch (k) {
@@ -339,6 +354,9 @@ struct Staging {
     L2Address place;
     bool partial = false;               // an L2 accumulator's partial, which the Combiner merges into
     std::size_t merges = 0;             // a partial: the Drains merged into it, the first included
+    // A copy the walker places, not a staging the program states (slot-credits-at-lca.md): an
+    // unstaged operand's one-Feed copy, or a result's slot.
+    bool copy = false;
 };
 
 // What the program decided about reuse, before any simulation.
@@ -373,10 +391,16 @@ public:
         std::vector<std::string> seen;
         std::size_t open = 0, staged = 0;
         for (const Action& a : actions) {
-            if (a.l2 && a.kind == Action::Kind::Move) { ++r.stagings; r.peak_l2 = std::max(r.peak_l2, ++staged); }
+            // The stagings and partials the program states; the copies the walker places (an
+            // unstaged operand's, a result's) hold slots too, so they count toward the peak.
+            if (a.l2 && a.kind == Action::Kind::Move) {
+                if (!a.copy) ++r.stagings;
+                r.peak_l2 = std::max(r.peak_l2, ++staged);
+            }
             if (a.merge == Merge::Overwrite) { ++r.partials; r.peak_l2 = std::max(r.peak_l2, ++staged); }
+            if (a.copy && a.l2 && a.kind == Action::Kind::Drain) r.peak_l2 = std::max(r.peak_l2, ++staged);
             if (a.merge != Merge::None) ++r.merges;
-            if (a.l2 && a.kind == Action::Kind::Feed) ++r.staged_feeds;
+            if (a.l2 && a.kind == Action::Kind::Feed && !a.copy) ++r.staged_feeds;
             if (a.kind == Action::Kind::L2Release) --staged;
             switch (a.kind) {
                 case Action::Kind::Load:
@@ -444,5 +468,17 @@ public:
         return o.str();
     }
 };
+
+// The program as its consumers from before slice 2 read it (the printer, the tile-command
+// lowering): its copies unplaced, and their L2Releases gone. Action indices are not preserved.
+inline CspProgram without_copies(const CspProgram& p) {
+    CspProgram q = p;
+    q.actions.clear();
+    for (const Action& a : p.actions) {
+        if (a.copy && a.kind == Action::Kind::L2Release) continue;
+        q.actions.push_back(unplaced(a));
+    }
+    return q;
+}
 
 }  // namespace sw::kpu::program::csp

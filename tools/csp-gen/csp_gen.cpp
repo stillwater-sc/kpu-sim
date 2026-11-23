@@ -54,6 +54,10 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
   --dtype <fp32|int8>           matmul (and a requantized linear): A's and B's number system;
                                 C (and D or b) is in its registered accumulator's: int8 -> int32
                                 (default fp32)
+  --l2-buffers <1|2>            the L2 slots the program declares (l2 = N): enough for this many
+                                rounds of what one call holds at once, its operands' copies and its
+                                result's slot, on top of what its blocks hold. 1 is single
+                                buffering, 2 double                    (default 2)
   --dataflow <os|ws|is>         matmul, linear: the stationary operand (default os). os holds C in
                                 the fabric; ws holds B's tile, staged in L2 across the i loop;
                                 is holds A's, across the j loop. ws and is keep C's partials
@@ -117,7 +121,7 @@ int main(int argc, char** argv) {
     for (const auto& [k, v] : a)
         if (k != "--algo" && k != "--size" && k != "--tile" && k != "--l3" && k != "--target" && k != "--orient" &&
             k != "--act" && k != "--place" && k != "--stage-a" && k != "--init" && k != "--dtype" &&
-            k != "--dataflow" && k != "--format" && k != "--requant" && k != "--requant-channels" && k != "-o")
+            k != "--dataflow" && k != "--format" && k != "--requant" && k != "--requant-channels" && k != "--l2-buffers" && k != "-o")
             return usage("unknown option '" + k + "'");
     for (const char* k : {"--algo", "--size", "--tile"})
         if (!a.count(k)) return usage(std::string(k) + " is required");
@@ -172,6 +176,11 @@ int main(int argc, char** argv) {
     if (a.count("--format")) {
         if (o.algo != "linear") return usage("--format is linear's; --algo is '" + o.algo + "'");
         o.format = a["--format"];
+    }
+    if (a.count("--l2-buffers")) {
+        const std::string v = a["--l2-buffers"];
+        if (v != "1" && v != "2") return usage("--l2-buffers is 1 (single buffering) or 2 (double)");
+        o.l2_buffers = std::stoi(v);
     }
     if (a.count("--dataflow")) {
         if (o.algo != "matmul" && o.algo != "linear")

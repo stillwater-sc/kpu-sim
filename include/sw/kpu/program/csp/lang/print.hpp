@@ -63,7 +63,9 @@ inline std::string via_text(const std::vector<csp::Stage>& drain, const std::vec
     return out;
 }
 
-inline std::string print(const CspProgram& p) {
+inline std::string print(const CspProgram& placed) {
+    // The text states the program's statements; the copies the walker places are not statements.
+    const CspProgram p = without_copies(placed);
     using K = Action::Kind;
     // How each operand is used, for its declaration.
     std::set<std::string> loaded, stored;

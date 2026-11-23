@@ -149,8 +149,8 @@ TEST_CASE("CSP format: the canonical text is a fixed point and compiles to the s
         }
     }
     // Precedence and associativity survive: a - (b - c) keeps its parentheses, (a * b) + c drops them.
-    const std::string src = R"(csp 1.0
-program e machine flat(l3 = 8) {
+    const std::string src = R"(csp 1.1
+program e machine flat(l3 = 8, l2 = 8) {
   tensor A[256,32] tile 32x32 in;
   for i in 0..2 {
     for j in 0..2 {

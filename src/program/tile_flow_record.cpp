@@ -79,10 +79,12 @@ TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::Csp
     rec.stations.push_back({d.name + "/dram", "dram", 0, false, true});
     rec.stations.push_back({pooled_name(d.name, "l3"), "l3", static_cast<std::uint64_t>(ast.l3), true, true});
     // L2 is modelled when the program stages (version 6): its capacity is the program's slots,
-    // and its occupancy the staged copies. A transient copy holds no L2 credit at L-T1.
+    // and its occupancy the staged copies and partials. Every program declares its L2 slots now
+    // (slot-credits-at-lca.md), but L-T1 does not yet time the copies the walker places, so a
+    // program with no staging of its own still says L2 is unmodelled rather than draw it empty.
     rec.phases = true;
-    rec.l2_slots = static_cast<std::uint32_t>(ast.l2);
-    const bool staged = rec.l2_slots > 0;
+    const bool staged = !outcome.l2_slots.empty();
+    rec.l2_slots = staged ? static_cast<std::uint32_t>(ast.l2) : 0;
     rec.stations.push_back({pooled_name(d.name, "l2"), "l2", rec.l2_slots, true, staged});
     rec.stations.push_back({pooled_name(d.name, "l1"), "l1", 0, true, false});
     rec.stations.push_back({pooled_name(d.name, "dmabuf"), "dmabuf", 0, true, false});

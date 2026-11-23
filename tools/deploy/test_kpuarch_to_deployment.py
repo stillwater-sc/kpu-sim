@@ -146,7 +146,7 @@ class Convert(unittest.TestCase):
         kpu_run = os.environ.get("KPU_RUN")
         if not kpu_run:
             self.skipTest("KPU_RUN (the kpu-run binary) not given")
-        program = ("csp 1.0\nprogram t machine flat(l3 = 3) {\n  tensor A[4,4] int8 tile 4x4 in;\n"
+        program = ("csp 1.1\nprogram t machine flat(l3 = 3, l2 = 8) {\n  tensor A[4,4] int8 tile 4x4 in;\n"
                    "  tensor B[4,4] int8 tile 4x4 in;\n  tensor C[4,4] int32 tile 4x4 out;\n"
                    "  resident A[0, 0], B[0, 0];\n  acc C[0, 0] in fabric { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
                    "  store C[0, 0];\n  release A[0, 0], B[0, 0];\n}\n")
