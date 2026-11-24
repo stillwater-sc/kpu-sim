@@ -190,6 +190,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **`docs/plans/cycle-based-kpu-prototype.md`: a bottom-up, cycle-based KPU prototype.** On 2026-11-24 the user redirected
+  #401's work.
+  - **Frozen:** L-T1 and the comparisons between fidelities.
+  - **The route:** build a cycle-based core first, and test it on a synthetic pipeline. Then model two subsystems,
+    each verified on its own data, invariants and event counters:
+    - the memory side, DRAM + MC + DMA + NoC + L3, with the DMAs' CSP programs filling the L3s and a hypothesized
+      C stored back;
+    - the compute path, L3 → BM → L2 → STR → L1 → array → L1 → Combiner → L2 → BM → L3.
+  - **Observability:** each subsystem comes with a Perfetto trace, a deadlock detector and operational-analysis
+    counters (XUE).
+  - **What carries over:** the cycle-accurate LPDDR5 controller and the NoC hubs and ports are ported onto the
+    core, not rewritten.
+  - **Parked:** the formula-based #458 branch.
+
 - **`docs/plans/systolic-tile-at-lca.md`: the systolic tile at L-CA** (#401's slice 3: #458, #389, #385). It
   lays out the RTL's Streamer for an output-stationary matmul and how L-CA will mirror it:
   - **In the RTL:** one-block L1 lane buffers with one credit each, COMPUTE commands accepted every
