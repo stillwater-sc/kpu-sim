@@ -18,10 +18,15 @@
 // CONSERVATION, every cycle: credits held + items in flight + items buffered + credits in flight
 // = capacity. check() raises if it does not hold.
 //
+// COUNTERS (counters.hpp): A = items pushed, C = items popped, the occupancy integral of items in
+// the link (in flight or buffered), and busy = the cycles it carried a push (its use as a channel).
+// The sender, not the link, reports a stall for want of a credit.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 
+#include <sw/kpu/cycle/counters.hpp>
 #include <sw/kpu/cycle/time.hpp>
 
 #include <cstddef>
@@ -83,14 +88,38 @@ public:
                                    std::to_string(credits_) + " + in flight " + std::to_string(in_flight(now)) +
                                    " + buffered " + std::to_string(buffered(now)) + " + returning " +
                                    std::to_string(returning_.size()) + " != capacity " + std::to_string(capacity_));
+        if (counts_.arrivals - counts_.completions != held())
+            throw std::logic_error("cycle::Link " + name_ + " at cycle " + std::to_string(now) + ": " +
+                                   std::to_string(counts_.arrivals) + " pushed - " + std::to_string(counts_.completions) +
+                                   " popped != " + std::to_string(held()) + " held");
     }
 
     virtual void reset() {
         credits_ = capacity_;
         returning_.clear();
+        counts_.reset();
+        pushed_this_cycle_ = false;
     }
 
+    // The simulator closes every cycle of the link's domain.
+    void end_cycle() {
+        ++counts_.cycles;
+        if (pushed_this_cycle_) ++counts_.busy;
+        else ++counts_.idle;
+        counts_.occupancy = held();
+        counts_.occupancy_integral += counts_.occupancy;
+        if (counts_.occupancy > counts_.max_occupancy) counts_.max_occupancy = counts_.occupancy;
+        pushed_this_cycle_ = false;
+    }
+    [[nodiscard]] const Counters& counts() const { return counts_; }
+
 protected:
+    [[nodiscard]] virtual std::size_t held() const = 0;   // in flight + buffered
+    void counted_push() {
+        ++counts_.arrivals;
+        pushed_this_cycle_ = true;
+    }
+    void counted_pop() { ++counts_.completions; }
     void spend_credit(Cycle now) {
         settle(now);
         if (credits_ == 0)
@@ -114,6 +143,8 @@ private:
     Cycle latency_, credit_latency_;
     std::size_t credits_;
     std::deque<Cycle> returning_;       // arrival cycle of each credit on its way back
+    Counters counts_;
+    bool pushed_this_cycle_ = false;
 };
 
 template <class T>
@@ -127,6 +158,7 @@ public:
     void push(Cycle now, T item) {
         spend_credit(now);
         pipe_.push_back({now + latency(), std::move(item)});
+        counted_push();
     }
 
     // Receiver side: the oldest landed item.
@@ -142,6 +174,7 @@ public:
         T item = std::move(pipe_.front().second);
         pipe_.pop_front();
         return_credit(now);
+        counted_pop();
         return item;
     }
 
@@ -158,6 +191,7 @@ public:
     }
 
 private:
+    [[nodiscard]] std::size_t held() const override { return pipe_.size(); }
     std::deque<std::pair<Cycle, T>> pipe_;   // (arrival cycle, item), in push order
 };
 

@@ -9,10 +9,15 @@
 // there. commit() runs after every component of the domain has evaluated, for a component that
 // keeps registered state of its own (a pipeline register read by its own next evaluate).
 //
+// COUNTERS (counters.hpp). evaluate() reports the cycle's state -- counters().busy(), or
+// counters().stall(cause); nothing reported is idle -- and each work item it accepts and
+// finishes (accept(), complete()). The simulator closes the cycle.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 
+#include <sw/kpu/cycle/counters.hpp>
 #include <sw/kpu/cycle/time.hpp>
 
 #include <string>
@@ -39,9 +44,13 @@ public:
     virtual void check(Cycle /*now*/) const {}
     virtual void reset() {}
 
+    [[nodiscard]] ComponentCounters& counters() { return counters_; }
+    [[nodiscard]] const Counters& counts() const { return counters_.counts(); }
+
 private:
     std::string name_;
     Domain* domain_;
+    ComponentCounters counters_;
 };
 
 }  // namespace sw::kpu::cycle

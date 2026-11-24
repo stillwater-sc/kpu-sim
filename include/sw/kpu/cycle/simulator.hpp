@@ -76,10 +76,12 @@ public:
     //           returns >= 1 cycle later, so no component sees another's work of this cycle, and the
     //           order of this loop cannot change the result (link.hpp);
     //        b. commit: components with registered state of their own latch it;
-    //        c. check: every link's credit conservation and every component's invariants, after the
+    //        c. count: every component and link closes the cycle's counters (counters.hpp): its
+    //           state, and the items it holds into the occupancy integral;
+    //        d. check: every link's credit conservation and every component's invariants, after the
     //           cycle has settled. This is the debug guarantee of the plan (§3.3): a violation stops
-    //           the run at the cycle it happens;
-    //        d. the domain's clock advances to its next edge.
+    //           the run at the cycle it happens. set_checks(false) skips it, to measure its cost;
+    //        e. the domain's clock advances to its next edge.
     //   A step costs O(the components and links of the domains clocked at `t`).
     //
     // WHY CYCLE-BASED, NOT AN EVENT QUEUE PER COMPONENT. An event-driven simulator keeps a priority
@@ -110,8 +112,12 @@ public:
             const Clocked& k = clocked_[i];
             for (Component* x : k.components) x->evaluate(c);
             for (Component* x : k.components) x->commit(c);
-            for (LinkBase* l : k.links) l->check(c);
-            for (Component* x : k.components) x->check(c);
+            for (Component* x : k.components) x->counters().end_cycle();
+            for (LinkBase* l : k.links) l->end_cycle();
+            if (checks_) {
+                for (LinkBase* l : k.links) l->check(c);
+                for (Component* x : k.components) x->check(c);
+            }
             d.advance();
         }
         return true;
@@ -135,9 +141,23 @@ public:
     }
 
     [[nodiscard]] Picoseconds now() const { return now_; }     // the last edge taken
+    // The per-cycle invariant checks, on by default. Off only to measure what they cost.
+    void set_checks(bool on) { checks_ = on; }
+    [[nodiscard]] bool checks() const { return checks_; }
+
+    // The counters of every component and link, in the order added (report.hpp formats them).
+    template <class F>
+    void for_each_counted(F&& f) const {
+        for (const auto& x : components_) f(x->name(), x->domain().name(), false, x->counts());
+        for (const auto& l : links_) f(l->name(), l->domain().name(), true, l->counts());
+    }
+
     void reset() {
         for (const auto& d : domains_) d->reset();
-        for (const auto& x : components_) x->reset();
+        for (const auto& x : components_) {
+            x->reset();
+            x->counters().reset();
+        }
         for (const auto& l : links_) l->reset();
         now_ = 0;
     }
@@ -158,6 +178,7 @@ private:
 
     std::vector<std::unique_ptr<Domain>> domains_;
     std::vector<Clocked> clocked_;                       // parallel to domains_
+    bool checks_ = true;
     std::vector<std::unique_ptr<Component>> components_;
     std::vector<std::unique_ptr<LinkBase>> links_;
     Picoseconds now_ = 0;
