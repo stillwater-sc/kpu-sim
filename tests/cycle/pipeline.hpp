@@ -16,7 +16,7 @@
 //   Producer   busy when it pushes; stalled (no credit) when it has a beat due and no credit;
 //              idle otherwise (done, or waiting out its interval). Each push is a completion.
 //   Stage      stalled (no credit) when its oldest beat is ready and the link onward has no
-//              credit; busy while it holds a beat or accepts one; idle when empty. A beat is an
+//              credit; busy while it holds, forwards or accepts a beat; idle otherwise. A beat is an
 //              arrival when accepted and a completion when pushed onward.
 //   Consumer   busy when it pops; stalled (held) in a stall window with a beat waiting; idle
 //              otherwise. A pop is an arrival and a completion.
@@ -89,12 +89,13 @@ public:
     }
 
     void evaluate(Cycle now) override {
-        bool blocked = false;
+        bool blocked = false, forwarded = false;
         if (!held_.empty() && held_.front().first <= now) {
             if (out_->can_push(now)) {
                 out_->push(now, std::move(held_.front().second));
                 held_.pop_front();
                 counters().complete();
+                forwarded = true;
             } else {
                 blocked = true;
             }
@@ -107,7 +108,7 @@ public:
             accepted = true;
         }
         if (blocked) counters().stall(Stall::NoCredit);
-        else if (accepted || !held_.empty()) counters().busy();
+        else if (accepted || forwarded || !held_.empty()) counters().busy();
     }
     [[nodiscard]] bool idle() const override { return held_.empty(); }
     void check(Cycle now) const override {

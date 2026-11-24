@@ -27,12 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     integrals equal the residence times, measured beat by beat from the logs. Stalls go under their cause, each
     component counts its own domain's cycles, and the XUE export and reset work. Two deliberate mutations, a stage
     reporting busy when blocked and a link dropping its integral, each fail the tests.
-  - **Benchmark** (`bench_cycle_core`, with `--quick` run in CTest). Measured on an i7-12700K (gcc -O3):
-    - a component evaluation costs 25–45 ns on chains of 10–100 stages and 73–97 ns at 10 000 stages, where the
+  - **Benchmark** (`bench_cycle_core`, with `--quick` run in CTest). Each pair runs checks on, off, off, on, and
+    a row reports the mean and the spread. Measured on an i7-12700K (gcc -O3):
+    - a component evaluation costs 24–50 ns on chains of 10–100 stages and 77–102 ns at 10 000 stages, where the
       working set leaves cache;
-    - the invariant checks add 25–45%;
-    - an idle evaluation costs 5–17 ns;
-    - with sparse traffic 95% of evaluations are idle, the most an opt-in sleep could save.
+    - the invariant checks add 20–50% with dense traffic and 40–145% with sparse traffic, where the evaluations
+      themselves are cheap;
+    - an idle evaluation costs 8–16 ns;
+    - with sparse traffic 90–95% of evaluations are idle, the most an opt-in sleep could save.
 
 - **The cycle core, step 0a** (#533; epic #532, `docs/plans/cycle-based-kpu-prototype.md` §3). A new layer,
   `include/sw/kpu/cycle/`, for building the KPU bottom-up as clocked components. Nothing existing changes.

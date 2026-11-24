@@ -126,6 +126,29 @@ TEST_CASE("Little's law is exact: the occupancy integrals are the residence time
     }
 }
 
+TEST_CASE("A stage is busy from the cycle it accepts a beat to the cycle it forwards it", "[cycle][counters]") {
+    // One beat through a stage of latency 3: pushed at 0, accepted at 1, held at the end of 1, 2
+    // and 3, forwarded at 4 with nothing left -- a productive cycle, so busy (#550's review): 4.
+    Simulator sim;
+    Domain& d = sim.add_domain(Domain("clk", 1000));
+    auto& p = sim.add<Producer>("producer", d, 1);
+    auto& s = sim.add<Stage>("stage", d, 3);
+    auto& c = sim.add<Consumer>("consumer", d);
+    auto& a = sim.link<Beat>("p->s", p, s, 1);
+    auto& b = sim.link<Beat>("s->c", s, c, 1);
+    p.connect(a);
+    s.connect(a, b);
+    c.connect(b);
+    REQUIRE(sim.run_until_idle(kLimit));
+    c.finish(1);
+    CHECK(c.received.front().second == 5);
+    const Counters st = counts(sim).at("stage");
+    CHECK(st.busy == 4);
+    CHECK(st.occupancy_integral == 3);                     // held at the end of 1, 2 and 3
+    CHECK(st.idle == st.cycles - 4);
+    partitioned(sim);
+}
+
 TEST_CASE("Stalls are counted under their cause", "[cycle][counters]") {
     // The consumer is held for cycles [20, 80) with a beat waiting in every one of them; behind it
     // the stage and the producer run out of credits.

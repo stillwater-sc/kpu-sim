@@ -9,7 +9,9 @@
 //   dense    a beat every cycle, max(M, 4N) of them so that a long chain is mostly in steady state
 //            (filling and draining take 2N cycles each way, one hop being a stage and a link)
 //   sparse   M beats, one every 20 cycles: most stages are idle most of the time
-// Reported per run: simulated cycles, wall time, cycles per second, component evaluations per
+// Each pair of settings runs in the order checks on, off, off, on, so that drift (warm-up, clock
+// changes) falls on both alike; a row is the mean of its two runs, with their spread as an estimate
+// of the noise. Reported: simulated cycles, wall time, cycles per second, component evaluations per
 // second and ns per evaluation, and the IDLE SHARE -- the fraction of component evaluations in
 // which the component was idle (its counters), which is what an opt-in sleep (simulator.hpp,
 // step()) could save at most.
@@ -28,6 +30,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -91,7 +95,7 @@ Result run(std::size_t stages, std::uint64_t beats, bool dense, bool checks) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     const bool quick = argc > 1 && std::strcmp(argv[1], "--quick") == 0;
     const std::vector<std::size_t> sizes = quick ? std::vector<std::size_t>{10, 100}
                                                  : std::vector<std::size_t>{10, 100, 1000, 10000};
@@ -99,18 +103,31 @@ int main(int argc, char** argv) {
 
     std::printf("cycle core throughput: a chain of N stages, M = %llu beats (%s)\n",
                 static_cast<unsigned long long>(beats), quick ? "--quick" : "full");
-    std::printf("%8s %-7s %-6s %10s %10s %14s %16s %10s %8s\n", "stages", "traffic", "checks", "cycles", "wall ms",
-                "cycles/s", "evaluations/s", "ns/eval", "idle");
+    std::printf("each pair runs checks on, off, off, on: the mean of its two runs, and their spread\n");
+    std::printf("%8s %-7s %-6s %10s %10s %8s %14s %16s %10s %8s\n", "stages", "traffic", "checks", "cycles",
+                "wall ms", "spread", "cycles/s", "evaluations/s", "ns/eval", "idle");
     for (const std::size_t n : sizes)
-        for (const bool dense : {true, false})
-            for (const bool checks : {true, false}) {
-                const Result r = run(n, dense ? std::max<std::uint64_t>(beats, 4 * n) : beats, dense, checks);
-                const double eps = r.wall_s > 0 ? double(r.evaluations) / r.wall_s : 0.0;
-                std::printf("%8zu %-7s %-6s %10llu %10.2f %14.0f %16.0f %10.2f %7.1f%%\n", r.stages,
-                            r.dense ? "dense" : "sparse", r.checks ? "on" : "off",
-                            static_cast<unsigned long long>(r.cycles), r.wall_s * 1e3,
-                            r.wall_s > 0 ? double(r.cycles) / r.wall_s : 0.0, eps, eps > 0 ? 1e9 / eps : 0.0,
-                            100.0 * r.idle_share);
+        for (const bool dense : {true, false}) {
+            const std::uint64_t m = dense ? std::max<std::uint64_t>(beats, 4 * n) : beats;
+            // Balanced order, so drift (warm-up, clock changes) falls on both settings alike.
+            Result on[2], off[2];
+            on[0] = run(n, m, dense, true);
+            off[0] = run(n, m, dense, false);
+            off[1] = run(n, m, dense, false);
+            on[1] = run(n, m, dense, true);
+            for (const Result* r : {on, off}) {
+                const double wall = (r[0].wall_s + r[1].wall_s) / 2;
+                const double spread = wall > 0 ? std::abs(r[0].wall_s - r[1].wall_s) / wall : 0.0;
+                const double eps = wall > 0 ? double(r[0].evaluations) / wall : 0.0;
+                std::printf("%8zu %-7s %-6s %10llu %10.2f %7.1f%% %14.0f %16.0f %10.2f %7.1f%%\n", r[0].stages,
+                            dense ? "dense" : "sparse", r[0].checks ? "on" : "off",
+                            static_cast<unsigned long long>(r[0].cycles), wall * 1e3, 100.0 * spread,
+                            wall > 0 ? double(r[0].cycles) / wall : 0.0, eps, eps > 0 ? 1e9 / eps : 0.0,
+                            100.0 * r[0].idle_share);
             }
+        }
     return 0;
+} catch (const std::exception& e) {
+    std::fprintf(stderr, "bench_cycle_core: %s\n", e.what());
+    return 1;
 }
