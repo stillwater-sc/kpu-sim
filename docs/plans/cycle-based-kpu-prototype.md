@@ -1,6 +1,6 @@
 # A bottom-up, cycle-based KPU prototype: the cycle core, the memory subsystem, the compute subsystem
 
-**Status:** planned 2026-11-24. The direction is the user's (§2). The questions in §8 are open.
+**Status:** planned 2026-11-24. The direction (§2) and the decisions (§8) are the user's. Phase 0 is next.
 **Replaces, as the route to a working prototype:** #401's slices 3 and later (`docs/plans/systolic-tile-at-lca.md`).
 That plan's RTL analysis (§1, §3.2) stays the reference for what the compute subsystem must do.
 **Parked:** branch `feat/issue-458-systolic-array-lca` (an OS gemm timed by the RTL's formulas inside the
@@ -249,19 +249,15 @@ what L-T1 is calibrated against, and whether the new core replaces `ConcurrentTi
 Each PR adds its component's own tests and touches nothing in `timing/`, `program/csp/transactional.hpp`
 or the records. So no existing number moves.
 
-## 8. Open questions
+## 8. Decisions (the user's, 2026-11-24)
 
-- **Q1. Time base.** Picoseconds with a period per domain (recommended), or one fastest clock with
-  integer dividers? Picoseconds handle LPDDR5's 3.2 GHz controller clock against a 1–2 GHz array and
-  250 MHz banks without rounding.
-- **Q2. Visualization.** Perfetto/Chrome traces plus a counters summary first (recommended: no viewer
-  to build, and it scales to millions of events), with custom panels such as the array heatmap added
-  per subsystem. The alternative is extending the `.tflow`/`.dflow` viewers.
-- **Q3. Phase 1's programs.** The walker's L3 actions from existing matmul programs, with C preloaded
-  from L-B (recommended), or hand-written DMA command lists for the first rungs?
-- **Q4. Reuse.** Port the LPDDR5 controller and the NoC hub/port logic onto the core (recommended), or
-  start from simpler fixed-timing DRAM and NoC stand-ins and port them later?
-- **Q5. Afterwards.** Does the new core become L-CA once Phase 3 runs, retiring
-  `ConcurrentTimingExecutor`'s timing (recommended: decide at Phase 3's evaluation)?
-- **Q6. Issues.** One epic with one issue per step in §7, in the v0.10.0 milestone, superseding
-  #401's slice 3 (#458's PE-grid item, #389, #385, #495)? Those issues would be re-scoped, not closed.
+1. **Time base:** picoseconds, with a period per clock domain.
+2. **Visualization:** Perfetto/Chrome traces and a counters summary first. Custom panels, such as the
+   array heatmap, are added per subsystem.
+3. **Phase 1's programs:** the walker's L3 actions from matmul programs, with C preloaded from L-B as
+   the data oracle.
+4. **Reuse:** the existing cycle-accurate LPDDR5 controller and NoC are ported onto the new core.
+5. **Afterwards:** whether the new core replaces `ConcurrentTimingExecutor` as L-CA is decided at
+   Phase 3's evaluation.
+6. **Issues:** one epic in v0.10.0, with one issue per step in §7. The old issues (#458's PE-grid item,
+   #389, #385, #495) are re-scoped under it.
