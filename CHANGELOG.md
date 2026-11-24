@@ -216,6 +216,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **#387 is done: every L2 slot the walker places is executed at L-T1 and L-CA** (`docs/plans/slot-credits-at-lca.md`;
+  PRs #496, #523–#527). The program's `l2 = N` is now the L2 buffering depth at every level. Each slot has a state,
+  and that state is checked every cycle. The records show every copy. One limit remains, filed as #528: L-CA's L2
+  tag CAM is keyed by tile. So a tile holds one copy at a time, and a Move waits for the tile's earlier copy to
+  leave L2, even when its own slot is FREE.
+
 - **The records show the walker's L2 copies** (#387; `docs/plans/slot-credits-at-lca.md` §4). Both timed levels
   execute every copy in its L2 slot (#523, #524), and now their records say so.
   - **`.tflow` (L-T1).** The L2 table gains a row for each copy, with a new optional `copy` column: 1 for an
@@ -283,7 +289,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Staging now costs slots.** A staged panel holds its slots for the block, so the staging test gives the
     staged program its panel's slots (`l2 = 11` against 8): 3856 cycles against 3886.
   - **Records unchanged.** The `.tflow`/`.dflow` records still show only the program's stagings at both levels;
-    they gain the copies with step 3b.
+    they gain the copies with #527.
 
 - **L-T1 executes every L2 slot the walker places** (#387 step 2; `docs/plans/slot-credits-at-lca.md` §4).
   Until now L-T1 ran an unstaged operand's copy and a fabric result's slot unplaced.

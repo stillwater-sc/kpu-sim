@@ -1,6 +1,7 @@
 # Slot credits at L-CA: every L2 copy placed, every slot a state (#401, slice 2)
 
-**Status:** planned 2026-11-18. The user made the decisions in §2. No step has landed.
+**Status:** done 2026-11-24 (#387 closed; PRs #496, #523–#527). The user made the decisions in §2.
+One item is split out as #528: slot-keyed placed L2 entries at L-CA, so a tile can hold two copies at once.
 **Issues:** #387 (mirror the RTL's tile credits and tile-ready tokens), under #401.
 **RTL reference:** branes-ai/embodied-ai-soc-generator#16 and its `tests/unit/test_credits.py`,
 `src/kpu_gen/tiles/systolic/controller/sync.py` (`SlotPool`), `isa/command.py` (`TileBuffers`).
@@ -133,7 +134,7 @@ Each step is a PR, under #387, with no closing keyword until the last.
      - TF13 requires an operand copy to be fed once and a result never;
      - the `.dflow` timed records place them where the level did.
 
-     Still to do: slot-keyed placed entries, so a tile can hold two copies at once.
+     Split out as #528: slot-keyed placed entries, so a tile can hold two copies at once.
    - **3c (done, 2026-11-24):** the double-buffering test (§6) on `kpu_soc_2x2`, the RTL-derived
      4×4 tile with the RTL's slot counts (Q2): `tests/program/test_csp_double_buffer.cpp`. As it carries
      over (decided 2026-11-24):
