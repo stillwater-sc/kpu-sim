@@ -31,6 +31,19 @@ namespace {
 
 constexpr Picoseconds kLimit = 1'000'000'000;
 
+// The whole file, read and closed, then deleted: Windows refuses to delete a file still open.
+std::string slurp_and_remove(const std::string& path) {
+    std::string text;
+    {
+        std::ifstream in(path);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        text = ss.str();
+    }
+    std::filesystem::remove(path);
+    return text;
+}
+
 // A node of a ring: it starts with `beats`, forwards its oldest when it holds a credit, and
 // accepts a landed beat while it holds fewer than `depth`.
 class Node : public Component {
@@ -277,17 +290,13 @@ TEST_CASE("The trace: states, beats and occupancy, bounded", "[cycle][debug][tra
     const auto path = (dir / "cycle_trace_unit.json").string();
     t.write(path);
     CHECK(t.dropped() == 0);
-    std::ifstream in(path);
-    std::stringstream ss;
-    ss << in.rdbuf();
-    const std::string json = ss.str();
+    const std::string json = slurp_and_remove(path);
     CHECK_THAT(json, ContainsSubstring("\"traceEvents\""));
     CHECK_THAT(json, ContainsSubstring(R"j("name":"thread_name","args":{"name":"producer (clk)"})j"));
     CHECK_THAT(json, ContainsSubstring(R"j("name":"stall: no credit")j"));
     CHECK_THAT(json, ContainsSubstring(R"j("name":"stall: held")j"));
     CHECK_THAT(json, ContainsSubstring(R"j("ph":"b")j") && ContainsSubstring(R"j("beat":"beat 19")j"));
     CHECK_THAT(json, ContainsSubstring(R"j("name":"p->c occupancy")j"));
-    std::filesystem::remove(path);
     // Bounded: past its limit the trace counts what it dropped, and says so.
     Tracer small(8);
     Simulator s2;
@@ -298,11 +307,7 @@ TEST_CASE("The trace: states, beats and occupancy, bounded", "[cycle][debug][tra
     CHECK(small.dropped() > 0);
     const auto p2 = (dir / "cycle_trace_small.json").string();
     small.write(p2);
-    std::ifstream in2(p2);
-    std::stringstream s2s;
-    s2s << in2.rdbuf();
-    CHECK_THAT(s2s.str(), ContainsSubstring("\"dropped\":" + std::to_string(small.dropped())));
-    std::filesystem::remove(p2);
+    CHECK_THAT(slurp_and_remove(p2), ContainsSubstring("\"dropped\":" + std::to_string(small.dropped())));
     // Attached after the model is built: refused, since its components would have no tracks.
     Tracer late;
     CHECK_THROWS_WITH(s2.attach(late), ContainsSubstring("before adding"));
