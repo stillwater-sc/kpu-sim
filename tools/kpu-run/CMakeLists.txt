@@ -125,7 +125,7 @@ if(KPU_BUILD_TESTS)
         add_test(NAME tileflow_viewer_csp_smoke
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_viewer.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.tflow)
-        set_tests_properties(tileflow_viewer_csp_smoke PROPERTIES DEPENDS kpu_run_csp_dflow_staged)
+        set_tests_properties(tileflow_viewer_csp_smoke PROPERTIES FIXTURES_REQUIRED dflow_staged)
         add_test(NAME tileflow_bind_csp_t4
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_bind.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_t4.tflow
