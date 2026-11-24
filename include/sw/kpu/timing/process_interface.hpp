@@ -137,6 +137,9 @@ struct TimingEvent {
                                 ///< two stores of one tile are two tickets
     Address matrix_base_address = 0; ///< Base address of the matrix in DRAM
     Address dram_address = 0;  ///< DRAM address for this tile
+    /// COMPUTE_COMPLETE: when its result was ready to drain. On a systolic array that is after its
+    /// stream [cycle, cycle + duration): the last result row has left the north edge (#458).
+    Cycle result_cycle = 0;
 
     TimingEvent() = default;
 

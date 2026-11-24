@@ -77,11 +77,21 @@ class Diff(unittest.TestCase):
         b = Bundle(LCA)
         try:
             n = b.rows("events")
+            # The first transfer or compute from the middle whose end can move 5 cycles and leave a
+            # valid record: one whose successor starts within 5 cycles (a Writeback and its tile's
+            # token) would fail dflow_check instead, which is not what this test is about.
             e = n // 2
-            while dc.EVENT_KINDS[b.get("events", "kind", e)] not in ("DMA", "BLOCK_MOVE", "STREAM", "COMPUTE", "DRAIN"):
+            while True:
+                while dc.EVENT_KINDS[b.get("events", "kind", e)] not in ("DMA", "BLOCK_MOVE", "STREAM", "COMPUTE", "DRAIN"):
+                    e += 1
+                end = b.get("events", "end", e)
+                b.set("events", "end", e, end + 5)
+                check = subprocess.run([sys.executable, str(HERE / "dflow_check.py"), str(b.dir)], capture_output=True)
+                if check.returncode == 0:
+                    break
+                b.set("events", "end", e, end)
                 e += 1
             # Every event before e is unchanged, so e is the earliest that differs.
-            b.set("events", "end", e, b.get("events", "end", e) + 5)
             code, o = run(LCA, b.dir)
             self.assertEqual(code, 1, o)
             f = o["first_divergence"]

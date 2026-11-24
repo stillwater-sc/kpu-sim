@@ -200,6 +200,13 @@ public:
         /// latency = fill + ceil(MACs / macs_per_cycle), MACs = rows x cols x K of the result.
         double macs_per_cycle = 0.0;
         double compute_fill_per_edge = 2.0;     ///< fill + drain = this x the result's longer edge
+        // The systolic array (#458; docs/plans/systolic-tile-at-lca.md §3.1-3.2): fabric.pe_rows x
+        // pe_cols. 0 = none declared, and every compute keeps the latency above. Declared, an
+        // output-stationary gemm (any matmul but an L2 accumulator's partial) runs as the RTL's
+        // COMPUTE commands on an h x w corner of one compute tile's array, one command per
+        // KB = array_cols elements of its K; a tile larger than the array is refused.
+        std::uint32_t array_rows = 0;
+        std::uint32_t array_cols = 0;
 
         // Vector units (docs/plans/csp-language.md step 3): the Combiner (spec combiner, timed on
         // each streamer's L1 -> L2 drain) and the BlockMovers' (spec movers.vector.bm). A
@@ -779,6 +786,12 @@ private:
         Cycle schedule_cycle = 0;    ///< When scheduled
         Cycle complete_cycle = 0;    ///< When computation will complete (set when started)
         Cycle latency = 0;           ///< Computed latency (set when started)
+        /// The compute tile's occupancy from the start: the latency, except on a systolic array,
+        /// where it is the commands' stream and the result leaves north after it (set when started)
+        Cycle busy = 0;
+        /// When its result is ready to drain (set when started): its completion, except on a
+        /// systolic array, where the last result row leaves the north edge after the stream
+        Cycle result_cycle = 0;
         bool started = false;        ///< Has computation started?
         std::uint32_t cf_tile = 0;   ///< The compute tile it runs on (set when started)
         uint64_t after_drains = 0;   ///< A partial: the result tile's drains that must land first
@@ -788,6 +801,25 @@ private:
     // busy cycles. An input's shape, as fed, gives a compute its K extent.
     std::vector<Cycle> cf_busy_until_;
     std::vector<Cycle> cf_busy_cycles_;
+    // The systolic array's north links, per compute tile: when the last reduction's first result
+    // row left, and how many rows it has (0: none yet). The next reduction's first row leaves at
+    // least 2h - 1 clocks after that one's, or the links collide (the RTL's drain_wait).
+    std::vector<Cycle> cf_result_row0_;
+    std::vector<std::uint32_t> cf_result_rows_;
+    // A result whose compute has completed but whose rows are still leaving the array: published
+    // (publish_result) at that cycle, not at the completion.
+    std::unordered_map<TileID, Cycle, TileIDHash> result_at_;
+    std::vector<std::pair<Cycle, TileID>> deferred_results_;
+    // An output-stationary gemm's commands on the array, from its start (systolic-tile-at-lca.md
+    // §3.2): `busy` until the tile accepts its next command, `latency` until its last result row
+    // is written (its own busy when the call does not end its reduction), and its first result
+    // row's clock. Null when the compute is not timed on the array.
+    struct ArrayTiming {
+        Cycle busy = 0, latency = 0, row0 = 0;
+        std::uint32_t rows = 0;
+        bool last = false;
+    };
+    [[nodiscard]] std::optional<ArrayTiming> array_timing(const PendingCompute& pc, std::uint32_t cf) const;
     std::unordered_map<TileID, std::pair<Size, Size>, TileIDHash> fed_shape_;
     void enqueue_compute(PendingCompute&& pc);
     std::uint64_t compute_macs(const PendingCompute& pc) const;
@@ -972,6 +1004,10 @@ inline ConcurrentTimingExecutor::ConcurrentTimingExecutor(const Config& config)
       compute_result_tag_cam_(256) {  // initial reserve; grows with the schedule (#210)
     cf_busy_until_.assign(config_.num_compute_tiles, 0);
     cf_busy_cycles_.assign(config_.num_compute_tiles, 0);
+    cf_result_row0_.assign(config_.num_compute_tiles, 0);
+    cf_result_rows_.assign(config_.num_compute_tiles, 0);
+    result_at_.clear();
+    deferred_results_.clear();
     if (config_.macs_per_cycle < 0.0 || !std::isfinite(config_.macs_per_cycle))
         throw std::invalid_argument("ConcurrentTimingExecutor: macs_per_cycle must be a finite, "
                                     "non-negative rate");
@@ -1570,6 +1606,15 @@ inline void ConcurrentTimingExecutor::apply_stages(MemoryLevel level, const Tile
 }
 
 inline void ConcurrentTimingExecutor::publish_result(const TileID& id) {
+    // Its rows still leaving the array's north edge: ready to drain when the last has left.
+    if (const auto at = result_at_.find(id); at != result_at_.end()) {
+        const Cycle when = at->second;
+        result_at_.erase(at);
+        if (when > current_cycle_) {
+            deferred_results_.emplace_back(when, id);
+            return;
+        }
+    }
     if (compute_result_tag_cam_.full()) compute_result_tag_cam_.set_capacity(compute_result_tag_cam_.size() + 1);
     compute_result_tag_cam_.insert(id, next_compute_slot_++, current_cycle_);
 }
@@ -1631,6 +1676,54 @@ inline std::uint64_t ConcurrentTimingExecutor::compute_macs(const PendingCompute
         for (const auto& id : pc.matmul->resident_tiles)
             if (id.matrix == isa::MatrixID::A) k += pc.tile.width;
     return static_cast<std::uint64_t>(pc.tile.height) * pc.tile.width * std::max<std::uint64_t>(1, k);
+}
+
+// An output-stationary gemm as the RTL's COMPUTE commands (docs/plans/systolic-tile-at-lca.md
+// §3.2; embodied-ai-soc-generator streamer.py). The h x w result sits on the array's corner; its
+// K splits into n = ceil(K / KB) commands, KB = array_cols (one L2 row of int8 inputs). Command
+// m is accepted at a_m, and the tile accepts the next one I = max(K_m, h, w) later. A command's
+// lanes stream from s = a + 2 + D (D: the L2 read latency), and PE(i,j) multiplies element k at
+// s + 1 + i + j + k. Only the reduction's last command produces results: row i leaves the north
+// result FIFOs at s + K + w + 2i, so the last at s + K + w + 2h - 2. That command waits, at accept,
+// until its first row leaves 2h' - 1 clocks after the previous reduction's (h' rows), so the
+// north links never carry two results at once.
+inline std::optional<ConcurrentTimingExecutor::ArrayTiming>
+ConcurrentTimingExecutor::array_timing(const PendingCompute& pc, std::uint32_t cf) const {
+    if (config_.array_rows == 0 || config_.num_compute_tiles == 0 || !pc.matmul || pc.matmul->partial)
+        return std::nullopt;
+    const std::uint64_t h = pc.tile.height, w = pc.tile.width;
+    if (h > config_.array_rows || w > config_.array_cols)
+        throw std::logic_error("ConcurrentTimingExecutor: " + pc.tile.tile_id.to_string() + " is a " +
+                               std::to_string(h) + "x" + std::to_string(w) + " result; the array is " +
+                               std::to_string(config_.array_rows) + "x" + std::to_string(config_.array_cols));
+    const std::uint64_t k = std::max<std::uint64_t>(1, compute_macs(pc) / std::max<std::uint64_t>(1, h * w));
+    const std::uint64_t kb = config_.array_cols;
+    const std::uint64_t n = (k + kb - 1) / kb;
+    const std::uint64_t k_last = k - (n - 1) * kb;
+    const Cycle d = config_.l2_banks ? config_.l2_banks->read_latency : config_.str_startup_latency;
+    ArrayTiming t;
+    // A call ends its reduction unless it is a k-slice whose chain has more to come. The chain's
+    // last call is known once its Drain is scheduled (as for the MAC-rate fill above).
+    t.last = true;
+    if (pc.matmul->accumulate) {
+        const auto c = chains_.find(pc.tile.tile_id);
+        t.last = c != chains_.end() && c->second.drains > 0 && c->second.done + 1 == c->second.scheduled;
+    }
+    Cycle a_last = static_cast<Cycle>((n - 1) * std::max({kb, h, w}));   // the full-KB commands first
+    const Cycle i_last = static_cast<Cycle>(std::max({k_last, h, w}));
+    if (t.last) {
+        const Cycle launch = 2 + d + static_cast<Cycle>(k_last);          // row 0, after its accept
+        if (const std::uint32_t prev = cf_result_rows_[cf]; prev > 0) {
+            const Cycle earliest = cf_result_row0_[cf] + 2 * Cycle{prev} - 1;
+            if (current_cycle_ + a_last + launch < earliest) a_last = earliest - current_cycle_ - launch;
+        }
+        t.row0 = current_cycle_ + a_last + launch;
+        t.rows = static_cast<std::uint32_t>(h);
+        t.latency = a_last + launch + static_cast<Cycle>(w + 2 * h - 2);
+    }
+    t.busy = a_last + i_last;
+    if (!t.last) t.latency = t.busy;
+    return t;
 }
 
 inline void ConcurrentTimingExecutor::schedule_compute(
@@ -1855,7 +1948,10 @@ inline bool ConcurrentTimingExecutor::step() {
                         cf = static_cast<std::uint32_t>(t);
                     }
                 }
-                if (config_.macs_per_cycle > 0.0) {
+                const std::optional<ArrayTiming> on_array = array_timing(pc, cf);
+                if (on_array) {
+                    pc.latency = on_array->latency;
+                } else if (config_.macs_per_cycle > 0.0) {
                     // Latency from the MAC rate: fill and drain, then the MACs at full rate. An
                     // accumulation chain (a CSP program's per-k-slice calls on one result) keeps
                     // its result stationary and streams the slices through: it fills on its
@@ -1891,10 +1987,16 @@ inline bool ConcurrentTimingExecutor::step() {
                 }
                 pc.started = true;
                 pc.cf_tile = cf;
-                pc.complete_cycle = current_cycle_ + pc.latency;
+                pc.busy = on_array ? on_array->busy : pc.latency;
+                pc.complete_cycle = current_cycle_ + pc.busy;      // the tile accepts its next command
+                pc.result_cycle = current_cycle_ + pc.latency;
                 if (config_.num_compute_tiles > 0) {
-                    cf_busy_until_[cf] = pc.complete_cycle;
-                    cf_busy_cycles_[cf] += pc.latency;
+                    cf_busy_until_[cf] = current_cycle_ + pc.busy;
+                    cf_busy_cycles_[cf] += pc.busy;
+                }
+                if (on_array && on_array->last) {
+                    cf_result_row0_[cf] = on_array->row0;
+                    cf_result_rows_[cf] = on_array->rows;
                 }
 
                 // Emit COMPUTE_START event (component: the compute tile)
@@ -1906,7 +2008,14 @@ inline bool ConcurrentTimingExecutor::step() {
         }
     }
 
-    // Step 0b: Process completed computes (insert results into compute_result_tag_cam)
+    // Step 0b: Process completed computes (insert results into compute_result_tag_cam), after
+    // the results whose last row has left the array by now.
+    for (auto d = deferred_results_.begin(); d != deferred_results_.end();) {
+        if (d->first > current_cycle_) { ++d; continue; }
+        const TileID id = d->second;
+        d = deferred_results_.erase(d);
+        publish_result(id);
+    }
     auto it = pending_computes_.begin();
     while (it != pending_computes_.end()) {
         if (it->started && current_cycle_ >= it->complete_cycle) {
@@ -1916,6 +2025,7 @@ inline bool ConcurrentTimingExecutor::step() {
                 execute_functional(*it);
             }
             ++completed_compute_counts_[it->tile.tile_id];
+            if (it->result_cycle > it->complete_cycle) result_at_[it->tile.tile_id] = it->result_cycle;
             // Compute completed - result tile is now ready for DRAIN.
             //
             // The compute-result CAM is a ready-set of finished-but-undrained
@@ -1939,10 +2049,11 @@ inline bool ConcurrentTimingExecutor::step() {
             // Emit COMPUTE_COMPLETE event
             TimingEvent event = TimingEvent::duration_event(
                 EventType::COMPUTE_COMPLETE,
-                it->complete_cycle - it->latency,
-                it->latency,
+                it->complete_cycle - it->busy,
+                it->busy,                           // the compute tile's occupancy (TF4)
                 it->cf_tile, it->tile.tile_id, "Compute");
             event.matrix_base_address = it->tile.matrix_base_address;
+            event.result_cycle = it->result_cycle;
             events_.push_back(event);
 
             // Collect this compute's input tiles before removing it, so we can
@@ -2142,6 +2253,10 @@ inline void ConcurrentTimingExecutor::reset() {
     pending_computes_.clear();
     cf_busy_until_.assign(config_.num_compute_tiles, 0);
     cf_busy_cycles_.assign(config_.num_compute_tiles, 0);
+    cf_result_row0_.assign(config_.num_compute_tiles, 0);
+    cf_result_rows_.assign(config_.num_compute_tiles, 0);
+    result_at_.clear();
+    deferred_results_.clear();
     fed_shape_.clear();
     scheduled_feed_counts_.clear();
     completed_feed_counts_.clear();

@@ -220,6 +220,31 @@ inline std::optional<std::string> csp_level_supported(ExecutionLevel level, cons
     if (ast.l2 > 0 && static_cast<std::size_t>(ast.l2) > cfg->config.l2_bank_count)
         return "the program stages into " + std::to_string(ast.l2) + " L2 slots; the machine's L2 holds " +
                std::to_string(cfg->config.l2_bank_count);
+    // On a declared systolic array an output-stationary gemm's result sits on the array (decision 2
+    // of docs/plans/systolic-tile-at-lca.md): one no larger than the array runs on its corner, and a
+    // larger one is not this machine's program -- tile it to the array. An L2 accumulator's partials
+    // keep the MAC-rate timing, so they are not held to it.
+    if (const auto rows = cfg->config.array_rows, cols = cfg->config.array_cols; rows > 0) {
+        std::map<std::string, const csp::lang::Decl*> decl;
+        for (const auto& d : ast.decls) decl[d.name] = &d;
+        auto too_large = [&](const std::vector<csp::lang::Stmt>& body, bool in_l2, auto&& self) -> void {
+            for (const auto& s : body) {
+                if (refused) return;
+                if (s.kind == csp::lang::Stmt::Kind::Call && s.fn == "gemm" && !in_l2)
+                    if (const auto it = decl.find(s.out.name); it != decl.end() &&
+                        (it->second->tile_rows > static_cast<long long>(rows) ||
+                         it->second->tile_cols > static_cast<long long>(cols)))
+                        refused = "the gemm at csp line " + std::to_string(s.line) + " computes a " +
+                                  std::to_string(it->second->tile_rows) + "x" + std::to_string(it->second->tile_cols) +
+                                  " tile of " + s.out.name + " on the " + std::to_string(rows) + "x" +
+                                  std::to_string(cols) + " systolic array; a tile larger than the array is "
+                                  "refused (tile the program to the array)";
+                self(s.body, in_l2 || (s.kind == csp::lang::Stmt::Kind::Acc && s.in_l2), self);
+            }
+        };
+        too_large(ast.body, false, too_large);
+        if (refused) return refused;
+    }
     return std::nullopt;
 }
 

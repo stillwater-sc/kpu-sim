@@ -69,8 +69,9 @@ struct OracleRun {
     std::size_t eject_stalls = 0, peak_ring_queue = 0, ring_queue_depth = 0;
     bool watchdog = false, buses_serial = true;
     std::map<NocDim, std::size_t> injected_per_port;
-    // The compute fabric (system-schedule step 2): each compute's tile and [start, end).
-    struct Compute { std::uint32_t cf; Cycle start, end; };
+    // The compute fabric (system-schedule step 2): each compute's tile, its stream [start, end),
+    // and when its result was ready to drain (after `end` on a systolic array, #458).
+    struct Compute { std::uint32_t cf; Cycle start, end, result; };
     std::vector<Compute> computes;
     std::size_t compute_tiles = 0;
     std::vector<Cycle> busy;
@@ -148,7 +149,7 @@ OracleRun run_matmul(const DeviceSpecification& d, Size size, Size T, bool noc =
         out.dram_loads += e.type == EventType::DMA_LOAD_COMPLETE;
         out.dram_stores += e.type == EventType::DMA_STORE_COMPLETE;
         if (e.type == EventType::COMPUTE_COMPLETE)
-            out.computes.push_back({e.component_id, e.cycle, e.cycle + e.duration});
+            out.computes.push_back({e.component_id, e.cycle, e.cycle + e.duration, e.result_cycle});
     }
     out.compute_tiles = exec.compute_tiles();
     for (std::size_t t = 0; t < out.compute_tiles; ++t) out.busy.push_back(exec.compute_tile_busy_cycles(t));
@@ -516,17 +517,22 @@ TEST_CASE("Compute fabric: one compute at a time per compute tile, latency from 
         return true;
     };
 
-    SECTION("kpu_s1: one large compute tile") {
+    SECTION("kpu_s1: one large compute tile, a 128 x 64 systolic array") {
         const DeviceSpecification d = device("kpu_s1.json");
         const OracleRun r = run_matmul(d, 128, 32);
         REQUIRE(r.compute_tiles == 1);
         REQUIRE(r.computes.size() == 16);                 // (128/32)^2 output tiles
         CHECK(no_overlap(r.computes, 0));
-        // Each compute: fill (2 x 32) + 32 x 32 x 128 MACs at 8192 per cycle = 64 + 16.
+        // Each compute is a 32 x 32 result with K = 128 on the array's corner, as the RTL's COMPUTE
+        // commands (docs/plans/systolic-tile-at-lca.md §3.2): KB = 64 columns, so two commands,
+        // each I = max(64, 32, 32) = 64 clocks of stream. The last is accepted at +64; its row 0
+        // leaves at +64 + 2 + D + 64 (D = 4, the banked L2's read latency) and its last row 2h - 2
+        // after row 0 plus the w columns: 134 + 32 + 62 = 228.
         Cycle busy = 0;
         for (const auto& c : r.computes) {
             CHECK(c.cf == 0);
-            CHECK(c.end - c.start == 64 + (32 * 32 * 128) / 8192);
+            CHECK(c.end - c.start == 2 * 64);
+            CHECK(c.result - c.start == 228);
             busy += c.end - c.start;
         }
         CHECK(r.busy.at(0) == busy);

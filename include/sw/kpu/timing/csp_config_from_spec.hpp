@@ -150,9 +150,21 @@ inline std::optional<CspDeviceConfig> csp_config_from(
         c.combiner_rate = d.combiner->rate;
     }
 
-    if (d.fabric.pe_rows)
-        out.unmapped.push_back("fabric.pe_rows/pe_cols: L-T1 times an accumulator's gemm chain as a systolic "
-                               "stream on them; the executor's compute fabric keeps its own timing");
+    // The systolic array (#458; docs/plans/systolic-tile-at-lca.md §3.1): an output-stationary gemm
+    // runs as the RTL's COMPUTE commands on it. Until #389 its Feeds still move whole tiles ahead of
+    // it, and its Drain still moves the result after the north drain.
+    if (d.fabric.pe_rows && d.fabric.pe_cols) {
+        c.array_rows = static_cast<std::uint32_t>(*d.fabric.pe_rows);
+        c.array_cols = static_cast<std::uint32_t>(*d.fabric.pe_cols);
+        out.unmapped.push_back("fabric: an output-stationary gemm runs as the RTL's COMPUTE commands on the " +
+                               std::to_string(c.array_rows) + "x" + std::to_string(c.array_cols) +
+                               " array, but its Feeds still move whole tiles before it, with no L1 lane "
+                               "buffers, and its Drain moves the result after the north drain (#389); an "
+                               "L2 accumulator's partials keep fill + MACs / macs_per_cycle");
+    } else {
+        out.unmapped.push_back("fabric.pe_rows/pe_cols: not declared, so the compute fabric is timed as fill + "
+                               "MACs / macs_per_cycle, not as a systolic array");
+    }
     // The rates (#458): bytes per cycle at the executor's reference clock.
     c.bm_bandwidth_gbps = d.movers.bm_bytes_per_cycle * c.clock_ghz;
     c.str_bandwidth_gbps = d.movers.str_bytes_per_cycle * c.clock_ghz;

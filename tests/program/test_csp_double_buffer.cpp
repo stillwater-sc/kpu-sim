@@ -9,12 +9,17 @@
 // What this asserts, as it carries over (decided 2026-11-24):
 //   - values: L-B's, bit for bit, with one buffer and with two;
 //   - two buffers take the L2 slot waits away (the bubble report's "L2 slot credit") and overlap
-//     more Moves with Feeds, and are faster;
+//     more Moves with Feeds;
+//   - the run is bound by its one BlockMover, not by the array (decided 2026-11-24, #458): with the
+//     array timed as the RTL's COMPUTE commands the 16 calls compute for 64 cycles, and the
+//     BlockMover is busy for over 70% of either run, so one buffer and two take within 3% of each
+//     other. (Under the MAC-rate model compute took 96 cycles, and two buffers hid some of it.)
 //   - with either, no Move lands in a slot while a Feed is still reading it (the slot invariant).
 // What it does not, yet: the RTL's "one buffer never overlaps a Move with a Feed" -- kpu-sim keeps
 // A's and B's credits separate (decision 2), so B's Move overlaps A's Feed by design -- and "two
 // buffers take under 0.85x the cycles": here the run is bound by the BlockMover and DMA, with
-// int8 still moved as 4 bytes (#415) and kpu-sim's default mover rates. That clause is #401's.
+// int8 still moved as 4 bytes (#415) and kpu-sim's default mover rates. That clause is #401's,
+// and so is the makespan relation it implies.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -30,6 +35,7 @@
 #include <sw/kpu/timing/csp_config_from_spec.hpp>
 #include <sw/kpu/timing/csp_driver.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -137,7 +143,18 @@ TEST_CASE("Double buffering at L-CA: the RTL's 8x8x16 int8 matmul, one L2 buffer
     CHECK(wait1 > 0);
     CHECK(wait2 * 4 < wait1);
     CHECK(ov2 > ov1);
-    CHECK(two.lca.makespan < one.lca.makespan);
+    // The BlockMover bound: its busy cycles are over 70% of each run, the array's under 10%, and the
+    // two makespans are within 3% of each other.
+    for (const Run* r : {&one, &two}) {
+        const std::uint64_t bm = r->lca.busy.count("bm") ? r->lca.busy.at("bm") : 0;
+        const std::uint64_t cf = r->lca.busy.count("cf") ? r->lca.busy.at("cf") : 0;
+        CAPTURE(r->lca.makespan, bm, cf);
+        CHECK(bm * 10 > r->lca.makespan * 7);
+        CHECK(cf * 10 < r->lca.makespan);
+    }
+    const std::uint64_t lo = std::min(one.lca.makespan, two.lca.makespan);
+    const std::uint64_t hi = std::max(one.lca.makespan, two.lca.makespan);
+    CHECK((hi - lo) * 100 <= lo * 3);
     // Either way, a slot is never written while it is read.
     no_move_into_a_slot_being_read(one.events);
     no_move_into_a_slot_being_read(two.events);

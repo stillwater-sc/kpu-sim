@@ -164,6 +164,15 @@ set_tests_properties(test_csp_double_buffer PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# L-CA times an OS gemm on the deployment's systolic array, as the RTL's COMPUTE commands (#458).
+kpu_add_component_test(test_lca_systolic_array "program"
+    test_lca_systolic_array.cpp
+)
+set_tests_properties(test_lca_systolic_array PROPERTIES
+    LABELS "csp;lca;fabric;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # L-T1 times the fabric as a systolic pipeline (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2)
 kpu_add_component_test(test_fabric_pipeline "program"
     test_fabric_pipeline.cpp
