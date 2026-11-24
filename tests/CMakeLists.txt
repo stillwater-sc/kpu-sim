@@ -79,6 +79,7 @@ add_subdirectory(harness)
 add_subdirectory(timing)
 add_subdirectory(coverage)
 add_subdirectory(program)
+add_subdirectory(cycle)
 
 # Custom test targets for different categories
 # These targets are defined here because they orchestrate across all subdirectories
