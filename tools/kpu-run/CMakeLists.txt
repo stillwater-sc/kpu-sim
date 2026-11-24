@@ -119,10 +119,13 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_tflow_check_v4.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_linear.tflow)
         set_tests_properties(tflow_check_v4_selftest PROPERTIES DEPENDS kpu_run_csp_tflow_linear)
+        # The staged matmul's record: L2 stagings, the walker's operand copies and results (#387),
+        # and small enough to embed (pack.py's 12 MiB). The linear run's record grew past it once
+        # its copies were drawn in L2.
         add_test(NAME tileflow_viewer_csp_smoke
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_viewer.py
-                    ${CMAKE_CURRENT_BINARY_DIR}/csp_linear.tflow)
-        set_tests_properties(tileflow_viewer_csp_smoke PROPERTIES DEPENDS kpu_run_csp_tflow_linear)
+                    ${CMAKE_CURRENT_BINARY_DIR}/csp_staged.tflow)
+        set_tests_properties(tileflow_viewer_csp_smoke PROPERTIES FIXTURES_REQUIRED dflow_staged)
         add_test(NAME tileflow_bind_csp_t4
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/tileflow/test_bind.py
                     ${CMAKE_CURRENT_BINARY_DIR}/csp_t4.tflow

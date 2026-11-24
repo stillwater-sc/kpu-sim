@@ -216,6 +216,7 @@ public:
         bool partial = false;           // an L2 accumulator's partial (#429): merged into, not fed
         std::uint32_t merges = 0;       // a partial: the Drains the Combiner merged into it
         bool copy = false;              // a copy the walker places, not a staging the program states
+        bool result = false;            // ...a result's slot, taken at its opening call (decision 1)
     };
 
     struct Stats {
@@ -411,7 +412,7 @@ public:
                     if (credit_set) rec.ready_by = Record::ReadyBy::Credit;
                     if (a.result_l2) {
                         l2_open_[k] = l2_slots_.size();
-                        l2_slots_.push_back(L2Slot{a.tile, *a.result_l2, rec.start, 0, 0, false, 0, true});
+                        l2_slots_.push_back(L2Slot{a.tile, *a.result_l2, rec.start, 0, 0, false, 0, true, true});
                     }
                 };
                 const TileWork w = tile_work_of(shapes_, *call_op, dev_.element_bytes);

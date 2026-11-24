@@ -72,7 +72,7 @@ class ViewerSmokeTest(unittest.TestCase):
         'i >= 0 ? tileText(R.res.tile[i]) + " (bank " + R.res.bank[i] + ")" : "free"',
         # Version 6: the staged L2 copies and the fabric's chains (tiles through tileText, numbers
         # through fmt, the page's own phase names through esc).
-        'i < 0 ? "free" : R.l2.isPartial(i) ? tileText(R.l2.tile[i]) + " accumulator partial, " + fmt(R.l2.merges[i]) + " merges" : tileText(R.l2.tile[i]) + " staged, fed " + fmt(R.l2.feeds[i]) + "x"',
+        'i < 0 ? "free" : tileText(R.l2.tile[i]) + " " + esc(l2What(i))',
         'c >= 0 ? tileText(R.ch.tile[c]) + " " + esc(chainPhase(c, h.t)) : "idle"',
         'now >= 0 ? tileText(R.l2.tile[now]) + (R.l2.isPartial(now) ? " (partial)" : "") : "free"',
         'now >= 0 ? tileText(R.ch.tile[now]) + " " + esc(chainPhase(now, T)) : "idle"',

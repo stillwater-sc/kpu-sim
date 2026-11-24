@@ -78,12 +78,12 @@ TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::Csp
     // ---- stations: as version 3, with L3's capacity the PROGRAM's (its credits)
     rec.stations.push_back({d.name + "/dram", "dram", 0, false, true});
     rec.stations.push_back({pooled_name(d.name, "l3"), "l3", static_cast<std::uint64_t>(ast.l3), true, true});
-    // L2 is modelled when the program stages (version 6): its capacity is the program's slots,
-    // and its occupancy the staged copies and partials. Every program declares its L2 slots now
-    // (slot-credits-at-lca.md), but L-T1 does not yet time the copies the walker places, so a
-    // program with no staging of its own still says L2 is unmodelled rather than draw it empty.
+    // L2 is modelled when anything holds an L2 slot (version 6): its capacity is the program's
+    // slots, and its occupancy the staged copies, the partials and the walker's copies, which L-T1
+    // times on one compute tile (slot-credits-at-lca.md §4). On more, the copies run unplaced, so
+    // a program with no staging of its own says L2 is unmodelled rather than draw it empty.
     rec.phases = true;
-    const bool staged = !outcome.l2_slots.empty();
+    const bool staged = !outcome.l2_slots.empty() || !outcome.l2_copy_slots.empty();
     rec.l2_slots = staged ? static_cast<std::uint32_t>(ast.l2) : 0;
     rec.stations.push_back({pooled_name(d.name, "l2"), "l2", rec.l2_slots, true, staged});
     rec.stations.push_back({pooled_name(d.name, "l1"), "l1", 0, true, false});
@@ -153,6 +153,11 @@ TileFlowRecord build_csp_record(const csp::lang::Program& ast, const driver::Csp
     for (const auto& sl : outcome.l2_slots)
         rec.l2_residency.push_back({tile_id(sl.tile), sl.place.cf, sl.place.slot, sl.t0, sl.t1, sl.feeds,
                                     static_cast<std::uint8_t>(sl.partial), sl.merges});
+    // ...and the walker's copies (#387): an operand's for its call, fed once; a result's, drained
+    // into and written back, never fed.
+    for (const auto& sl : outcome.l2_copy_slots)
+        rec.l2_residency.push_back({tile_id(sl.tile), sl.place.cf, sl.place.slot, sl.t0, sl.t1, sl.feeds, 0, 0,
+                                    sl.result ? L2Residency::kResult : L2Residency::kOperandCopy});
 
     // ---- the fabric: each accumulator's chain on its compute tile (version 6)
     for (const auto& ch : outcome.chains) {
@@ -368,16 +373,17 @@ void write_tflow(const TileFlowRecord& rec, const std::string& dir) {
     if (phases) {
         Table t{"l2_residency", "l2_residency.bin", rec.l2_residency.size(), {}};
         std::vector<std::uint32_t> tile, cf, slot, feeds, merges;
-        std::vector<std::uint8_t> partial;
+        std::vector<std::uint8_t> partial, copy;
         std::vector<Cycle> t0, t1;
         for (const L2Residency& r : rec.l2_residency) {
             tile.push_back(r.tile); cf.push_back(r.cf); slot.push_back(r.slot);
             t0.push_back(r.t0); t1.push_back(r.t1); feeds.push_back(r.feeds);
-            partial.push_back(r.partial); merges.push_back(r.merges);
+            partial.push_back(r.partial); merges.push_back(r.merges); copy.push_back(r.copy);
         }
         t.put("tile", "u32", tile); t.put("cf", "u32", cf); t.put("slot", "u32", slot);
         t.put("t0", "f64", times(t0)); t.put("t1", "f64", times(t1)); t.put("feeds", "u32", feeds);
         t.put("partial", "u8", partial); t.put("merges", "u32", merges);   // #455: an L2 accumulator's partial
+        t.put("copy", "u8", copy);                                         // #387: the walker's copies
         tables["l2_residency"] = write_table(t, dir);
     }
     if (phases) {
@@ -561,8 +567,9 @@ TileFlowRecord read_tflow(const std::string& dir) {
         const auto feeds = read_col<std::uint32_t>(t, b, "feeds", "u32", n);
         const auto partial = read_col_or<std::uint8_t>(t, b, "partial", "u8", n, 0);   // #455; older records: none
         const auto merges = read_col_or<std::uint32_t>(t, b, "merges", "u32", n, 0);
+        const auto copy = read_col_or<std::uint8_t>(t, b, "copy", "u8", n, 0);   // #387; older records: none
         for (std::size_t i = 0; i < n; ++i)
-            rec.l2_residency.push_back({tile[i], cf[i], slot[i], t0[i], t1[i], feeds[i], partial[i], merges[i]});
+            rec.l2_residency.push_back({tile[i], cf[i], slot[i], t0[i], t1[i], feeds[i], partial[i], merges[i], copy[i]});
     }
     if (version == 6) {
         const json& t = tables.at("chain");

@@ -217,8 +217,17 @@ function parse(files) {
   // An L2 accumulator's partial (#455's optional columns; absent from older bundles): merged into
   // by the Combiner, written back, never fed. Not a staged copy.
   R.l2.isPartial = i => !!(R.l2.partial && R.l2.partial[i]);
-  R.l2.staged = 0; R.l2.partials = 0;
-  for (let i = 0; i < R.l2.rows; i++) R.l2.isPartial(i) ? R.l2.partials++ : R.l2.staged++;
+  // A copy the walker places (#387's optional column `copy`; absent from older bundles): 1 an
+  // operand's copy for its call (fed once), 2 a result's slot (drained into, written back).
+  R.l2.copyKind = i => (R.l2.copy ? R.l2.copy[i] : 0);
+  R.l2.staged = 0; R.l2.partials = 0; R.l2.copies = 0; R.l2.results = 0;
+  for (let i = 0; i < R.l2.rows; i++) {
+    const k = R.l2.copyKind(i);
+    if (R.l2.isPartial(i)) R.l2.partials++;
+    else if (k === 2) R.l2.results++;
+    else if (k === 1) R.l2.copies++;
+    else R.l2.staged++;
+  }
   // Each slot's partials as sorted intervals, so a swimlane bin asks "does a partial overlap
   // [a, b)?" by binary search, not by scanning every copy (#460's review).
   R.l2.partialIv = new Map();
@@ -476,14 +485,14 @@ function start() {
     ["L3 capacity", l3cap ? fmt(l3cap) + " tiles" : "unbounded"],
     ["L3 slots", m.version >= 5 ? `addressed: ${fmt(l3cap)} slots, ${esc(m.l3_banks)} bank${m.l3_banks > 1 ? "s" : ""} (one row each)` : "pooled (no addresses before version 5)"],
     ["compute tiles", nCF],
-    ["L2", m.version === 6 ? (m.l2_slots ? `${fmt(m.l2_slots)} slots (one row per slot): ${fmt(R.l2.staged)} staged cop${esc(R.l2.staged === 1 ? "y" : "ies")}, ${fmt(R.l2.partials)} accumulator partial${esc(R.l2.partials === 1 ? "" : "s")}` : "none (the program holds nothing in L2)") : "not recorded before version 6"],
+    ["L2", m.version === 6 ? (m.l2_slots ? `${fmt(m.l2_slots)} slots (one row per slot): ${fmt(R.l2.staged)} staged cop${esc(R.l2.staged === 1 ? "y" : "ies")}, ${fmt(R.l2.partials)} accumulator partial${esc(R.l2.partials === 1 ? "" : "s")}, ${fmt(R.l2.copies)} operand cop${esc(R.l2.copies === 1 ? "y" : "ies")}, ${fmt(R.l2.results)} result${esc(R.l2.results === 1 ? "" : "s")}` : "none (the program holds nothing in L2)") : "not recorded before version 6"],
     ["fabric chains", m.version === 6 ? fmt(R.ch.rows) : "not recorded before version 6"],
     ["tiles", fmt(m.tiles.length)], ["transits", fmt(R.tr.rows)], ["computes", fmt(R.co.rows)],
     ["lanes", lanes || "—"], ["floorplan", R.fp ? R.fp.source : "none loaded"],
     ["binding", R.B ? `derived · ${esc(R.B.engines.length)} DMA engines · ${esc(R.B.l3.tiles.length)} L3 tiles · ${esc(R.B.l3.overflow)} L3 over · ${esc(R.B.dma ? R.B.dma.overloaded : 0)} DMA over` : "none (pooled rows)"]
   ].map(([k, v]) => `<span class="chip">${k} <b>${esc(v)}</b></span>`).join("") +
     (m.unmodelled && m.unmodelled.length ? `<span class="chip warn">not modelled <b>${esc(m.unmodelled.join(", "))}</b></span>` : "");
-  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? (m.version >= 5 ? `At ${m.level} each L3 residency's PROGRAM slot is recorded (one swimlane row per slot, from the record); which physical L3 tile holds it is not. ` : "") + `At ${m.level} the executor binds moves to lanes, not places, and does not place L3 on the floorplan's tiles. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : (m.version >= 5 ? `At ${m.level}, every L3 residency carries the address the program placed it at (module, slot, bank): the swimlanes draw one row per slot. A slot is an address in the program's L3, not a physical L3 tile, so the floorplan still draws L3 pooled across every L3 block; moves are bound to lanes of a mover pool, not to places. ` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. `) + (m.version === 6 ? `Each staged L2 copy is drawn in its slot from its stage Move's credit to its L2Release, with the Feeds that read it (its reuse count, from the record); a transient copy, fed once, holds no L2 credit at ${m.level} and is not drawn. An L2 accumulator's partial is drawn in its slot from its first merge to its L2Release; the Combiner merges each call's result into it, and nothing feeds it. Each compute tile has two rows: its chains' operands entering [in0, in1) and their results leaving [in1, out1), uncalibrated. An output-stationary chain holds C and drains north; a weight- or input-stationary call (#395) starts with a PRELOAD of the held tile and its partial sums leave south. ` : "") + `Invariants are checked by tools/trace/tflow_check.py, not here.`);
+  $("honesty").textContent = (R.bindingIgnored ? R.bindingIgnored + " " : "") + (R.B ? (m.version >= 5 ? `At ${m.level} each L3 residency's PROGRAM slot is recorded (one swimlane row per slot, from the record); which physical L3 tile holds it is not. ` : "") + `At ${m.level} the executor binds moves to lanes, not places, and does not place L3 on the floorplan's tiles. The per-resource rows and floorplan fills here come from a DERIVED binding (bind.py): ${R.B.policies.l3}; ${R.B.policies.dma}; ${R.B.policies.noc}. Timing is the executor's; only the place is derived. ${R.B.notes.join(" ")}` : (m.version >= 5 ? `At ${m.level}, every L3 residency carries the address the program placed it at (module, slot, bank): the swimlanes draw one row per slot. A slot is an address in the program's L3, not a physical L3 tile, so the floorplan still draws L3 pooled across every L3 block; moves are bound to lanes of a mover pool, not to places. ` : `At ${m.level}, L3 is one pooled capacity and moves are bound to lanes of a mover pool, not to places: the floorplan draws L3 and the movers as pooled fills across every block of their kind, never as per-tile values this record does not hold. `) + (m.version === 6 ? `Each staged L2 copy is drawn in its slot from its stage Move's credit to its L2Release, with the Feeds that read it (its reuse count, from the record). Each copy the walker places is drawn in its slot too: an operand's copy for its call, fed once, and a result's slot, from its opening call to its L2Release (on one compute tile; on more, ${m.level} runs those copies unplaced and does not draw them). An L2 accumulator's partial is drawn in its slot from its first merge to its L2Release; the Combiner merges each call's result into it, and nothing feeds it. Each compute tile has two rows: its chains' operands entering [in0, in1) and their results leaving [in1, out1), uncalibrated. An output-stationary chain holds C and drains north; a weight- or input-stationary call (#395) starts with a PRELOAD of the held tile and its partial sums leave south. ` : "") + `Invariants are checked by tools/trace/tflow_check.py, not here.`);
   viewA = 0; viewB = Math.max(1, m.makespan); zoomHistory.length = 0;
   const sc = $("scrub"); sc.max = m.makespan; sc.value = 0;
   T = Math.floor(m.makespan * 0.4);
@@ -749,7 +758,7 @@ $("lanes").addEventListener("mousemove", e => {
   }
   if (row.kind === "l2_slot") {
     const i = l2CopyAt(slotOfRow(row), h.t);
-    return showTip(e, `${esc(row.name)}<br>cycle ${fmt(Math.round(h.t))}: ${i < 0 ? "free" : R.l2.isPartial(i) ? tileText(R.l2.tile[i]) + " accumulator partial, " + fmt(R.l2.merges[i]) + " merges" : tileText(R.l2.tile[i]) + " staged, fed " + fmt(R.l2.feeds[i]) + "x"}`);
+    return showTip(e, `${esc(row.name)}<br>cycle ${fmt(Math.round(h.t))}: ${i < 0 ? "free" : tileText(R.l2.tile[i]) + " " + esc(l2What(i))}`);
   }
   if (row.kind === "cf_in" || row.kind === "cf_out") {
     const c = chainAt(row, h.t);
@@ -956,6 +965,16 @@ function slotResidencyAt(station, slot, t) {
 }
 // Version 6: the staged copy an L2 slot row holds at cycle t, the chain a compute tile's in or out row
 // carries at t (-1: none), and which of L-T1's phases t falls in. The phases are the record's.
+// What holds an L2 slot's row `i`, as plain text (written through esc): a staged copy, a partial,
+// an operand's copy for its call, or a result's slot (#387).
+function l2What(i) {
+  if (R.l2.isPartial(i)) return `accumulator partial, ${R.l2.merges[i]} merges`;
+  const k = R.l2.copyKind(i);
+  if (k === 2) return "result, drained in and written back";
+  if (k === 1) return `operand copy for its call, fed ${R.l2.feeds[i]}x`;
+  return `staged copy, fed ${R.l2.feeds[i]}x`;
+}
+
 // Whether a partial in L2 slot `slot` overlaps [a, b): a binary search over the slot's merged,
 // disjoint partial intervals (so sorted by end as well as by start).
 function partialOverlaps(slot, a, b) {
@@ -1000,8 +1019,8 @@ function inspectRow(r) {
     const now = l2CopyAt(slot, T);
     let feeds = 0, merges = 0, partials = 0;
     for (const i of held) R.l2.isPartial(i) ? (partials++, merges += R.l2.merges[i]) : (feeds += R.l2.feeds[i]);
-    const what = i => R.l2.isPartial(i) ? `accumulator partial, ${fmt(R.l2.merges[i])} merges` : `staged copy, fed ${fmt(R.l2.feeds[i])}x`;
-    $("insp").innerHTML = `<div class="kv"><span>L2 slot</span><span>${esc(row.name)}</span><span>at cursor</span><span>${now >= 0 ? tileText(R.l2.tile[now]) + (R.l2.isPartial(now) ? " (partial)" : "") : "free"}</span><span>staged copies</span><span>${fmt(held.length - partials)}</span><span>Feeds served</span><span>${fmt(feeds)}</span><span>accumulator partials</span><span>${fmt(partials)}</span><span>merges</span><span>${fmt(merges)}</span></div>` +
+    const what = l2What;
+    $("insp").innerHTML = `<div class="kv"><span>L2 slot</span><span>${esc(row.name)}</span><span>at cursor</span><span>${now >= 0 ? tileText(R.l2.tile[now]) + (R.l2.isPartial(now) ? " (partial)" : "") : "free"}</span><span>held</span><span>${fmt(held.length - partials)}</span><span>Feeds served</span><span>${fmt(feeds)}</span><span>accumulator partials</span><span>${fmt(partials)}</span><span>merges</span><span>${fmt(merges)}</span></div>` +
       `<p class="note">${held.slice(0, 12).map(i => `${tileText(R.l2.tile[i])}: ${fmt(R.l2.t0[i])}–${fmt(R.l2.t1[i])}, ${esc(what(i))}`).join("<br>") || "never held anything"}${held.length > 12 ? "<br>…" : ""}</p>`;
     return;
   }
