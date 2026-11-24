@@ -295,6 +295,7 @@ private:
                 // Feed complete: tile consumed from L2, fed to compute
                 // Only release L2 credit if tile was fully removed (ref_count reached 0). A
                 // staged copy is not the Feed's to consume: its L2Release retires it (#399).
+                if (in_flight_->tile.l2_held) l2_tag_cam_.done_slot(in_flight_l2_slot_, in_flight_->tile.tile_id);
                 bool credit_released = !in_flight_->tile.l2_held &&
                                        l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
@@ -431,6 +432,7 @@ private:
         );
         in_flight_is_feed_ = true;
         in_flight_l2_slot_ = found_entry->slot_id;
+        if (feed_tile.l2_held) l2_tag_cam_.take_slot(found_entry->slot_id, feed_tile.tile_id);   // TAKE
 
         events.push_back(TimingEvent(
             EventType::STR_FEED_START,

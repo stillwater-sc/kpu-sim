@@ -206,6 +206,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every placed L2 slot has a state, checked every cycle** (#387 step 3b; `docs/plans/slot-credits-at-lca.md`
+  §3.4, §6).
+  - **The `SlotPool`** (`timing/slot_pool.hpp`) keeps each of the program's L2 slots in exactly one state, as the
+    RTL's slot credits do:
+    - FREE (released);
+    - OWNED (a Move, a partial's first merge, or a result's opening call claimed it);
+    - READY (its tile landed);
+    - READING (a Feed or a result's Writeback is reading it).
+  - **Faults.** A transition from the wrong state is a `SlotFault` naming the slot, the tile and the transition,
+    never a stall. The L2 tag CAM drives the pool from its claims, inserts and invalidations, and the
+    Streamer's Feeds and the BlockMover's Writebacks take and return the token.
+  - **Per-cycle check.** Every cycle, L-CA checks that each slot's state agrees with the CAM: a FREE slot has no
+    claim and no tile in it, an OWNED one a claim and no tile landed yet, and a READY or READING one its tile.
+    Every slot must be FREE when the run ends.
+  - **Tests.** New `test_slot_pool`: the life of a slot; faults from each wrong state, by name; the CAM check
+    catching a tile in a slot it never claimed; and an L-CA run whose 96 placements (16 stagings, 64 copies, 16
+    results) are acquired and released exactly once, ending all FREE. Every existing CSP run passes the per-cycle
+    check unchanged.
+
 - **L-CA executes every L2 slot the walker places** (#387 step 3a; `docs/plans/slot-credits-at-lca.md` §4). Until
   now L-CA ran an unstaged operand's copy and a fabric result unplaced, in transient slots outside the program's
   `l2 = N`.

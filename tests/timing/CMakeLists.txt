@@ -542,3 +542,14 @@ set_tests_properties(test_memory_side_harness PROPERTIES
     LABELS "timing;memside;dram;v0.9"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
+
+# Each placed L2 slot's state (FREE, OWNED, READY, READING), its faults, and L-CA's per-cycle
+# invariants on it (docs/plans/slot-credits-at-lca.md §3.4, §6; #387 step 3b).
+kpu_add_component_test(test_slot_pool "timing"
+    test_slot_pool.cpp
+)
+
+set_tests_properties(test_slot_pool PROPERTIES
+    LABELS "timing;csp;placement;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)

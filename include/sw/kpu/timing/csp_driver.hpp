@@ -317,6 +317,11 @@ public:
         }
         for (const auto& [slot, tile] : exec_.l3_tile_tag_cam(0).claim_log())
             r.l3_placement.emplace_back(coord_.at(tile), slot);
+        // Every placed L2 slot is FREE once the program has run: each copy's L2Release returned it.
+        if (r.completed)
+            if (const SlotPool* pool = exec_.l2_tag_cam().slot_pool(); pool && !pool->all_free())
+                throw SlotFault("CspDriver: " + std::to_string(pool->size() - pool->free_count()) + " of the program's " +
+                                std::to_string(pool->size()) + " L2 slots are still held at the end of the run");
         for (const auto& [slot, tile] : exec_.l2_tag_cam().claim_log())
             r.l2_placement.emplace_back(coord_.at(tile), slot);
         for (std::size_t t = 0; t < exec_.config().num_compute_tiles; ++t) r.cf_busy += exec_.compute_tile_busy_cycles(t);
