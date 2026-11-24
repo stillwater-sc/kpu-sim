@@ -10,6 +10,7 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <sw/kpu/program/csp/transactional.hpp>
 #include <sw/kpu/program/driver/csp_run.hpp>
@@ -524,4 +525,20 @@ TEST_CASE("L-CA L2: a tile's stagings keep their order, though a later one's slo
     }
     CHECK(a_arrivals == std::vector<std::uint32_t>{0, 1});
     CHECK(a_feeds == std::vector<std::uint32_t>{0, 1});
+}
+
+TEST_CASE("L-CA refuses a Move without its L2 slot (#524's review)", "[csp][placement][lca][l2]") {
+    // Every L2 copy is placed (csp 1.1's l2 = N), and a placed transfer's credit is its slot: an
+    // unplaced Move would take the count pool, which no longer accounts for the placed slots. So
+    // the driver refuses one, by name, rather than run it.
+    csp::CspProgram p = trace_fixtures::compiled(lang::parse(staged_matmul(false)));
+    auto mv = std::find_if(p.actions.begin(), p.actions.end(), [](const csp::Action& a) { return a.kind == csp::Action::Kind::Move; });
+    REQUIRE(mv != p.actions.end());
+    REQUIRE(mv->l2.has_value());
+    mv->l2.reset();
+    const auto cfg = sw::kpu::timing::csp_config_from(s1().device(0));
+    REQUIRE(cfg.has_value());
+    sw::kpu::timing::ConcurrentTimingExecutor exec(cfg->config);
+    CHECK_THROWS_WITH(sw::kpu::timing::CspDriver(exec, p).run(),
+                      Catch::Matchers::ContainsSubstring("Move carries no L2 slot"));
 }

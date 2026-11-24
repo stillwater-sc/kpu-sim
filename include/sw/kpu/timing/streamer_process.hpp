@@ -336,8 +336,10 @@ private:
                 // Drain complete: result tile arrived at L2
                 // Note: slot_id was set when drain started. An accumulating merge lands in the
                 // entry its first merge made: there is nothing new to insert.
-                if (in_flight_->tile.merge != TileDescriptor::kMergeAccumulate)
-                    l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
+                if (in_flight_->tile.merge != TileDescriptor::kMergeAccumulate &&
+                    !l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle))
+                    throw std::logic_error("Streamer: " + in_flight_->tile.tile_id.to_string() +
+                                           " drained, but L2's tag CAM is full: it cannot land");
                 total_tiles_drained_++;
 
                 events.push_back(TimingEvent::duration_event(

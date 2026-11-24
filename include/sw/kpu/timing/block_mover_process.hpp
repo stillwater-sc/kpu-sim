@@ -478,15 +478,18 @@ private:
                 // Move complete: tile arrived at L2. The ref count is seeded
                 // with the tile's consumer count (broadcast 1:1:k, #100);
                 // the ordinary pipeline has consumer_count = 1.
-                if (in_flight_->tile.ordered && in_flight_->tile.l2_slot < 0)
-                    // A CSP Move lands its own copy, with its own credit, even when an earlier
-                    // copy of the tile is still in L2 (#424).
-                    l2_tag_cam_.insert_copy(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
-                else
-                    l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id,
-                                       current_cycle,
-                                       static_cast<uint32_t>(
-                                           in_flight_->tile.consumer_count));
+                // A tile that cannot land is an error, never dropped: its consumers would stall and
+                // its credit would never return (#524's review).
+                const bool landed =
+                    in_flight_->tile.ordered && in_flight_->tile.l2_slot < 0
+                        // A CSP Move lands its own copy, with its own credit, even when an earlier
+                        // copy of the tile is still in L2 (#424).
+                        ? l2_tag_cam_.insert_copy(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle)
+                        : l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle,
+                                             static_cast<uint32_t>(in_flight_->tile.consumer_count));
+                if (!landed)
+                    throw std::logic_error("BlockMover: " + in_flight_->tile.tile_id.to_string() +
+                                           " moved, but L2's tag CAM is full: it cannot land");
                 // Only release L3 credit if tile was fully removed (ref_count reached 0). A
                 // program-held entry is not the Move's to consume: its Release retires it.
                 const auto l3_source = l3_tag_cam_.match(in_flight_->tile.tile_id);   // the slot it frees
@@ -736,8 +739,9 @@ private:
         for (size_t i = 0; i < move_queue_.size(); ++i) {
             const auto& tile = move_queue_.at(i);
             if (!released_before(tile)) continue;    // the copy in L3 is an earlier residency's
-            if (behind_staging(i)) continue;          // after the tile's staging Move, in program order
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
+            if (!l3_entry.has_value()) continue;      // not in L3 yet (checked first: behind_staging scans)
+            if (behind_staging(i)) continue;          // after the tile's staging Move, in program order
             // A staging Move (#399) takes the L2 slot the program placed the copy in, at its
             // turn, once the tile's earlier copy has left L2. Skipped while it waits, so a later
             // Move is not held behind it.
@@ -892,7 +896,7 @@ private:
             if (m.program_seq >= mv) continue;
             // Ready: the conditions try_start_move scans for (its L2 credit aside, which a
             // placed Move does not take).
-            if (!released_before(m) || behind_staging(i) || !l3_tag_cam_.match(m.tile_id)) continue;
+            if (!released_before(m) || !l3_tag_cam_.match(m.tile_id) || behind_staging(i)) continue;
             if (m.l2_slot >= 0 && (l2_tag_cam_.lookup(m.tile_id) ||
                                    !l2_tag_cam_.slot_ready(static_cast<uint32_t>(m.l2_slot), m.l2_slot_turn)))
                 continue;

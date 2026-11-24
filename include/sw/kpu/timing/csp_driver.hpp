@@ -478,6 +478,10 @@ private:
                 dram_bytes_ += d.size_bytes;
                 break;
             case Action::Kind::Move:
+                // Every L2 copy is placed (csp 1.1's l2 = N; the walker's ring): an unplaced Move
+                // would take the count pool, which no longer accounts for the placed slots.
+                if (!a.l2)
+                    throw std::logic_error("CspDriver: " + a.tile.to_string() + "'s Move carries no L2 slot");
                 d.l3_held = loaded_.count(d.tile_id) != 0;
                 if (a.l2) {                     // a staging: the copy into the program's L2 slot
                     if (!staged_.insert(d.tile_id).second)
