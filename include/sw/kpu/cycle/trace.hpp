@@ -9,7 +9,9 @@
 //                   complete events ("X"): "busy", or "stall: <cause>"; idle cycles are not drawn
 //   a link          its BEATS as async slices ("b"/"e", one async track per link, named by it), each
 //                   from its push to its pop -- beats overlap on a link, which complete events on one
-//                   thread may not -- and its OCCUPANCY as a counter track ("C"), at each change
+//                   thread may not -- and its OCCUPANCY as a counter track ("C"), at each change. The
+//                   slices' ids are process-local ("id2": {"local": ...}), so Perfetto files the link
+//                   tracks under the process, beside its components, not among its global events
 // Times are the domains' edges in picoseconds, written in microseconds (the format's unit), so
 // domains at different clocks line up. A cycle c spans [edge(c), edge(c + 1)).
 //
@@ -116,7 +118,7 @@ public:
                 case Event::Kind::AsyncEnd:
                     out << R"({"ph":")" << (e.kind == Event::Kind::AsyncBegin ? "b" : "e")
                         << R"(","pid":1,"tid":)" << tid(e.track) << R"(,"cat":"link","name":")" << escape(k.name)
-                        << R"(","id":)" << e.key << R"(,"ts":)" << ts << R"(,"args":{"beat":")" << escape(e.name)
+                        << R"(","id2":{"local":")" << e.key << R"("},"ts":)" << ts << R"(,"args":{"beat":")" << escape(e.name)
                         << "\"}}";
                     break;
                 case Event::Kind::Counter:

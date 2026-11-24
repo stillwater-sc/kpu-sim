@@ -64,7 +64,11 @@ def main(argv):
                 continue
             slices[e["tid"]].append((ts, dur, e["name"]))
         elif ph in ("b", "e"):
-            key = (e.get("cat"), e.get("name"), e.get("id"))
+            ident = e.get("id2", {}).get("local") if isinstance(e.get("id2"), dict) else e.get("id")
+            if ident is None:
+                bad.append(f"event {i}: async {ph} without an id")
+                continue
+            key = (e.get("cat"), e.get("name"), ident)
             book = opened if ph == "b" else closed
             if key in book:
                 bad.append(f"event {i}: async {ph} {key} twice")
