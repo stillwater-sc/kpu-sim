@@ -174,6 +174,7 @@ public:
         Picoseconds t = std::numeric_limits<Picoseconds>::max();
         for (const auto& d : domains_) t = std::min(t, d->next_edge());
         now_ = t;
+        due_.clear();   // a step a failure interrupted leaves its domains here (#553's review)
         for (std::size_t i = 0; i < domains_.size(); ++i) {
             Domain& d = *domains_[i];
             if (d.next_edge() != t) continue;
@@ -208,7 +209,6 @@ public:
             if (checks_)
                 for (LinkBase* l : clocked_[i].links) guarded(l->name(), d, c, [&] { l->check(c); });
         }
-        due_.clear();
         if (checks_)
             for (const auto& [name, hook] : invariants_)
                 guarded("invariant " + name, *last_domain_, last_domain_->cycle() - 1, [&] { hook(); });
@@ -298,6 +298,7 @@ public:
     }
 
     void reset() {
+        due_.clear();
         for (const auto& d : domains_) d->reset();
         for (const auto& x : components_) {
             x->reset();

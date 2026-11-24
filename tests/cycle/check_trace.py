@@ -79,7 +79,8 @@ def main(argv):
             book[key] = ts
         elif ph == "C":
             args = e.get("args", {})
-            if not all(isinstance(v, (int, float)) for v in args.values()):
+            # A bool is an int to Python, and False == 0: refuse it, or a level of false passes as 0.
+            if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in args.values()):
                 bad.append(f"event {i}: counter values must be numbers")
                 continue
             for key in ("cycle", "clock"):

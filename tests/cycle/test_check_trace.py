@@ -79,10 +79,40 @@ class CheckTrace(unittest.TestCase):
     def clock_events(self, t, key):
         return [e for e in t["traceEvents"] if e["ph"] == "C" and key in e.get("args", {})]
 
+    def clock_tids(self, t):
+        return {e["args"]["name"][len("clock "):]: e["tid"] for e in t["traceEvents"]
+                if e["ph"] == "M" and e["name"] == "thread_name" and e["args"]["name"].startswith("clock ")}
+
     def test_the_demo_has_its_clocks(self):
-        # Every domain's cycle numbers and, as the demo turns them on, its square wave (#536).
+        # Every domain's own cycle numbers and, as the demo turns them on, its square wave (#536).
+        tids = self.clock_tids(self.trace)
+        for d in self.counters["domains"]:
+            self.assertIn(d["name"], tids)
+            for key in ("cycle", "clock"):
+                self.assertTrue([e for e in self.clock_events(self.trace, key) if e["tid"] == tids[d["name"]]],
+                                (d["name"], key))
+
+    def test_a_domain_without_its_clock_samples(self):
+        # The demo check above, on a trace that lost one domain's samples (#553's review).
+        t = copy.deepcopy(self.trace)
+        tid = self.clock_tids(t)[self.counters["domains"][-1]["name"]]
+        t["traceEvents"] = [e for e in t["traceEvents"] if not (e["ph"] == "C" and e["tid"] == tid)]
+        saved, self.trace = self.trace, t
+        try:
+            with self.assertRaises(AssertionError):
+                self.test_the_demo_has_its_clocks()
+        finally:
+            self.trace = saved
+
+    def test_booleans_are_not_cycle_numbers_or_levels(self):
         for key in ("cycle", "clock"):
-            self.assertTrue(self.clock_events(self.trace, key), key)
+            t = copy.deepcopy(self.trace)
+            for e in self.clock_events(t, key):
+                if e["args"][key] in (0, 1):
+                    e["args"][key] = bool(e["args"][key])
+            code, out = run(t, self.counters)
+            self.assertEqual(code, 1, (key, out))
+            self.assertIn("counter values must be numbers", out)
 
     def test_a_skipped_cycle_number(self):
         t = copy.deepcopy(self.trace)

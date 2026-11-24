@@ -31,6 +31,7 @@
 #include <memory>
 #include <regex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -419,6 +420,34 @@ TEST_CASE("The trace: a crossing's beats, each domain's cycle numbers and, as an
         tracer.write(path);
         CHECK_THAT(slurp_and_remove(path), !ContainsSubstring(R"("args":{"cycle")"));
     }
+}
+
+TEST_CASE("A step a failure interrupted leaves no link closure behind for the next run", "[cycle][crossing]") {
+    // Two domains with coinciding edges. The first is clocked, and the second fails before the
+    // links close (#553's review): after a reset, each of the first's cycles closes its link once.
+    struct Thrower : Component {
+        bool armed = true;
+        explicit Thrower(Domain& d) : Component("thrower", d) {}
+        void evaluate(Cycle) override {
+            if (armed) throw std::runtime_error("boom");
+        }
+        [[nodiscard]] bool idle() const override { return true; }
+    };
+    Simulator sim;
+    Domain& a = sim.add_domain(Domain("a", 1000));
+    Domain& b = sim.add_domain(Domain("b", 1000));
+    auto& p = sim.add<Producer>("p", a, 5);
+    auto& c = sim.add<Consumer>("c", a);
+    auto& l = sim.link<Beat>("p->c", p, c, 2);
+    p.connect(l);
+    c.connect(l);
+    auto& t = sim.add<Thrower>(b);
+    CHECK_THROWS_AS(sim.step(), InvariantViolation);
+    t.armed = false;
+    sim.reset();
+    REQUIRE(sim.run_until_idle(kLimit));
+    c.finish(5);
+    CHECK(l.counts().cycles == a.cycle());
 }
 
 TEST_CASE("A tracer attached after the domains still gets their clock tracks", "[cycle][crossing][trace]") {
