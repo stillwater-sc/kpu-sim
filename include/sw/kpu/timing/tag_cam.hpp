@@ -403,7 +403,8 @@ public:
 
     /// The per-cycle invariants (slot-credits-at-lca.md §6): each placed slot's state agrees with
     /// the CAM. FREE has no claim and no entry in it; OWNED a claim and no entry in it yet; READY
-    /// and READING the claiming tile's entry in that slot. A disagreement is a SlotFault, by slot.
+    /// and READING the claiming tile's entry in that slot; and no slot holds another tile's entry.
+    /// A disagreement is a SlotFault, by slot.
     void check_slots() const {
         if (!pool_) return;
         for (uint32_t slot = 0; slot < pool_->size(); ++slot) {
@@ -420,6 +421,9 @@ public:
             }
             if (c == claims_.end()) fault("no tile claims it");
             if (!(c->second == *pool_->owner(slot))) fault(c->second.to_string() + " claims it, not " + pool_->owner(slot)->to_string());
+            for (const auto& [id, e] : entries_)   // only the slot's owner may be in it
+                if (e.valid && e.slot_id == slot && !(id == c->second))
+                    fault(id.to_string() + " is in it, but " + c->second.to_string() + " holds it");
             const auto e = entries_.find(c->second);
             const bool landed = e != entries_.end() && e->second.valid && e->second.slot_id == slot;
             if (st == SlotPool::State::Owned && landed) fault(c->second.to_string() + " has landed in it");

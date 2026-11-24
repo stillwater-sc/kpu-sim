@@ -108,6 +108,21 @@ TEST_CASE("TagCAM: placed slots drive the pool, and check_slots ties each state 
     REQUIRE(bad.claim_slot(0, a));
     REQUIRE(bad.insert(a, 1, 5));               // lands in slot 1, though it claimed 0
     CHECK_THROWS_WITH(bad.check_slots(), ContainsSubstring("L2 slot 1 is FREE, but " + a.to_string() + " is in it"));
+    // Another tile in a slot its owner holds: OWNED (nothing landed yet) and READY alike (#525's review).
+    const TileID b = tile(0, 1);
+    TagCAM owned(8);
+    owned.set_placed_slots(2);
+    REQUIRE(owned.claim_slot(0, a));
+    REQUIRE(owned.insert(b, 0, 5));            // B lands in A's slot; A's claim never signals
+    CHECK_THROWS_WITH(owned.check_slots(), ContainsSubstring("L2 slot 0 is OWNED, but " + b.to_string() +
+                                                             " is in it, but " + a.to_string() + " holds it"));
+    TagCAM ready(8);
+    ready.set_placed_slots(2);
+    REQUIRE(ready.claim_slot(0, a));
+    REQUIRE(ready.insert(a, 0, 5));            // A lands: READY
+    REQUIRE(ready.insert(b, 0, 6));            // then B lands in A's slot too
+    CHECK_THROWS_WITH(ready.check_slots(), ContainsSubstring("L2 slot 0 is READY, but " + b.to_string() +
+                                                             " is in it, but " + a.to_string() + " holds it"));
     // And a claimed slot whose tile has landed while the pool still says OWNED.
     TagCAM early(8);
     early.set_placed_slots(2);
