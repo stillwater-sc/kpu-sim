@@ -19,16 +19,21 @@ TRACE = COUNTERS = None
 def run(trace, counters):
     with tempfile.TemporaryDirectory() as d:
         t, c = os.path.join(d, "t.json"), os.path.join(d, "c.json")
-        json.dump(trace, open(t, "w"))
-        json.dump(counters, open(c, "w"))
+        # Closed before the checker reads them: unflushed output is not guaranteed to be there.
+        with open(t, "w") as f:
+            json.dump(trace, f)
+        with open(c, "w") as f:
+            json.dump(counters, f)
         p = subprocess.run([sys.executable, CHECK, t, c], capture_output=True, text=True)
         return p.returncode, p.stdout
 
 
 class CheckTrace(unittest.TestCase):
     def setUp(self):
-        self.trace = json.load(open(TRACE))
-        self.counters = json.load(open(COUNTERS))
+        with open(TRACE) as f:
+            self.trace = json.load(f)
+        with open(COUNTERS) as f:
+            self.counters = json.load(f)
 
     def test_the_demo_passes(self):
         code, out = run(self.trace, self.counters)
