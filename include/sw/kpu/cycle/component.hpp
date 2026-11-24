@@ -43,8 +43,11 @@ public:
     // Its own invariants, checked after every cycle of its domain; raise std::logic_error.
     virtual void check(Cycle /*now*/) const {}
     virtual void reset() {}
+    // Its internal state in a line, for the state dump and the deadlock report (none by default).
+    [[nodiscard]] virtual std::string describe() const { return {}; }
 
     [[nodiscard]] ComponentCounters& counters() { return counters_; }
+    [[nodiscard]] const ComponentCounters& counters() const { return counters_; }
     [[nodiscard]] const Counters& counts() const { return counters_.counts(); }
 
 private:

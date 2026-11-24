@@ -12,6 +12,8 @@
 #include <sw/kpu/cycle/simulator.hpp>
 
 #include <cstdio>
+#include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -58,6 +60,43 @@ inline std::string format_report(const std::vector<ReportRow>& rows) {
         out += line;
     }
     return out;
+}
+
+// The counters file (§3.3): every domain (name, period, cycles) and every row's counts, as JSON.
+inline void write_counters_json(const Simulator& sim, const std::string& path) {
+    std::ofstream out(path);
+    if (!out) throw std::runtime_error("cycle::write_counters_json: cannot write " + path);
+    auto q = [](const std::string& s) {
+        std::string o = "\"";
+        for (const char c : s) {
+            if (c == '"' || c == '\\') o += '\\';
+            o += c;
+        }
+        return o + "\"";
+    };
+    out << "{\"domains\":[";
+    bool first = true;
+    sim.for_each_domain([&](const std::string& name, double period_ps, Cycle cycles) {
+        out << (first ? "" : ",") << "{\"name\":" << q(name) << ",\"period_ps\":" << period_ps
+            << ",\"cycles\":" << cycles << "}";
+        first = false;
+    });
+    out << "],\"rows\":[";
+    first = true;
+    for (const auto& r : report(sim)) {
+        const Counters& c = r.c;
+        out << (first ? "\n" : ",\n") << "{\"name\":" << q(r.name) << ",\"domain\":" << q(r.domain)
+            << ",\"kind\":\"" << (r.link ? "link" : "component") << "\",\"T\":" << c.cycles
+            << ",\"A\":" << c.arrivals << ",\"C\":" << c.completions << ",\"busy\":" << c.busy
+            << ",\"idle\":" << c.idle << ",\"Q\":" << c.occupancy_integral << ",\"max\":" << c.max_occupancy
+            << ",\"stalls\":{";
+        for (std::size_t i = 0; i < kStallCauses; ++i)
+            out << (i ? "," : "") << q(to_string(static_cast<Stall>(i))) << ":" << c.stalls[i];
+        out << "}}";
+        first = false;
+    }
+    out << "\n]}\n";
+    if (!out) throw std::runtime_error("cycle::write_counters_json: writing " + path + " failed");
 }
 
 }  // namespace sw::kpu::cycle

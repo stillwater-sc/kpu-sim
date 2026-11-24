@@ -7,6 +7,18 @@
 // the earliest clock edge across every domain and clocks that domain's components and links
 // (step() explains the cycle, and why it is cycle-based rather than event-driven).
 //
+// DEBUG (§3.3, step 0c):
+//   - any exception a component or link raises while it is clocked or checked, and any failed
+//     invariant hook (add_invariant), stops the run as an InvariantViolation: which component, link
+//     or hook, the domain and the cycle, and the state dump at that moment;
+//   - the DEADLOCK DETECTOR: an edge makes progress if a component it clocks was busy or held by an
+//     outside control (Stall::External), or a link it clocks pushed or popped. After
+//     deadlock_window() edges in a row without progress while work remains (!idle()), the run stops
+//     as a Deadlock, naming every component that is not idle and every link's credits. A long
+//     latency is not a deadlock: a component waiting out its own latency reports busy;
+//   - dump(): every domain, component and link, now;
+//   - attach(Tracer&): the Perfetto trace (trace.hpp).
+//
 // A link joins two components of ONE domain. A link between domains is a clock-domain crossing,
 // with its own synchronizer (step 0d), and is refused until then.
 //
@@ -17,17 +29,50 @@
 #include <sw/kpu/cycle/component.hpp>
 #include <sw/kpu/cycle/link.hpp>
 #include <sw/kpu/cycle/time.hpp>
+#include <sw/kpu/cycle/trace.hpp>
 
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace sw::kpu::cycle {
+
+// A run stopped by a failed invariant, or by an exception a component or link raised.
+class InvariantViolation : public std::logic_error {
+public:
+    InvariantViolation(std::string where, std::string domain, Cycle cycle, const std::string& what, std::string dump)
+        : std::logic_error(where + " (" + domain + " cycle " + std::to_string(cycle) + "): " + what),
+          where_(std::move(where)), domain_(std::move(domain)), cycle_(cycle), dump_(std::move(dump)) {}
+    [[nodiscard]] const std::string& where() const { return where_; }      // the component, link or hook
+    [[nodiscard]] const std::string& domain() const { return domain_; }
+    [[nodiscard]] Cycle cycle() const { return cycle_; }
+    [[nodiscard]] const std::string& dump() const { return dump_; }      // the state when it stopped
+
+private:
+    std::string where_, domain_;
+    Cycle cycle_;
+    std::string dump_;
+};
+
+// A run stopped because nothing made progress for the deadlock window while work remained.
+class Deadlock : public std::runtime_error {
+public:
+    Deadlock(const std::string& what, std::vector<std::string> blocked, std::string dump)
+        : std::runtime_error(what), blocked_(std::move(blocked)), dump_(std::move(dump)) {}
+    [[nodiscard]] const std::vector<std::string>& blocked() const { return blocked_; }   // components not idle
+    [[nodiscard]] const std::string& dump() const { return dump_; }
+
+private:
+    std::vector<std::string> blocked_;
+    std::string dump_;
+};
 
 class Simulator {
 public:
@@ -41,7 +86,9 @@ public:
     C& add(Args&&... args) {
         auto c = std::make_unique<C>(std::forward<Args>(args)...);
         C& ref = *c;
-        clocked_[require_domain(ref.domain(), "component " + ref.name())].components.push_back(&ref);
+        Clocked& k = clocked_[require_domain(ref.domain(), "component " + ref.name())];
+        k.components.push_back(&ref);
+        k.tracks.push_back(tracer_ ? tracer_->add_track(ref.name(), ref.domain().name(), false) : 0);
         components_.push_back(std::move(c));
         return ref;
     }
@@ -58,6 +105,7 @@ public:
         Link<T>& ref = *l;
         clocked_[d].links.push_back(&ref);
         links_.push_back(std::move(l));
+        if (tracer_) ref.attach(tracer_, tracer_->add_track(ref.name(), ref.domain().name(), true));
         return ref;
     }
 
@@ -105,22 +153,74 @@ public:
         Picoseconds t = std::numeric_limits<Picoseconds>::max();
         for (const auto& d : domains_) t = std::min(t, d->next_edge());
         now_ = t;
+        bool progress = false;
         for (std::size_t i = 0; i < domains_.size(); ++i) {
             Domain& d = *domains_[i];
             if (d.next_edge() != t) continue;
             const Cycle c = d.cycle();
             const Clocked& k = clocked_[i];
-            for (Component* x : k.components) x->evaluate(c);
-            for (Component* x : k.components) x->commit(c);
-            for (Component* x : k.components) x->counters().end_cycle();
-            for (LinkBase* l : k.links) l->end_cycle();
+            for (Component* x : k.components) guarded(x->name(), d, c, [&] { x->evaluate(c); });
+            for (Component* x : k.components) guarded(x->name(), d, c, [&] { x->commit(c); });
+            for (std::size_t j = 0; j < k.components.size(); ++j) {
+                ComponentCounters& n = k.components[j]->counters();
+                const State s = n.end_cycle();
+                if (s == State::Busy || (s == State::Stalled && n.last_cause() == Stall::External)) progress = true;
+                if (tracer_) tracer_->state(k.tracks[j], s, n.last_cause(), d.edge(c), d.edge(c + 1));
+            }
+            for (LinkBase* l : k.links)
+                if (l->end_cycle(c)) progress = true;
             if (checks_) {
-                for (LinkBase* l : k.links) l->check(c);
-                for (Component* x : k.components) x->check(c);
+                for (LinkBase* l : k.links) guarded(l->name(), d, c, [&] { l->check(c); });
+                for (Component* x : k.components) guarded(x->name(), d, c, [&] { x->check(c); });
             }
             d.advance();
+            last_domain_ = &d;
+        }
+        if (checks_)
+            for (const auto& [name, hook] : invariants_)
+                guarded("invariant " + name, *last_domain_, last_domain_->cycle() - 1, [&] { hook(); });
+        if (progress) {
+            quiet_ = 0;
+        } else if (deadlock_window_ > 0 && ++quiet_ >= deadlock_window_ && !idle()) {
+            deadlock();
         }
         return true;
+    }
+
+    // An invariant checked after every step (with the checks on): raise to fail it.
+    void add_invariant(std::string name, std::function<void()> hook) {
+        invariants_.emplace_back(std::move(name), std::move(hook));
+    }
+    // Edges in a row without progress before the run stops as a Deadlock; 0 turns the detector off.
+    void set_deadlock_window(std::uint64_t edges) { deadlock_window_ = edges; }
+    [[nodiscard]] std::uint64_t deadlock_window() const { return deadlock_window_; }
+
+    // The trace: attach before adding components and links (each gets a track as it is added).
+    void attach(Tracer& t) {
+        if (!components_.empty() || !links_.empty())
+            throw std::logic_error("cycle::Simulator: attach the tracer before adding components and links");
+        tracer_ = &t;
+    }
+
+    // Every domain, component and link, as they are now.
+    [[nodiscard]] std::string dump() const {
+        std::ostringstream o;
+        o << "cycle core at " << now_ << " ps\n";
+        for (std::size_t i = 0; i < domains_.size(); ++i) {
+            const Domain& d = *domains_[i];
+            o << "domain " << d.name() << ": cycle " << d.cycle() << ", next edge " << d.next_edge() << " ps\n";
+            const Cycle c = d.cycle() ? d.cycle() - 1 : 0;           // the last cycle clocked
+            for (const Component* x : clocked_[i].components) {
+                const Counters& n = x->counts();
+                o << "  component " << x->name() << ": " << describe_state(*x) << "; A " << n.arrivals << ", C "
+                  << n.completions << ", held " << n.occupancy;
+                const std::string more = x->describe();
+                if (!more.empty()) o << "; " << more;
+                o << "\n";
+            }
+            for (LinkBase* l : clocked_[i].links) o << "  link " << l->name() << ": " << l->describe(c) << "\n";
+        }
+        return o.str();
     }
 
     // Steps until `done()` holds after an edge, or past `limit` picoseconds; true if done.
@@ -141,9 +241,16 @@ public:
     }
 
     [[nodiscard]] Picoseconds now() const { return now_; }     // the last edge taken
+    [[nodiscard]] Tracer* tracer() const { return tracer_; }
     // The per-cycle invariant checks, on by default. Off only to measure what they cost.
     void set_checks(bool on) { checks_ = on; }
     [[nodiscard]] bool checks() const { return checks_; }
+
+    // Every domain: its name, period in picoseconds, and the cycles clocked so far.
+    template <class F>
+    void for_each_domain(F&& f) const {
+        for (const auto& d : domains_) f(d->name(), d->period_ps(), d->cycle());
+    }
 
     // The counters of every component and link, in the order added (report.hpp formats them).
     template <class F>
@@ -160,6 +267,7 @@ public:
         }
         for (const auto& l : links_) l->reset();
         now_ = 0;
+        quiet_ = 0;
     }
 
 private:
@@ -173,12 +281,51 @@ private:
     // Each domain's components and links, in the order added: what one of its edges clocks.
     struct Clocked {
         std::vector<Component*> components;
+        std::vector<std::uint32_t> tracks;               // each component's trace track (when traced)
         std::vector<LinkBase*> links;
     };
+
+    // Runs f; any exception it raises stops the run as an InvariantViolation naming `where`.
+    template <class F>
+    void guarded(const std::string& where, const Domain& d, Cycle c, F&& f) const {
+        try {
+            f();
+        } catch (const InvariantViolation&) {
+            throw;
+        } catch (const std::exception& e) {
+            throw InvariantViolation(where, d.name(), c, e.what(), dump());
+        }
+    }
+    static std::string describe_state(const Component& x) {
+        const ComponentCounters& n = x.counters();
+        if (n.last_state() == State::Stalled) return std::string("stalled (") + to_string(n.last_cause()) + ")";
+        return to_string(n.last_state());
+    }
+    [[noreturn]] void deadlock() const {
+        std::vector<std::string> blocked;
+        std::ostringstream o;
+        o << "cycle::Simulator: deadlock: no progress for " << quiet_ << " edges, at " << now_ << " ps, with work left;";
+        for (std::size_t i = 0; i < domains_.size(); ++i)
+            for (const Component* x : clocked_[i].components) {
+                if (x->idle()) continue;
+                blocked.push_back(x->name());
+                o << " " << x->name() << " " << describe_state(*x) << ";";
+            }
+        for (std::size_t i = 0; i < domains_.size(); ++i) {
+            const Cycle c = domains_[i]->cycle() ? domains_[i]->cycle() - 1 : 0;
+            for (LinkBase* l : clocked_[i].links) o << " link " << l->name() << " " << l->describe(c) << ";";
+        }
+        throw Deadlock(o.str(), std::move(blocked), dump());
+    }
 
     std::vector<std::unique_ptr<Domain>> domains_;
     std::vector<Clocked> clocked_;                       // parallel to domains_
     bool checks_ = true;
+    std::vector<std::pair<std::string, std::function<void()>>> invariants_;
+    std::uint64_t deadlock_window_ = 10'000;            // edges without progress (0: off)
+    std::uint64_t quiet_ = 0;                            // edges in a row without progress
+    const Domain* last_domain_ = nullptr;
+    Tracer* tracer_ = nullptr;
     std::vector<std::unique_ptr<Component>> components_;
     std::vector<std::unique_ptr<LinkBase>> links_;
     Picoseconds now_ = 0;

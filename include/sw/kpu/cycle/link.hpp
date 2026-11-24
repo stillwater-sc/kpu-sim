@@ -28,18 +28,18 @@
 
 #include <sw/kpu/cycle/counters.hpp>
 #include <sw/kpu/cycle/time.hpp>
+#include <sw/kpu/cycle/trace.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace sw::kpu::cycle {
-
-class Domain;
 
 // One beat of data: real bytes at an address, and what they belong to.
 struct Beat {
@@ -98,20 +98,37 @@ public:
         credits_ = capacity_;
         returning_.clear();
         counts_.reset();
-        pushed_this_cycle_ = false;
+        pushed_this_cycle_ = popped_this_cycle_ = false;
     }
 
-    // The simulator closes every cycle of the link's domain.
-    void end_cycle() {
+    // The simulator closes every cycle `now` of the link's domain. True if the link moved anything
+    // this cycle -- a push or a pop -- which is progress to the deadlock detector.
+    bool end_cycle(Cycle now) {
         ++counts_.cycles;
         if (pushed_this_cycle_) ++counts_.busy;
         else ++counts_.idle;
         counts_.occupancy = held();
         counts_.occupancy_integral += counts_.occupancy;
         if (counts_.occupancy > counts_.max_occupancy) counts_.max_occupancy = counts_.occupancy;
-        pushed_this_cycle_ = false;
+        if (tracer_) tracer_->occupancy(track_, domain_->edge(now), counts_.occupancy);
+        const bool active = pushed_this_cycle_ || popped_this_cycle_;
+        pushed_this_cycle_ = popped_this_cycle_ = false;
+        return active;
     }
     [[nodiscard]] const Counters& counts() const { return counts_; }
+
+    void attach(Tracer* t, std::uint32_t track) {
+        tracer_ = t;
+        track_ = track;
+    }
+    // Credits, in flight, buffered and returning, at `now`: for the state dump and the deadlock report.
+    [[nodiscard]] std::string describe(Cycle now) {
+        settle(now);
+        std::ostringstream o;
+        o << "credits " << credits_ << "/" << capacity_ << ", in flight " << in_flight(now) << ", buffered "
+          << buffered(now) << ", returning " << returning_.size();
+        return o.str();
+    }
 
 protected:
     [[nodiscard]] virtual std::size_t held() const = 0;   // in flight + buffered
@@ -119,7 +136,14 @@ protected:
         ++counts_.arrivals;
         pushed_this_cycle_ = true;
     }
-    void counted_pop() { ++counts_.completions; }
+    void counted_pop() {
+        ++counts_.completions;
+        popped_this_cycle_ = true;
+    }
+    // A popped item's stay, from its push (its arrival less the latency) to its pop at `now`.
+    void traced_pop(std::uint64_t id, Cycle arrival, Cycle now) {
+        if (tracer_) tracer_->beat(track_, id, domain_->edge(arrival - latency_), domain_->edge(now));
+    }
     void spend_credit(Cycle now) {
         settle(now);
         if (credits_ == 0)
@@ -144,7 +168,9 @@ private:
     std::size_t credits_;
     std::deque<Cycle> returning_;       // arrival cycle of each credit on its way back
     Counters counts_;
-    bool pushed_this_cycle_ = false;
+    bool pushed_this_cycle_ = false, popped_this_cycle_ = false;
+    Tracer* tracer_ = nullptr;
+    std::uint32_t track_ = 0;
 };
 
 template <class T>
@@ -171,10 +197,13 @@ public:
     T pop(Cycle now) {
         if (!can_pop(now)) throw std::logic_error("cycle::Link " + name() + " at cycle " + std::to_string(now) +
                                                   ": pop with nothing landed");
+        const Cycle arrival = pipe_.front().first;
         T item = std::move(pipe_.front().second);
         pipe_.pop_front();
         return_credit(now);
         counted_pop();
+        if constexpr (requires { item.id; }) traced_pop(static_cast<std::uint64_t>(item.id), arrival, now);
+        else traced_pop(0, arrival, now);
         return item;
     }
 
