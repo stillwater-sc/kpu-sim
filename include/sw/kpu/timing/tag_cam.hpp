@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <sw/kpu/timing/slot_pool.hpp>
 #include <sw/kpu/timing/tile_descriptor.hpp>
 
 #include <optional>
@@ -129,6 +130,7 @@ public:
         TagCAMEntry entry(tile_id, slot_id, arrival_cycle);
         entry.ref_count = refs;
         entries_[tile_id] = entry;
+        signal_placed(slot_id, tile_id);
         return true;
     }
 
@@ -238,7 +240,10 @@ public:
                 // Last consumer - remove the entry, caller should release credit. A slot the
                 // tile claimed is free with it (the slot's credit returns with the entry's).
                 const auto c = claims_.find(it->second.slot_id);
-                if (c != claims_.end() && c->second == tile_id) claims_.erase(c);
+                if (c != claims_.end() && c->second == tile_id) {
+                    if (pool_ && pool_->covers(c->first)) pool_->release(c->first, tile_id);
+                    claims_.erase(c);
+                }
                 entries_.erase(it);
                 return true;  // Tile removed, release credit
             }
@@ -320,6 +325,7 @@ public:
         turns_.clear();
         claim_log_.clear();
         placed_slots_ = 0;
+        pool_.reset();
     }
 
     // ---- Placement (docs/plans/l3-placement-at-lb.md step 6) ----------------------------------
@@ -360,6 +366,7 @@ public:
         claims_.emplace(slot, tile_id);
         ++turns_[slot];
         claim_log_.emplace_back(slot, tile_id);
+        if (pool_ && pool_->covers(slot)) pool_->acquire(slot, tile_id);
         return true;
     }
 
@@ -367,6 +374,7 @@ public:
     void unclaim_slot(uint32_t slot, const TileID& tile_id) {
         const auto c = claims_.find(slot);
         if (c == claims_.end() || !(c->second == tile_id)) return;
+        if (pool_ && pool_->covers(slot)) pool_->unacquire(slot, tile_id);
         claims_.erase(c);
         --turns_[slot];
         if (!claim_log_.empty() && claim_log_.back().first == slot && claim_log_.back().second == tile_id)
@@ -375,7 +383,49 @@ public:
 
     /// Slots [0, n) are the program's to place (an L2's staging slots, #399): a transfer the
     /// program does not place takes a slot from the rest (transient_slot). n < capacity.
-    void set_placed_slots(uint32_t n) { placed_slots_ = n; }
+    void set_placed_slots(uint32_t n) {
+        placed_slots_ = n;
+        pool_.emplace(n);   // each placed slot's state (slot_pool.hpp, #387 step 3b)
+    }
+
+    /// The placed slots' states (docs/plans/slot-credits-at-lca.md §3.4); none before
+    /// set_placed_slots, and none in a CAM whose slots no program places (L3's, a legacy run's).
+    [[nodiscard]] const SlotPool* slot_pool() const { return pool_ ? &*pool_ : nullptr; }
+
+    /// A consumer of the copy in placed slot @p slot starts (TAKE) or finishes (DONE) reading it.
+    /// No-ops for a slot no program placed.
+    void take_slot(uint32_t slot, const TileID& tile_id) {
+        if (pool_ && pool_->covers(slot)) pool_->take(slot, tile_id);
+    }
+    void done_slot(uint32_t slot, const TileID& tile_id) {
+        if (pool_ && pool_->covers(slot)) pool_->done(slot, tile_id);
+    }
+
+    /// The per-cycle invariants (slot-credits-at-lca.md §6): each placed slot's state agrees with
+    /// the CAM. FREE has no claim and no entry in it; OWNED a claim and no entry in it yet; READY
+    /// and READING the claiming tile's entry in that slot. A disagreement is a SlotFault, by slot.
+    void check_slots() const {
+        if (!pool_) return;
+        for (uint32_t slot = 0; slot < pool_->size(); ++slot) {
+            const auto c = claims_.find(slot);
+            const auto st = pool_->state(slot);
+            auto fault = [&](const std::string& why) {
+                throw SlotFault("L2 slot " + std::to_string(slot) + " is " + SlotPool::name(st) + ", but " + why);
+            };
+            if (st == SlotPool::State::Free) {
+                if (c != claims_.end()) fault(c->second.to_string() + " claims it");
+                for (const auto& [id, e] : entries_)   // nothing lands in a slot no tile owns
+                    if (e.valid && e.slot_id == slot) fault(id.to_string() + " is in it");
+                continue;
+            }
+            if (c == claims_.end()) fault("no tile claims it");
+            if (!(c->second == *pool_->owner(slot))) fault(c->second.to_string() + " claims it, not " + pool_->owner(slot)->to_string());
+            const auto e = entries_.find(c->second);
+            const bool landed = e != entries_.end() && e->second.valid && e->second.slot_id == slot;
+            if (st == SlotPool::State::Owned && landed) fault(c->second.to_string() + " has landed in it");
+            if (st != SlotPool::State::Owned && !landed) fault(c->second.to_string() + " is not in it");
+        }
+    }
     [[nodiscard]] uint32_t placed_slots() const { return placed_slots_; }
 
     /// The next slot, round-robin, for a transfer the program does not place: outside the
@@ -461,6 +511,14 @@ private:
     std::unordered_map<uint32_t, uint32_t> turns_;               ///< slot -> the claims it has taken
     std::vector<std::pair<uint32_t, TileID>> claim_log_;         ///< (slot, tile), in claim order
     uint32_t placed_slots_ = 0;                                  ///< slots [0, n) the program places
+    std::optional<SlotPool> pool_;                               ///< their states (step 3b)
+
+    // An entry landed in placed slot @p slot that its tile claimed: the producer's SIGNAL.
+    void signal_placed(uint32_t slot, const TileID& tile_id) {
+        if (!pool_ || !pool_->covers(slot)) return;
+        const auto c = claims_.find(slot);
+        if (c != claims_.end() && c->second == tile_id) pool_->signal(slot, tile_id);
+    }
 };
 
 } // namespace sw::kpu::timing

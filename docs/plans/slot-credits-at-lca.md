@@ -126,9 +126,10 @@ Each step is a PR, under #387, with no closing keyword until the last.
      for CSP runs, and the legacy schedules keep it until #266. The BlockMover runs a program's
      legs in program order. A tile keeps one copy in L2 at a time: a Move waits for its earlier
      copy's L2Release, so the tile-keyed TagCAM stays valid. The records still show stagings only.
-   - **3b:** the `SlotPool` (FREE, OWNED, READY, READING) with faults and the per-cycle invariants
-     (§6); slot-keyed placed entries, so a tile can hold two copies at once; the records gain the
-     copies at both levels, with a checker rule for a result's slot.
+   - **3b (the pool done, 2026-11-23):** the `SlotPool` (FREE, OWNED, READY, READING) with faults and
+     the per-cycle invariants (§6), driven by the L2 tag CAM, every slot FREE at the end. Still to do:
+     slot-keyed placed entries, so a tile can hold two copies at once; the records gain the copies at
+     both levels, with a checker rule for a result's slot.
    - **3c:** the double-buffering test (§6) on a 4×4 deployment with the RTL's slot counts (Q2).
 
 ## 5. What changes for existing programs

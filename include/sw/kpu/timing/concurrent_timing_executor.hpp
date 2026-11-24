@@ -2035,6 +2035,10 @@ inline bool ConcurrentTimingExecutor::step() {
     // 6. Retire the staged L2 copies whose Feeds have completed (#399).
     retire_l2_releases();
 
+    // 7. The placed L2 slots' invariants, every cycle (slot-credits-at-lca.md §6): each slot's
+    //    state agrees with the tag CAM. A disagreement is a SlotFault, by slot.
+    l2_tag_cam_.check_slots();
+
     // Advance clock
     ++current_cycle_;
 

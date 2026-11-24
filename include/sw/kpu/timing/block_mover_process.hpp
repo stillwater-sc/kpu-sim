@@ -540,6 +540,8 @@ private:
                 // Only release L2 credit if tile was fully removed (ref_count reached 0). An L2
                 // accumulator's partial is held (#429): its L2Release retires it.
                 const auto l2_source = l2_tag_cam_.match(in_flight_->tile.tile_id);   // the slot it frees
+                if (in_flight_->tile.l2_held && l2_source)
+                    l2_tag_cam_.done_slot(l2_source->slot_id, in_flight_->tile.tile_id);   // DONE
                 bool credit_released = !in_flight_->tile.l2_held &&
                                        l2_tag_cam_.invalidate(in_flight_->tile.tile_id);
                 if (credit_released) {
@@ -1025,6 +1027,8 @@ private:
         if (wb_tile.ve_cycles > move) ve_bound_cycles_ += wb_tile.ve_cycles - move;
         // The L3 slot it lands in: the program's placement, claimed with the credit (an in-place
         // writeback's residency holds it already). Unplaced, the L2 slot's number stands in.
+        // A held Writeback reads the copy in its placed L2 slot (a result's, a partial's): TAKE.
+        if (wb_tile.l2_held) l2_tag_cam_.take_slot(found_entry->slot_id, wb_tile.tile_id);
         uint32_t l3_slot = found_entry->slot_id;
         if (wb_tile.l3_slot >= 0) {
             l3_slot = static_cast<uint32_t>(wb_tile.l3_slot);
