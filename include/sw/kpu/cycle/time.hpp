@@ -20,6 +20,31 @@
 
 namespace sw::kpu::cycle {
 
+// floor(a * b / c), exact, without a 128-bit integer type (MSVC has none): the 128-bit product
+// in two 64-bit halves, then long division. Raises std::overflow_error if the quotient does not
+// fit in 64 bits.
+inline std::uint64_t mul_div(std::uint64_t a, std::uint64_t b, std::uint64_t c) {
+    if (c == 0) throw std::invalid_argument("cycle::mul_div: division by zero");
+    const std::uint64_t a_lo = a & 0xFFFFFFFFULL, a_hi = a >> 32;
+    const std::uint64_t b_lo = b & 0xFFFFFFFFULL, b_hi = b >> 32;
+    const std::uint64_t p0 = a_lo * b_lo, p1 = a_lo * b_hi, p2 = a_hi * b_lo, p3 = a_hi * b_hi;
+    const std::uint64_t mid = (p0 >> 32) + (p1 & 0xFFFFFFFFULL) + (p2 & 0xFFFFFFFFULL);
+    const std::uint64_t lo = (p0 & 0xFFFFFFFFULL) | (mid << 32);
+    const std::uint64_t hi = p3 + (p1 >> 32) + (p2 >> 32) + (mid >> 32);
+    if (hi >= c) throw std::overflow_error("cycle::mul_div: the result does not fit in 64 bits");
+    // hi < c, so the quotient fits: shift the low half's bits through the remainder.
+    std::uint64_t q = 0, r = hi;
+    for (int i = 63; i >= 0; --i) {
+        const bool carry = (r >> 63) != 0;
+        r = (r << 1) | ((lo >> i) & 1ULL);
+        if (carry || r >= c) {
+            r -= c;
+            q |= 1ULL << i;
+        }
+    }
+    return q;
+}
+
 using Picoseconds = std::uint64_t;
 using Cycle = std::uint64_t;        // a domain's cycle count
 
@@ -29,27 +54,47 @@ public:
     Domain(std::string name, std::uint64_t period_num, std::uint64_t period_den = 1, Picoseconds phase = 0)
         : name_(std::move(name)), num_(period_num), den_(period_den), phase_(phase) {
         if (num_ == 0 || den_ == 0) throw std::invalid_argument("cycle::Domain " + name_ + ": the period must be positive");
+        if (den_ > (std::uint64_t{1} << 62))
+            throw std::invalid_argument("cycle::Domain " + name_ + ": the period's denominator is too large");
+        whole_ = num_ / den_;
+        frac_ = num_ % den_;
+        reset();
     }
     static Domain from_ghz(std::string name, double ghz);
 
     [[nodiscard]] const std::string& name() const { return name_; }
     [[nodiscard]] Cycle cycle() const { return cycle_; }
     // The time of edge n, in picoseconds (exact to the picosecond below).
-    // n * num / den without forming n * num, which overflows for long runs of a rational period.
-    [[nodiscard]] Picoseconds edge(Cycle n) const {
-        return phase_ + (n / den_) * num_ + ((n % den_) * num_) / den_;
-    }
-    [[nodiscard]] Picoseconds next_edge() const { return edge(cycle_); }
+    // Edge n at phase + floor(n * num / den), exact (mul_div): never a rounded period accumulated.
+    [[nodiscard]] Picoseconds edge(Cycle n) const { return phase_ + mul_div(n, num_, den_); }
+    // The next edge, kept as a whole part and a remainder that advance() steps exactly, so the
+    // scheduler's hot path neither multiplies nor divides. Equal to edge(cycle()).
+    [[nodiscard]] Picoseconds next_edge() const { return next_; }
     [[nodiscard]] double period_ps() const { return static_cast<double>(num_) / static_cast<double>(den_); }
 
-    void advance() { ++cycle_; }
-    void reset() { cycle_ = 0; }
+    void advance() {
+        ++cycle_;
+        next_ += whole_;
+        rem_ += frac_;                      // rem_, frac_ < den_ <= 2^62: no overflow
+        if (rem_ >= den_) {
+            rem_ -= den_;
+            ++next_;
+        }
+    }
+    void reset() {
+        cycle_ = 0;
+        next_ = phase_;
+        rem_ = 0;
+    }
 
 private:
     std::string name_;
     std::uint64_t num_, den_;
     Picoseconds phase_;
-    Cycle cycle_ = 0;               // the next edge to take
+    std::uint64_t whole_ = 0, frac_ = 0;   // the period as whole_ + frac_ / den_
+    Cycle cycle_ = 0;                      // the next edge to take
+    Picoseconds next_ = 0;                 // its time, whole picoseconds ...
+    std::uint64_t rem_ = 0;                // ... plus rem_ / den_
 };
 
 // A frequency in GHz as a period of 1000 / ghz ps, kept rational to a millionth of a GHz.

@@ -16,6 +16,7 @@
 #include <sw/kpu/cycle/simulator.hpp>
 
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 using namespace sw::kpu::cycle;
@@ -85,6 +86,29 @@ TEST_CASE("Domains: edges in picoseconds, exact for rational periods", "[cycle][
     CHECK_THROWS(Domain("bad", 0));
 }
 
+TEST_CASE("Domains: one period, written three ways, has the same edges, and no edge overflows", "[cycle][core]") {
+    // 312.5 ps as 10^12 / 3.2 10^9 (#549's review: the remainder product overflowed), 625 / 2, and
+    // from_ghz(3.2) = 10^9 / 3.2 10^6.
+    const Domain a("a", 1'000'000'000'000ULL, 3'200'000'000ULL), b("b", 625, 2);
+    const Domain c = Domain::from_ghz("c", 3.2);
+    for (const Domain* d : {&a, &b, &c}) {
+        CAPTURE(d->name());
+        CHECK(d->edge(20'000'000) == 6'250'000'000ULL);
+        CHECK(d->edge(3) == 937);
+    }
+    // The scheduler's next edge, stepped, is edge(n) exactly, for every n.
+    for (Domain d : {a, b, c, Domain("p", 1000, 3, 17)}) {
+        CAPTURE(d.name());
+        for (Cycle n = 0; n < 20'000; ++n) {
+            REQUIRE(d.next_edge() == d.edge(n));
+            d.advance();
+        }
+    }
+    // (2^64 - 1) * 3 / 4 = 3 * 2^62 - 3/4: a 66-bit product, floored to 3 * 2^62 - 1.
+    CHECK(mul_div(~0ULL, 3, 4) == 0xBFFF'FFFF'FFFF'FFFFULL);
+    CHECK_THROWS_AS(mul_div(~0ULL, 2, 1), std::overflow_error);
+}
+
 TEST_CASE("Links: latency, credits, and their conservation", "[cycle][core]") {
     Domain d("clk", 1000);
     Link<int> l("l", d, 2, 3, 2);
@@ -133,7 +157,7 @@ TEST_CASE("A pipeline's throughput is its slowest stage's, and its latency the s
     // accepted at 1, offered at 6, landed and popped at 7. The stage accepts at 1, 4, 7, ...
     Pipe x(50, 5, 3, 4);
     REQUIRE(x.sim.run_until_idle(kLimit));
-    REQUIRE(x.c->received.size() == 50);
+    x.c->finish(50);
     CHECK(x.c->received.front().second == 7);
     for (std::size_t i = 1; i < 50; ++i) CHECK(x.c->received[i].second - x.c->received[i - 1].second == 3);
     CHECK(x.c->received.back().second == 7 + 3 * 49);
@@ -149,7 +173,7 @@ TEST_CASE("Backpressure: a stalled consumer stops the producer, and no beat is l
     Pipe x(200, 2, 1, 2);
     x.c->stall(20, 80);
     REQUIRE(x.sim.run_until_idle(kLimit));           // the consumer's check() fails on loss or reordering
-    REQUIRE(x.c->received.size() == 200);
+    x.c->finish(200);
     std::size_t before = 0;
     for (const auto& [id, at] : x.c->received) before += at < 20;
     // While the consumer is stalled, the producer can push only into the two links' 8 slots and the
@@ -213,10 +237,16 @@ TEST_CASE("Domains run side by side, each on its own clock", "[cycle][core]") {
     CHECK_THROWS_WITH(sim.link<Beat>("x", pf, cs, 1), ContainsSubstring("crossing"));
 }
 
-TEST_CASE("A component outside the simulator's domains is refused", "[cycle][core]") {
+TEST_CASE("A component or link outside the simulator's domains is refused", "[cycle][core]") {
     Simulator sim;
     Domain other("other", 1000);
     CHECK_THROWS_WITH(sim.add<Consumer>("c", other), ContainsSubstring("add_domain first"));
+    // Two components of another simulator share a domain, but not this simulator's (#549's review).
+    Simulator elsewhere;
+    Domain& d = elsewhere.add_domain(Domain("clk", 1000));
+    auto& p = elsewhere.add<Producer>("p", d, 1);
+    auto& c = elsewhere.add<Consumer>("c", d);
+    CHECK_THROWS_WITH(sim.link<Beat>("p->c", p, c, 1), ContainsSubstring("link p->c"));
 }
 
 namespace {
@@ -243,16 +273,40 @@ private:
 }  // namespace
 
 TEST_CASE("The test structure catches a lost beat, by name and cycle", "[cycle][core]") {
-    Simulator sim;
-    Domain& d = sim.add_domain(Domain("clk", 1000));
-    auto& p = sim.add<Producer>("producer", d, 20);
-    auto& x = sim.add<Dropper>("dropper", d, 7);
-    auto& c = sim.add<Consumer>("consumer", d);
-    auto& a = sim.link<Beat>("p->x", p, x, 2);
-    auto& b = sim.link<Beat>("x->c", x, c, 2);
-    p.connect(a);
-    x.connect(a, b);
-    c.connect(b);
-    CHECK_THROWS_WITH(sim.run_until_idle(kLimit), ContainsSubstring("consumer at cycle") &&
-                                                      ContainsSubstring("beat 8 arrived as number 7"));
+    struct Lossy {
+        Simulator sim;
+        Consumer* c = nullptr;
+        Lossy(std::uint64_t n, std::uint64_t drop) {
+            Domain& d = sim.add_domain(Domain("clk", 1000));
+            auto& p = sim.add<Producer>("producer", d, n);
+            auto& x = sim.add<Dropper>("dropper", d, drop);
+            c = &sim.add<Consumer>("consumer", d);
+            auto& a = sim.link<Beat>("p->x", p, x, 2);
+            auto& b = sim.link<Beat>("x->c", x, *c, 2);
+            p.connect(a);
+            x.connect(a, b);
+            c->connect(b);
+        }
+    };
+    SECTION("a beat in the middle: the next one arrives out of place") {
+        Lossy l(20, 7);
+        CHECK_THROWS_WITH(l.sim.run_until_idle(kLimit), ContainsSubstring("consumer at cycle") &&
+                                                            ContainsSubstring("beat 8 arrived as number 7"));
+    }
+    // No later beat shows the gap (#549's review): the count at quiescence does.
+    SECTION("the last beat") {
+        Lossy l(20, 19);
+        REQUIRE(l.sim.run_until_idle(kLimit));
+        CHECK_THROWS_WITH(l.c->finish(20), ContainsSubstring("19 of 20 beats arrived"));
+    }
+    SECTION("the only beat") {
+        Lossy l(1, 0);
+        REQUIRE(l.sim.run_until_idle(kLimit));
+        CHECK_THROWS_WITH(l.c->finish(1), ContainsSubstring("0 of 1 beats arrived"));
+    }
+    SECTION("none lost") {
+        Lossy l(20, 99);
+        REQUIRE(l.sim.run_until_idle(kLimit));
+        CHECK_NOTHROW(l.c->finish(20));
+    }
 }

@@ -9,7 +9,8 @@
 //              `depth`, and offers it downstream `latency` cycles after accepting it. In a cycle it
 //              offers first, then accepts, as a registered pipeline does.
 //   Consumer   pops a landed beat at most every `interval` cycles, except in its stall windows,
-//              and logs (beat id, cycle). check() fails on a beat out of order, lost or duplicated.
+//              and logs (beat id, cycle). check() fails on a beat out of order, lost or duplicated;
+//              finish(n) fails if fewer than n arrived (a lost last beat).
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -129,6 +130,13 @@ public:
         received.clear();
         next_at_ = 0;
         bad_payload_ = false;
+    }
+    // At quiescence: every one of `expected` beats arrived. check() sees a gap only when a later
+    // beat arrives, so a lost last beat (or the only one) is caught here.
+    void finish(std::uint64_t expected) const {
+        if (received.size() != expected)
+            throw std::logic_error(name() + ": " + std::to_string(received.size()) + " of " +
+                                   std::to_string(expected) + " beats arrived");
     }
 
     std::vector<std::pair<std::uint64_t, Cycle>> received;   // (beat id, cycle popped)

@@ -57,6 +57,7 @@ public:
             throw std::invalid_argument("cycle::Simulator: link " + name + " joins " + from.name() + " (" +
                                         from.domain().name() + ") and " + to.name() + " (" + to.domain().name() +
                                         "); a link between clock domains is a crossing (step 0d)");
+        require_domain(from.domain(), "link " + name);     // a link this simulator would never schedule
         auto l = std::make_unique<Link<T>>(std::move(name), from.domain(), capacity, latency, credit_latency);
         Link<T>& ref = *l;
         links_.push_back(std::move(l));
