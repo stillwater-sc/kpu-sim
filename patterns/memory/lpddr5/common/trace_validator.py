@@ -176,9 +176,13 @@ class TraceValidator:
             # Sort by cycle_issue
             self.events.sort(key=lambda e: e.cycle_issue)
 
-            # Group by txn_id
+            # Group by txn_id. A REFRESH is maintenance and serves no request (INV-006): it is
+            # kept apart, not grouped as a transaction.
             self.transactions = {}
+            self.refreshes = [e for e in self.events if e.name == 'REFRESH']
             for event in self.events:
+                if event.name == 'REFRESH':
+                    continue
                 if event.txn_id not in self.transactions:
                     self.transactions[event.txn_id] = Transaction(event.txn_id)
                 self.transactions[event.txn_id].events.append(event)
@@ -207,6 +211,7 @@ class TraceValidator:
         self._check_inv002_command_ownership()
         self._check_inv003_temporal_ordering()
         self._check_inv004_unique_txn_ids()
+        self._check_inv006_refresh_has_no_transaction()
 
         # Timing invariants
         self._check_inv100_trcd_constraint()
@@ -215,6 +220,20 @@ class TraceValidator:
         self._check_inv103_tfaw_constraint()
 
         return len([v for v in self.violations if v.severity == Severity.ERROR]) == 0
+
+    def _check_inv006_refresh_has_no_transaction(self):
+        """INV-006: A REFRESH belongs to no transaction: it carries txn_id 0 (request ids start at 1)."""
+        for e in getattr(self, 'refreshes', []):
+            if e.txn_id != 0:
+                self.violations.append(Violation(
+                    invariant='INV-006',
+                    severity=Severity.ERROR,
+                    message=f"REFRESH at cycle {e.cycle_issue} carries txn_id={e.txn_id}; a refresh serves no request",
+                    txn_id=e.txn_id,
+                    bank=e.bank,
+                    events=[{'name': e.name, 'cycle_issue': e.cycle_issue, 'cycle_complete': e.cycle_complete}],
+                    fix_hint="Trace a REFRESH with txn_id 0, never a request's id"
+                ))
 
     def _check_inv001_valid_txn_id_semantics(self):
         """INV-001: Every txn_id must have exactly ONE data operation."""
