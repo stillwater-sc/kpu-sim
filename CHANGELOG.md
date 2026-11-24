@@ -190,6 +190,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **`docs/plans/systolic-tile-at-lca.md`: the systolic tile at L-CA** (#401's slice 3: #458, #389, #385). It
+  lays out the RTL's Streamer for an output-stationary matmul and how L-CA will mirror it:
+  - **In the RTL:** one-block L1 lane buffers with one credit each, COMPUTE commands accepted every
+    `max(K, R, C)` clocks, `completed` (the L2 slot freed when the last read lands in L1) before `result`,
+    and the north drain at `s + K + C + 2i` with reductions 2R − 1 apart.
+  - **The user's decisions (2026-11-24):** one plan in three PRs (the array from the deployment, then L1
+    and the commands, then the wavefront check with L-T1 brought to the same rules). A tile no larger
+    than the array runs on a corner of it, and a larger one is refused.
+  - **Decision 3:** a Call's Feeds run as its command's reads.
+
 - **`docs/analysis/issue-assessment.md`: the 122 open issues against the simplest program** (#521). Each issue is
   classified by one question: what blocks an output-stationary int8 → int32 matmul on one systolic tile from running
   consistently at L-B, L-T1 and L-CA?
