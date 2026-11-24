@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Double buffering in L2 at L-CA, tested** (#387 step 3c; `tests/program/test_csp_double_buffer.cpp`). This is the
+  RTL's test: an 8×8×16 int8 matmul on the RTL-derived 4×4 tile (`kpu_soc_2x2`), with one L2 buffer (`l2 = 3`) and
+  two (`l2 = 6`).
+  - **Values.** They are exact against L-B and bit-identical between the two runs.
+  - **What two buffers change.** The L2 slot waits drop from 348 cycles to 25, Move/Feed overlaps grow from 24 to
+    48, and the run takes 952 cycles instead of 988.
+  - **Slots.** No Move ever lands in a slot a Feed is reading.
+  - **Not asserted yet.** The RTL's "under 0.85× the cycles" (907 → 744) is moved to #401's acceptance: the run is
+    BlockMover- and DMA-bound, int8 still moves as 4 bytes (#415), and the mover rates are kpu-sim's defaults. "One
+    buffer never overlaps" doesn't carry over, because A and B keep separate credits.
 - **`examples/program/`: the program stack as an example** (#503). `program_run_levels` loads a `.csp` program and
   a deployment spec on the `VirtualPlatform`. It runs L-B as the oracle (checking that L-B's trace replays), then
   L-B, L-T1 and L-CA; L-T2 is reported as not implemented (#283). For each level it prints the makespan and checks

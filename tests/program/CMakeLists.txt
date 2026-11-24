@@ -155,6 +155,15 @@ set_tests_properties(test_csp_lca_place PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# Double buffering in L2 at L-CA: the RTL's 8x8x16 int8 matmul, one buffer and two (#387 step 3c).
+kpu_add_component_test(test_csp_double_buffer "program"
+    test_csp_double_buffer.cpp
+)
+set_tests_properties(test_csp_double_buffer PROPERTIES
+    LABELS "csp;lca;placement;l2;v0.10"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 # L-T1 times the fabric as a systolic pipeline (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 2)
 kpu_add_component_test(test_fabric_pipeline "program"
     test_fabric_pipeline.cpp
