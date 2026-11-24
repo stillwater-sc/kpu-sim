@@ -12,6 +12,15 @@
 //              and logs (beat id, cycle). check() fails on a beat out of order, lost or duplicated;
 //              finish(n) fails if fewer than n arrived (a lost last beat).
 //
+// COUNTERS (counters.hpp), one state per cycle:
+//   Producer   busy when it pushes; stalled (no credit) when it has a beat due and no credit;
+//              idle otherwise (done, or waiting out its interval). Each push is a completion.
+//   Stage      stalled (no credit) when its oldest beat is ready and the link onward has no
+//              credit; busy while it holds, forwards or accepts a beat; idle otherwise. A beat is an
+//              arrival when accepted and a completion when pushed onward.
+//   Consumer   busy when it pops; stalled (held) in a stall window with a beat waiting; idle
+//              otherwise. A pop is an arrival and a completion.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -34,7 +43,11 @@ public:
     void connect(Link<Beat>& out) { out_ = &out; }
 
     void evaluate(Cycle now) override {
-        if (next_id_ == count_ || now < next_at_ || !out_->can_push(now)) return;
+        if (next_id_ == count_ || now < next_at_) return;
+        if (!out_->can_push(now)) {
+            counters().stall(Stall::NoCredit);
+            return;
+        }
         Beat b;
         b.id = next_id_;
         b.address = next_id_ * bytes_;
@@ -42,6 +55,8 @@ public:
         b.first = next_id_ == 0;
         b.last = next_id_ + 1 == count_;
         out_->push(now, std::move(b));
+        counters().busy();
+        counters().produce();
         pushed_at.push_back(now);
         ++next_id_;
         next_at_ = now + interval_;
@@ -74,14 +89,26 @@ public:
     }
 
     void evaluate(Cycle now) override {
-        if (!held_.empty() && held_.front().first <= now && out_->can_push(now)) {
-            out_->push(now, std::move(held_.front().second));
-            held_.pop_front();
+        bool blocked = false, forwarded = false;
+        if (!held_.empty() && held_.front().first <= now) {
+            if (out_->can_push(now)) {
+                out_->push(now, std::move(held_.front().second));
+                held_.pop_front();
+                counters().complete();
+                forwarded = true;
+            } else {
+                blocked = true;
+            }
         }
+        bool accepted = false;
         if (held_.size() < depth_ && now >= next_at_ && in_->can_pop(now)) {
             held_.push_back({now + latency_, in_->pop(now)});
             next_at_ = now + interval_;
+            counters().accept();
+            accepted = true;
         }
+        if (blocked) counters().stall(Stall::NoCredit);
+        else if (accepted || forwarded || !held_.empty()) counters().busy();
     }
     [[nodiscard]] bool idle() const override { return held_.empty(); }
     void check(Cycle now) const override {
@@ -110,9 +137,16 @@ public:
     void stall(Cycle from, Cycle to) { stalls_.emplace_back(from, to); }
 
     void evaluate(Cycle now) override {
-        for (const auto& [a, b] : stalls_) if (now >= a && now < b) return;
+        for (const auto& [a, b] : stalls_)
+            if (now >= a && now < b) {
+                if (in_->can_pop(now)) counters().stall(Stall::External);
+                return;
+            }
         if (now < next_at_ || !in_->can_pop(now)) return;
         const Beat beat = in_->pop(now);
+        counters().busy();
+        counters().accept();
+        counters().complete();
         if (beat.bytes.empty() || beat.bytes.front() != static_cast<std::uint8_t>(beat.id & 0xFF))
             bad_payload_ = true;
         received.emplace_back(beat.id, now);
