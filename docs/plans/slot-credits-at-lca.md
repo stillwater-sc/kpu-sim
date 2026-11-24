@@ -130,7 +130,18 @@ Each step is a PR, under #387, with no closing keyword until the last.
      the per-cycle invariants (§6), driven by the L2 tag CAM, every slot FREE at the end. Still to do:
      slot-keyed placed entries, so a tile can hold two copies at once; the records gain the copies at
      both levels, with a checker rule for a result's slot.
-   - **3c:** the double-buffering test (§6) on a 4×4 deployment with the RTL's slot counts (Q2).
+   - **3c (done, 2026-11-24):** the double-buffering test (§6) on `kpu_soc_2x2`, the RTL-derived
+     4×4 tile with the RTL's slot counts (Q2): `tests/program/test_csp_double_buffer.cpp`. As it carries
+     over (decided 2026-11-24):
+     - values are bit-identical, and L-B's, with one buffer and two;
+     - two buffers cut the L2 slot waits (348 → 25 cycles), overlap more Moves with Feeds, and run
+       faster;
+     - no Move lands in a slot a Feed is reading.
+
+     Two of the RTL's assertions don't carry over yet. "One buffer never overlaps a Move with a
+     Feed" doesn't hold because A and B keep separate credits (decision 2). "Under 0.85× the cycles"
+     doesn't hold because the run is bound by the BlockMover and DMA (0.96×). The 0.85× clause moves
+     to #401's acceptance, after #415 and the RTL's mover rates.
 
 ## 5. What changes for existing programs
 
