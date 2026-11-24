@@ -11,11 +11,16 @@
 //   - any exception a component or link raises while it is clocked or checked, and any failed
 //     invariant hook (add_invariant), stops the run as an InvariantViolation: which component, link
 //     or hook, the domain and the cycle, and the state dump at that moment;
-//   - the DEADLOCK DETECTOR: an edge makes progress if a component it clocks was busy or held by an
-//     outside control (Stall::External), or a link it clocks pushed or popped. After
-//     deadlock_window() edges in a row without progress while work remains (!idle()), the run stops
+//   - the DEADLOCK DETECTOR: a domain is ACTIVE at an edge if a component it clocks was busy or held
+//     by an outside control (Stall::External), or a link it clocks pushed, popped, or still has a beat
+//     in flight or a credit on its way back (timed transport under way). A domain stays active, or
+//     not, until its next edge, so a busy component in a slow domain is not taken for stuck at the
+//     fast domains' edges in between. A step makes progress if any domain is active. After
+//     deadlock_window() steps in a row without progress while work remains (!idle()), the run stops
 //     as a Deadlock, naming every component that is not idle and every link's credits. A long
-//     latency is not a deadlock: a component waiting out its own latency reports busy;
+//     latency is not a deadlock: a component waiting out its own latency reports busy, and a beat
+//     on a slow link is in flight. A true credit cycle has every beat buffered and no credit
+//     returning, so nothing is active;
 //   - dump(): every domain, component and link, now;
 //   - attach(Tracer&): the Perfetto trace (trace.hpp).
 //
@@ -79,6 +84,7 @@ public:
     Domain& add_domain(Domain d) {
         domains_.push_back(std::make_unique<Domain>(std::move(d)));
         clocked_.push_back({});
+        active_.push_back(false);
         return *domains_.back();
     }
 
@@ -153,12 +159,12 @@ public:
         Picoseconds t = std::numeric_limits<Picoseconds>::max();
         for (const auto& d : domains_) t = std::min(t, d->next_edge());
         now_ = t;
-        bool progress = false;
         for (std::size_t i = 0; i < domains_.size(); ++i) {
             Domain& d = *domains_[i];
             if (d.next_edge() != t) continue;
             const Cycle c = d.cycle();
             const Clocked& k = clocked_[i];
+            bool progress = false;
             for (Component* x : k.components) guarded(x->name(), d, c, [&] { x->evaluate(c); });
             for (Component* x : k.components) guarded(x->name(), d, c, [&] { x->commit(c); });
             for (std::size_t j = 0; j < k.components.size(); ++j) {
@@ -168,7 +174,8 @@ public:
                 if (tracer_) tracer_->state(k.tracks[j], s, n.last_cause(), d.edge(c), d.edge(c + 1));
             }
             for (LinkBase* l : k.links)
-                if (l->end_cycle(c)) progress = true;
+                if (l->end_cycle(c) || l->transporting(c)) progress = true;
+            active_[i] = progress;
             if (checks_) {
                 for (LinkBase* l : k.links) guarded(l->name(), d, c, [&] { l->check(c); });
                 for (Component* x : k.components) guarded(x->name(), d, c, [&] { x->check(c); });
@@ -179,6 +186,8 @@ public:
         if (checks_)
             for (const auto& [name, hook] : invariants_)
                 guarded("invariant " + name, *last_domain_, last_domain_->cycle() - 1, [&] { hook(); });
+        bool progress = false;
+        for (const bool a : active_) progress = progress || a;
         if (progress) {
             quiet_ = 0;
         } else if (deadlock_window_ > 0 && ++quiet_ >= deadlock_window_ && !idle()) {
@@ -202,14 +211,15 @@ public:
         tracer_ = &t;
     }
 
-    // Every domain, component and link, as they are now.
-    [[nodiscard]] std::string dump() const {
+    // Every domain, component and link, as they are now. While a domain's cycle is being clocked
+    // (`interrupted`, a failure in it), its links are shown at that cycle, not the one before.
+    [[nodiscard]] std::string dump(const Domain* interrupted = nullptr, Cycle at = 0) const {
         std::ostringstream o;
         o << "cycle core at " << now_ << " ps\n";
         for (std::size_t i = 0; i < domains_.size(); ++i) {
             const Domain& d = *domains_[i];
             o << "domain " << d.name() << ": cycle " << d.cycle() << ", next edge " << d.next_edge() << " ps\n";
-            const Cycle c = d.cycle() ? d.cycle() - 1 : 0;           // the last cycle clocked
+            const Cycle c = &d == interrupted ? at : (d.cycle() ? d.cycle() - 1 : 0);   // the last cycle clocked
             for (const Component* x : clocked_[i].components) {
                 const Counters& n = x->counts();
                 o << "  component " << x->name() << ": " << describe_state(*x) << "; A " << n.arrivals << ", C "
@@ -268,6 +278,7 @@ public:
         for (const auto& l : links_) l->reset();
         now_ = 0;
         quiet_ = 0;
+        active_.assign(active_.size(), false);
     }
 
 private:
@@ -293,7 +304,7 @@ private:
         } catch (const InvariantViolation&) {
             throw;
         } catch (const std::exception& e) {
-            throw InvariantViolation(where, d.name(), c, e.what(), dump());
+            throw InvariantViolation(where, d.name(), c, e.what(), dump(&d, c));
         }
     }
     static std::string describe_state(const Component& x) {
@@ -323,7 +334,8 @@ private:
     bool checks_ = true;
     std::vector<std::pair<std::string, std::function<void()>>> invariants_;
     std::uint64_t deadlock_window_ = 10'000;            // edges without progress (0: off)
-    std::uint64_t quiet_ = 0;                            // edges in a row without progress
+    std::uint64_t quiet_ = 0;                            // steps in a row without progress
+    std::vector<bool> active_;                           // each domain's activity at its last edge
     const Domain* last_domain_ = nullptr;
     Tracer* tracer_ = nullptr;
     std::vector<std::unique_ptr<Component>> components_;

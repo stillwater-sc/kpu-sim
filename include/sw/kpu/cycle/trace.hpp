@@ -36,6 +36,22 @@
 
 namespace sw::kpu::cycle {
 
+// A string's JSON escape: quotes, backslashes and control characters (below 0x20).
+inline std::string json_escape(const std::string& s) {
+    std::string o;
+    for (const char c : s) {
+        if (static_cast<unsigned char>(c) < 0x20) {
+            char b[8];
+            std::snprintf(b, sizeof b, "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+            o += b;
+            continue;
+        }
+        if (c == '"' || c == '\\') o += '\\';
+        o += c;
+    }
+    return o;
+}
+
 class Tracer {
 public:
     explicit Tracer(std::size_t limit = 1'000'000) : limit_(limit) {}
@@ -168,20 +184,7 @@ private:
         events_.push_back(std::move(e));
     }
     static std::uint32_t tid(std::uint32_t track) { return track + 1; }
-    static std::string escape(const std::string& s) {
-        std::string o;
-        for (const char c : s) {
-            if (c == '"' || c == '\\') o += '\\';
-            if (static_cast<unsigned char>(c) < 0x20) {
-                char b[8];
-                std::snprintf(b, sizeof b, "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
-                o += b;
-                continue;
-            }
-            o += c;
-        }
-        return o;
-    }
+    static std::string escape(const std::string& s) { return json_escape(s); }
 
     std::size_t limit_;
     std::vector<Track> tracks_;

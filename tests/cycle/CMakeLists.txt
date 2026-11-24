@@ -54,4 +54,10 @@ if(KPU_PYTHON3)
                 ${CMAKE_CURRENT_BINARY_DIR}/cycle_trace_demo.json
                 ${CMAKE_CURRENT_BINARY_DIR}/cycle_trace_demo.counters.json)
     set_tests_properties(cycle_trace_check PROPERTIES LABELS "cycle;trace;v0.10" FIXTURES_REQUIRED cycle_trace)
+    # The checker rejects what it should: corrupted copies of the demo's files.
+    add_test(NAME cycle_trace_check_selftest
+        COMMAND ${KPU_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_trace.py
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_trace_demo.json
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_trace_demo.counters.json)
+    set_tests_properties(cycle_trace_check_selftest PROPERTIES LABELS "cycle;trace;v0.10" FIXTURES_REQUIRED cycle_trace)
 endif()

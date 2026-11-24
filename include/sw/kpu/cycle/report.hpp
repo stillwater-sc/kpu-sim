@@ -66,14 +66,7 @@ inline std::string format_report(const std::vector<ReportRow>& rows) {
 inline void write_counters_json(const Simulator& sim, const std::string& path) {
     std::ofstream out(path);
     if (!out) throw std::runtime_error("cycle::write_counters_json: cannot write " + path);
-    auto q = [](const std::string& s) {
-        std::string o = "\"";
-        for (const char c : s) {
-            if (c == '"' || c == '\\') o += '\\';
-            o += c;
-        }
-        return o + "\"";
-    };
+    auto q = [](const std::string& s) { return "\"" + json_escape(s) + "\""; };
     out << "{\"domains\":[";
     bool first = true;
     sim.for_each_domain([&](const std::string& name, double period_ps, Cycle cycles) {

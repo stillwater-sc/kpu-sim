@@ -108,7 +108,9 @@ def main(argv):
                 sums[name] += dur
             want = {"busy": r["busy"]}
             want.update({f"stall: {cause}": n for cause, n in r["stalls"].items()})
-            for name, cycles in want.items():
+            # Every name seen or expected: a slice with no counter entry is extra time, counted as 0.
+            for name in set(want) | set(sums):
+                cycles = want.get(name, 0)
                 got = sums.get(name, 0.0)
                 if abs(got - cycles * period[r["domain"]]) > EPS * max(1, cycles):
                     bad.append(f"{where}: {name} slices span {got} us; the counters say {cycles} cycles")

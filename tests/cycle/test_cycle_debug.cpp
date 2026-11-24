@@ -12,6 +12,7 @@
 
 #include "pipeline.hpp"
 
+#include <sw/kpu/cycle/report.hpp>
 #include <sw/kpu/cycle/simulator.hpp>
 #include <sw/kpu/cycle/trace.hpp>
 
@@ -311,4 +312,95 @@ TEST_CASE("The trace: states, beats and occupancy, bounded", "[cycle][debug][tra
     // Attached after the model is built: refused, since its components would have no tracks.
     Tracer late;
     CHECK_THROWS_WITH(s2.attach(late), ContainsSubstring("before adding"));
+}
+
+// #551's review: the detector must not stop a run while time alone is doing the work.
+TEST_CASE("No false deadlock: a busy slow domain, a slow link, a returning credit", "[cycle][debug]") {
+    SECTION("a stage busy in a 1000 ps domain, with a 100 ps domain stepping in between") {
+        // Nine fast edges between slow edges see no activity of their own; the slow domain's busy
+        // stage keeps it active until its next edge.
+        Simulator sim;
+        sim.set_deadlock_window(3);
+        sim.add_domain(Domain("fast", 100));
+        Domain& slow = sim.add_domain(Domain("slow", 1000));
+        auto& p = sim.add<Producer>("producer", slow, 3);
+        auto& s = sim.add<Stage>("stage", slow, 50);
+        auto& c = sim.add<Consumer>("consumer", slow);
+        auto& a = sim.link<Beat>("p->s", p, s, 1);
+        auto& b = sim.link<Beat>("s->c", s, c, 1);
+        p.connect(a);
+        s.connect(a, b);
+        c.connect(b);
+        REQUIRE(sim.run_until_idle(kLimit));
+        c.finish(3);
+    }
+    SECTION("a beat in flight for longer than the window") {
+        Simulator sim;
+        sim.set_deadlock_window(100);
+        Domain& d = sim.add_domain(Domain("clk", 1000));
+        auto& p = sim.add<Producer>("producer", d, 2);
+        auto& c = sim.add<Consumer>("consumer", d);
+        auto& l = sim.link<Beat>("p->c", p, c, 2, 500);
+        p.connect(l);
+        c.connect(l);
+        REQUIRE(sim.run_until_idle(kLimit));
+        c.finish(2);
+        CHECK(c.received.back().second == 501);
+    }
+    SECTION("a credit on its way back for longer than the window") {
+        Simulator sim;
+        sim.set_deadlock_window(100);
+        Domain& d = sim.add_domain(Domain("clk", 1000));
+        auto& p = sim.add<Producer>("producer", d, 3);
+        auto& c = sim.add<Consumer>("consumer", d);
+        auto& l = sim.link<Beat>("p->c", p, c, 1, 1, 500);
+        p.connect(l);
+        c.connect(l);
+        REQUIRE(sim.run_until_idle(kLimit));
+        c.finish(3);
+    }
+}
+
+TEST_CASE("The dump of an interrupted cycle shows that cycle's links", "[cycle][debug]") {
+    // One beat on a latency-5 link lands at cycle 5. After cycles 0-4 have run, the last cycle
+    // clocked is 4 (in flight); a failure during cycle 5 dumps cycle 5 (landed).
+    Simulator sim;
+    Domain& d = sim.add_domain(Domain("clk", 1000));
+    auto& p = sim.add<Producer>("producer", d, 1);
+    auto& c = sim.add<Consumer>("consumer", d);
+    auto& l = sim.link<Beat>("p->c", p, c, 1, 5);
+    p.connect(l);
+    c.connect(l);
+    for (int i = 0; i < 5; ++i) sim.step();
+    CHECK_THAT(sim.dump(), ContainsSubstring("link p->c: credits 0/1, in flight 1, buffered 0"));
+    CHECK_THAT(sim.dump(&d, 5), ContainsSubstring("link p->c: credits 0/1, in flight 0, buffered 1"));
+}
+
+TEST_CASE("Names with control characters stay valid JSON", "[cycle][debug]") {
+    Simulator sim;
+    Domain& d = sim.add_domain(Domain("clk", 1000));
+    auto& p = sim.add<Producer>("producer", d, 2);
+    auto& c = sim.add<Consumer>("consumer", d);
+    auto& l = sim.link<Beat>("p\nc\t\"x\"", p, c, 1);
+    p.connect(l);
+    c.connect(l);
+    REQUIRE(sim.run_until_idle(kLimit));
+    const auto path = (std::filesystem::temp_directory_path() / "cycle_counters_escape.json").string();
+    write_counters_json(sim, path);
+    const std::string json = slurp_and_remove(path);
+    CHECK_THAT(json, ContainsSubstring(R"j("name":"p\u000ac\u0009\"x\"")j"));
+    CHECK(json_escape("a\\b") == "a\\\\b");
+}
+
+TEST_CASE("A link carries any item; one with a non-numeric id is traced as id 0", "[cycle][debug]") {
+    struct Named {
+        std::string id;
+    };
+    Domain d("clk", 1000);
+    Tracer t;
+    Link<Named> l("named", d, 1);
+    l.attach(&t, t.add_track("named", "clk", true));
+    l.push(0, Named{"tile A[0,0]"});
+    CHECK(l.pop(1).id == "tile A[0,0]");
+    CHECK(t.events() == 2);                              // its slice opened and closed
 }

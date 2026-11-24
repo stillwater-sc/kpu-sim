@@ -122,6 +122,12 @@ public:
         track_ = track;
     }
     // Credits, in flight, buffered and returning, at `now`: for the state dump and the deadlock report.
+    // Timed transport still under way at `now`: a beat in flight or a credit on its way back. While
+    // there is, the link is not stuck, whatever its ends do (the deadlock detector's rule).
+    [[nodiscard]] bool transporting(Cycle now) {
+        settle(now);
+        return in_flight(now) > 0 || !returning_.empty();
+    }
     [[nodiscard]] std::string describe(Cycle now) {
         settle(now);
         std::ostringstream o;
@@ -202,7 +208,8 @@ public:
         pipe_.pop_front();
         return_credit(now);
         counted_pop();
-        if constexpr (requires { item.id; }) traced_pop(static_cast<std::uint64_t>(item.id), arrival, now);
+        if constexpr (requires { static_cast<std::uint64_t>(item.id); })
+            traced_pop(static_cast<std::uint64_t>(item.id), arrival, now);
         else traced_pop(0, arrival, now);
         return item;
     }
