@@ -5,9 +5,12 @@
 //
 //   cycle_trace_demo <trace.json> <counters.json>
 //
-// Two pipelines on two clocks: at 1 GHz a producer -> stage -> consumer whose consumer is held for
-// cycles [40, 70), so the stage and the producer stall for want of credits; at 250 MHz a producer
-// -> consumer whose one credit paces it. check_trace.py validates the files against each other.
+// Three pipelines on two clocks: at 1 GHz a producer -> stage -> consumer whose consumer is held
+// for cycles [40, 70), so the stage and the producer stall for want of credits; at 250 MHz a
+// producer -> consumer whose one credit paces it; and a 4:1 clock-domain crossing (#536), a 1 GHz
+// producer into a 250 MHz consumer through an async FIFO of four entries, at the banks' rate.
+// Each domain has its cycle-number track and its square-wave clock: the banks' clock rises on
+// every fourth rise of the array's. check_trace.py validates the files against each other.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -31,6 +34,7 @@ int main(int argc, char** argv) try {
         return 2;
     }
     Tracer tracer;
+    tracer.clock_tracks(true);   // a short run: the square waves too
     Simulator sim;
     sim.attach(tracer);
     Domain& fast = sim.add_domain(Domain::from_ghz("array", 1.0));
@@ -52,12 +56,19 @@ int main(int argc, char** argv) try {
     ps.connect(ls);
     cs.connect(ls);
 
+    auto& px = sim.add<Producer>("array producer", fast, 24);
+    auto& cx = sim.add<Consumer>("banks consumer", slow);
+    auto& lx = sim.crossing<Beat>("array->banks", px, cx, 4);
+    px.connect(lx);
+    cx.connect(lx);
+
     if (!sim.run_until_idle(10'000'000)) {
         std::fprintf(stderr, "cycle_trace_demo: the run did not finish\n");
         return 1;
     }
     c.finish(60);
     cs.finish(20);
+    cx.finish(24);
     tracer.write(argv[1]);
     write_counters_json(sim, argv[2]);
     std::printf("cycle_trace_demo: %zu trace events (%zu dropped) to %s; counters to %s\n", tracer.events(),

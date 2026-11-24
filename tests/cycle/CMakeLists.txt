@@ -37,6 +37,15 @@ set_target_properties(test_cycle_debug PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_debug COMMAND test_cycle_debug)
 set_tests_properties(test_cycle_debug PROPERTIES LABELS "cycle;debug;v0.10")
 
+# Step 0d (#536): clock-domain crossings, and each domain's clock track in the trace
+add_executable(test_cycle_crossing test_cycle_crossing.cpp)
+target_link_libraries(test_cycle_crossing PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_cycle_crossing PRIVATE ${CMAKE_SOURCE_DIR}/include)
+kpu_set_target_options(test_cycle_crossing)
+set_target_properties(test_cycle_crossing PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_crossing COMMAND test_cycle_crossing)
+set_tests_properties(test_cycle_crossing PROPERTIES LABELS "cycle;crossing;v0.10")
+
 # Step 0c (#535): the test structure's trace and counters files, validated against each other.
 # Open build/tests/cycle/cycle_trace_demo.json in https://ui.perfetto.dev
 add_executable(cycle_trace_demo cycle_trace_demo.cpp)

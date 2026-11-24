@@ -68,6 +68,15 @@ public:
     // The time of edge n, in picoseconds (exact to the picosecond below).
     // Edge n at phase + floor(n * num / den), exact (mul_div): never a rounded period accumulated.
     [[nodiscard]] Picoseconds edge(Cycle n) const { return add(phase_, mul_div(n, num_, den_)); }
+    // The first edge strictly after time t: the least n with edge(n) > t. A clock-domain crossing
+    // (link.hpp) delivers on the receiver's edges after the sender's, never at the same instant.
+    [[nodiscard]] Cycle first_after(Picoseconds t) const {
+        if (t < phase_) return 0;
+        // floor(n num / den) > u  <=>  n num >= (u + 1) den  <=>  n >= ceil((u + 1) den / num).
+        const std::uint64_t u1 = add(t - phase_, 1);
+        const Cycle q = mul_div(u1, den_, num_);           // floor((u + 1) den / num)
+        return mul_div(q, num_, den_) >= u1 ? q : q + 1;   // q itself only when it divides exactly
+    }
     // The next edge, kept as a whole part and a remainder that advance() steps exactly, so the
     // scheduler's hot path neither multiplies nor divides. Equal to edge(cycle()).
     [[nodiscard]] Picoseconds next_edge() const { return next_; }

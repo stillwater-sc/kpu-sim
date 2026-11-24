@@ -8,6 +8,9 @@ thread never overlap, since Perfetto nests overlapping slices; every async slice
 after it opened; every thread with slices is named. Against the counters (#535,
 docs/plans/cycle-based-kpu-prototype.md §3.3): each component's busy and stall slices add up to its
 busy and stall cycles times its domain's period, and each link has one slice per beat it carried.
+Each domain's clock track ("clock <domain>", #536): its cycle numbers run 0, 1, 2, ... one per
+cycle the counters report, at rising times; its square wave, when present, alternates 1, 0, two
+events per cycle, each rise at that cycle's time.
 
 Exit 0 if valid, 1 with the violations if not, 2 if a file cannot be read. Standard library only.
 """
@@ -40,6 +43,7 @@ def main(argv):
 
     names = {}                      # tid -> thread name
     slices = defaultdict(list)      # tid -> [(ts, dur, name)]
+    clocks = defaultdict(lambda: defaultdict(list))   # tid -> "cycle" | "clock" -> [(ts, value)]
     opened, closed = {}, {}         # (cat, name, id) -> ts
     for i, e in enumerate(events):
         ph = e.get("ph")
@@ -74,8 +78,14 @@ def main(argv):
                 bad.append(f"event {i}: async {ph} {key} twice")
             book[key] = ts
         elif ph == "C":
-            if not all(isinstance(v, (int, float)) for v in e.get("args", {}).values()):
+            args = e.get("args", {})
+            # A bool is an int to Python, and False == 0: refuse it, or a level of false passes as 0.
+            if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in args.values()):
                 bad.append(f"event {i}: counter values must be numbers")
+                continue
+            for key in ("cycle", "clock"):
+                if key in args:
+                    clocks[e["tid"]][key].append((ts, args[key]))
 
     for tid, ss in slices.items():
         if tid not in names:
@@ -117,13 +127,44 @@ def main(argv):
         elif beats[r["name"]] != r["C"]:
             bad.append(f"{where}: {beats[r['name']]} beat slices; the counters say {r['C']} beats popped")
 
+    # Each domain's clock track, against its cycles in the counters (exact unless events were dropped).
+    complete = trace.get("otherData", {}).get("dropped", 0) == 0
+    cycles = {d["name"]: d["cycles"] for d in counters["domains"]}
+    for tid, series in clocks.items():
+        label = names.get(tid, "")
+        if not label.startswith("clock "):
+            bad.append(f"thread {label or tid}: cycle or clock counters on a track that is not a clock")
+            continue
+        domain = label[len("clock "):]
+        if domain not in cycles:
+            bad.append(f"{label}: no domain {domain!r} in the counters")
+            continue
+        cs, ws = series.get("cycle", []), series.get("clock", [])
+        if cs:
+            if [v for _, v in cs] != list(range(len(cs))):
+                bad.append(f"{label}: the cycle numbers do not run 0, 1, 2, ...")
+            if any(b[0] <= a[0] for a, b in zip(cs, cs[1:])):
+                bad.append(f"{label}: the cycle numbers' times do not rise")
+            if complete and len(cs) != cycles[domain]:
+                bad.append(f"{label}: {len(cs)} cycle numbers; the counters say {cycles[domain]} cycles")
+        if ws:
+            if [v for _, v in ws] != [1 - n % 2 for n in range(len(ws))]:
+                bad.append(f"{label}: the clock does not alternate 1, 0, starting high")
+            if any(b[0] <= a[0] for a, b in zip(ws, ws[1:])):
+                bad.append(f"{label}: the clock's times do not rise")
+            if complete and len(ws) != 2 * cycles[domain]:
+                bad.append(f"{label}: {len(ws)} clock events; the counters say {cycles[domain]} cycles")
+            rises = [t for t, v in ws if v == 1]
+            if cs and any(abs(r - c[0]) > EPS for r, c in zip(rises, cs)):
+                bad.append(f"{label}: a rising edge is not at its cycle's time")
+
     if bad:
         print(f"check_trace: {len(bad)} violation(s)")
         for b in bad[:50]:
             print("  " + b)
         return 1
     print(f"check_trace: OK ({len(events)} events, {len(slices)} component tracks, "
-          f"{len(opened)} beats, {len(counters['rows'])} counter rows)")
+          f"{len(opened)} beats, {len(clocks)} clock tracks, {len(counters['rows'])} counter rows)")
     return 0
 
 
