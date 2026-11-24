@@ -15,6 +15,22 @@
 // same cycle, whichever evaluates first. Components meet only through links, so every run is
 // deterministic and independent of the order they were added in.
 //
+// A CLOCK-DOMAIN CROSSING (step 0d) is a link whose sender and receiver are clocked by different
+// domains: an async FIFO. The sender pushes on its edges and the receiver pops on its own. A beat
+// pushed at the sender's edge t is visible to the receiver at its `sync`-th edge strictly after t
+// (the synchronizer that carries the FIFO's write pointer across). A beat popped at the receiver's
+// edge t returns its credit at the sender's `credit_sync`-th edge strictly after t (the read
+// pointer's synchronizer back). Both are at least 1, so, as on any link, nothing crosses at the
+// instant it is sent: two domains whose edges coincide see nothing of each other's work at that
+// instant, whichever the scheduler clocks first, and the run stays deterministic. A link within one
+// domain is the case where the two domains are one: `latency` edges after, `credit_latency` back.
+// The link's own cycles, for its counters, its checks and the arguments of credits(), in_flight()
+// and the rest, are the SENDER's: push() and can_push() take the sender's cycle, can_pop(), peek()
+// and pop() the receiver's. The simulator closes a link's cycle after every domain with an edge at
+// that instant has been clocked, so a crossing's counts include the receiver's pops at an instant
+// both clocks share, whichever domain is clocked first. Its occupancy is as of the sender's last
+// edge: after a fast receiver's pops, a slow sender's count catches up at its next edge.
+//
 // CONSERVATION, every cycle: credits held + items in flight + items buffered + credits in flight
 // = capacity. check() raises if it does not hold.
 //
@@ -52,8 +68,11 @@ struct Beat {
 
 class LinkBase {
 public:
-    LinkBase(std::string name, const Domain& domain, std::size_t capacity, Cycle latency, Cycle credit_latency)
-        : name_(std::move(name)), domain_(&domain), capacity_(capacity), latency_(latency),
+    // `rx`: the receiver's domain, for a crossing (`latency` and `credit_latency` are then its two
+    // synchronizers' stages); null for a link within `domain`.
+    LinkBase(std::string name, const Domain& domain, std::size_t capacity, Cycle latency, Cycle credit_latency,
+             const Domain* rx = nullptr)
+        : name_(std::move(name)), domain_(&domain), rx_(rx ? rx : &domain), capacity_(capacity), latency_(latency),
           credit_latency_(credit_latency), credits_(capacity) {
         if (capacity_ == 0) throw std::invalid_argument("cycle::Link " + name_ + ": capacity must be at least 1");
         if (latency_ == 0 || credit_latency_ == 0)
@@ -64,7 +83,9 @@ public:
     LinkBase& operator=(const LinkBase&) = delete;
 
     [[nodiscard]] const std::string& name() const { return name_; }
-    [[nodiscard]] const Domain& domain() const { return *domain_; }
+    [[nodiscard]] const Domain& domain() const { return *domain_; }        // the sender's: the link's cycles
+    [[nodiscard]] const Domain& rx_domain() const { return *rx_; }         // the receiver's
+    [[nodiscard]] bool crossing() const { return rx_ != domain_; }
     [[nodiscard]] std::size_t capacity() const { return capacity_; }
     [[nodiscard]] Cycle latency() const { return latency_; }
     [[nodiscard]] Cycle credit_latency() const { return credit_latency_; }
@@ -131,6 +152,7 @@ public:
     [[nodiscard]] std::string describe(Cycle now) {
         settle(now);
         std::ostringstream o;
+        if (crossing()) o << "crossing " << domain_->name() << " -> " << rx_->name() << ", ";
         o << "credits " << credits_ << "/" << capacity_ << ", in flight " << in_flight(now) << ", buffered "
           << buffered(now) << ", returning " << returning_.size();
         return o.str();
@@ -146,9 +168,21 @@ protected:
         ++counts_.completions;
         popped_this_cycle_ = true;
     }
-    // A popped item's stay, from its push (its arrival less the latency) to its pop at `now`.
-    void traced_pop(std::uint64_t id, Cycle arrival, Cycle now) {
-        if (tracer_) tracer_->beat(track_, id, domain_->edge(arrival - latency_), domain_->edge(now));
+    // A popped item's stay, from its push at the sender's cycle `pushed` to its pop at the
+    // receiver's cycle `now`.
+    void traced_pop(std::uint64_t id, Cycle pushed, Cycle now) {
+        if (tracer_) tracer_->beat(track_, id, domain_->edge(pushed), rx_->edge(now));
+    }
+    // The receiver's cycle at which an item pushed at the sender's cycle `now` lands.
+    [[nodiscard]] Cycle arrival(Cycle now) const {
+        if (!crossing()) return now + latency_;
+        return rx_->first_after(domain_->edge(now)) + latency_ - 1;
+    }
+    // The receiver's first cycle after the sender's cycle `now`: items landing before it have
+    // landed by `now`.
+    [[nodiscard]] Cycle horizon(Cycle now) const {
+        if (!crossing()) return now + 1;
+        return rx_->first_after(domain_->edge(now));
     }
     void spend_credit(Cycle now) {
         settle(now);
@@ -157,7 +191,11 @@ protected:
                                    ": push without a credit");
         --credits_;
     }
-    void return_credit(Cycle now) { returning_.push_back(now + credit_latency_); }
+    // A credit freed at the receiver's cycle `now` starts back; it arrives at a sender's cycle.
+    void return_credit(Cycle now) {
+        if (!crossing()) returning_.push_back(now + credit_latency_);
+        else returning_.push_back(domain_->first_after(rx_->edge(now)) + credit_latency_ - 1);
+    }
     // Credits whose return has arrived by `now` are the sender's again.
     void settle(Cycle now) {
         while (!returning_.empty() && returning_.front() <= now) {
@@ -169,10 +207,11 @@ protected:
 private:
     std::string name_;
     const Domain* domain_;
+    const Domain* rx_;                  // the receiver's domain: domain_ but for a crossing
     std::size_t capacity_;
     Cycle latency_, credit_latency_;
     std::size_t credits_;
-    std::deque<Cycle> returning_;       // arrival cycle of each credit on its way back
+    std::deque<Cycle> returning_;       // the sender's cycle each credit on its way back arrives at
     Counters counts_;
     bool pushed_this_cycle_ = false, popped_this_cycle_ = false;
     Tracer* tracer_ = nullptr;
@@ -184,39 +223,45 @@ class Link : public LinkBase {
 public:
     Link(std::string name, const Domain& domain, std::size_t capacity, Cycle latency = 1, Cycle credit_latency = 1)
         : LinkBase(std::move(name), domain, capacity, latency, credit_latency) {}
+    // A clock-domain crossing from `tx` to `rx`: an async FIFO of `capacity` entries, `sync`
+    // receiver edges to see a beat and `credit_sync` sender edges to see a credit come back.
+    Link(std::string name, const Domain& tx, const Domain& rx, std::size_t capacity, Cycle sync, Cycle credit_sync)
+        : LinkBase(std::move(name), tx, capacity, sync, credit_sync, &rx) {}
 
-    // Sender side.
+    // Sender side, in the sender's cycles.
     [[nodiscard]] bool can_push(Cycle now) { return credits(now) > 0; }
     void push(Cycle now, T item) {
         spend_credit(now);
-        pipe_.push_back({now + latency(), std::move(item)});
+        pipe_.push_back({arrival(now), now, std::move(item)});
         counted_push();
     }
 
-    // Receiver side: the oldest landed item.
-    [[nodiscard]] bool can_pop(Cycle now) const { return !pipe_.empty() && pipe_.front().first <= now; }
+    // Receiver side, in the receiver's cycles: the oldest landed item.
+    [[nodiscard]] bool can_pop(Cycle now) const { return !pipe_.empty() && pipe_.front().arrival <= now; }
     [[nodiscard]] const T& peek(Cycle now) const {
         if (!can_pop(now)) throw std::logic_error("cycle::Link " + name() + ": peek with nothing landed");
-        return pipe_.front().second;
+        return pipe_.front().item;
     }
     // Pops the oldest landed item; its slot is free, so its credit starts back to the sender.
     T pop(Cycle now) {
         if (!can_pop(now)) throw std::logic_error("cycle::Link " + name() + " at cycle " + std::to_string(now) +
                                                   ": pop with nothing landed");
-        const Cycle arrival = pipe_.front().first;
-        T item = std::move(pipe_.front().second);
+        const Cycle pushed = pipe_.front().pushed;
+        T item = std::move(pipe_.front().item);
         pipe_.pop_front();
         return_credit(now);
         counted_pop();
         if constexpr (requires { static_cast<std::uint64_t>(item.id); })
-            traced_pop(static_cast<std::uint64_t>(item.id), arrival, now);
-        else traced_pop(0, arrival, now);
+            traced_pop(static_cast<std::uint64_t>(item.id), pushed, now);
+        else traced_pop(0, pushed, now);
         return item;
     }
 
+    // In the sender's cycles, as every LinkBase query.
     [[nodiscard]] std::size_t in_flight(Cycle now) const override {
+        const Cycle h = horizon(now);
         std::size_t n = 0;
-        for (auto it = pipe_.rbegin(); it != pipe_.rend() && it->first > now; ++it) ++n;   // arrivals are in order
+        for (auto it = pipe_.rbegin(); it != pipe_.rend() && it->arrival >= h; ++it) ++n;   // arrivals are in order
         return n;
     }
     [[nodiscard]] std::size_t buffered(Cycle now) const override { return pipe_.size() - in_flight(now); }
@@ -228,7 +273,12 @@ public:
 
 private:
     [[nodiscard]] std::size_t held() const override { return pipe_.size(); }
-    std::deque<std::pair<Cycle, T>> pipe_;   // (arrival cycle, item), in push order
+    struct Slot {
+        Cycle arrival;   // the receiver's cycle it lands at
+        Cycle pushed;    // the sender's cycle it was pushed at
+        T item;
+    };
+    std::deque<Slot> pipe_;   // in push order
 };
 
 }  // namespace sw::kpu::cycle

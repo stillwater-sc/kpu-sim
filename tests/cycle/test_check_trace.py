@@ -76,6 +76,45 @@ class CheckTrace(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("never closed", out)
 
+    def clock_events(self, t, key):
+        return [e for e in t["traceEvents"] if e["ph"] == "C" and key in e.get("args", {})]
+
+    def test_the_demo_has_its_clocks(self):
+        # Every domain's cycle numbers and, as the demo turns them on, its square wave (#536).
+        for key in ("cycle", "clock"):
+            self.assertTrue(self.clock_events(self.trace, key), key)
+
+    def test_a_skipped_cycle_number(self):
+        t = copy.deepcopy(self.trace)
+        cs = self.clock_events(t, "cycle")
+        t["traceEvents"].remove(cs[3])
+        code, out = run(t, self.counters)
+        self.assertEqual(code, 1, out)
+        self.assertIn("do not run 0, 1, 2", out)
+
+    def test_a_clock_stuck_high(self):
+        t = copy.deepcopy(self.trace)
+        ws = self.clock_events(t, "clock")
+        ws[1]["args"]["clock"] = 1
+        code, out = run(t, self.counters)
+        self.assertEqual(code, 1, out)
+        self.assertIn("does not alternate", out)
+
+    def test_a_misplaced_rising_edge(self):
+        t = copy.deepcopy(self.trace)
+        ws = self.clock_events(t, "clock")
+        ws[2]["ts"] += ws[1]["ts"] - ws[0]["ts"] - 0.0001   # still before the next fall
+        code, out = run(t, self.counters)
+        self.assertEqual(code, 1, out)
+        self.assertIn("not at its cycle's time", out)
+
+    def test_cycles_disagree_with_the_counters(self):
+        c = copy.deepcopy(self.counters)
+        c["domains"][0]["cycles"] += 1
+        code, out = run(self.trace, c)
+        self.assertEqual(code, 1, out)
+        self.assertIn("the counters say", out)
+
 
 if __name__ == "__main__":
     TRACE, COUNTERS = sys.argv[1], sys.argv[2]

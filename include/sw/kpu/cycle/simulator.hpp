@@ -22,10 +22,11 @@
 //     on a slow link is in flight. A true credit cycle has every beat buffered and no credit
 //     returning, so nothing is active;
 //   - dump(): every domain, component and link, now;
-//   - attach(Tracer&): the Perfetto trace (trace.hpp).
+//   - attach(Tracer&): the Perfetto trace (trace.hpp), with each domain's clock track.
 //
-// A link joins two components of ONE domain. A link between domains is a clock-domain crossing,
-// with its own synchronizer (step 0d), and is refused until then.
+// A link joins two components of ONE domain. Between domains, crossing() makes a clock-domain
+// crossing (step 0d): an async FIFO with a synchronizer each way (link.hpp). The crossing is
+// clocked, counted and checked with its sender's domain.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -85,6 +86,7 @@ public:
         domains_.push_back(std::make_unique<Domain>(std::move(d)));
         clocked_.push_back({});
         active_.push_back(false);
+        clocks_.push_back(tracer_ ? tracer_->add_clock(domains_.back()->name()) : 0);
         return *domains_.back();
     }
 
@@ -105,14 +107,24 @@ public:
         if (&from.domain() != &to.domain())
             throw std::invalid_argument("cycle::Simulator: link " + name + " joins " + from.name() + " (" +
                                         from.domain().name() + ") and " + to.name() + " (" + to.domain().name() +
-                                        "); a link between clock domains is a crossing (step 0d)");
+                                        "); a link between clock domains is a crossing (crossing())");
         const std::size_t d = require_domain(from.domain(), "link " + name);   // one this simulator schedules
-        auto l = std::make_unique<Link<T>>(std::move(name), from.domain(), capacity, latency, credit_latency);
-        Link<T>& ref = *l;
-        clocked_[d].links.push_back(&ref);
-        links_.push_back(std::move(l));
-        if (tracer_) ref.attach(tracer_, tracer_->add_track(ref.name(), ref.domain().name(), true));
-        return ref;
+        return own(d, std::make_unique<Link<T>>(std::move(name), from.domain(), capacity, latency, credit_latency));
+    }
+
+    // A clock-domain crossing from `from`'s domain to `to`'s (link.hpp): an async FIFO of
+    // `capacity` entries; a beat is seen at the receiver's `sync`-th edge after its push, and a
+    // credit at the sender's `credit_sync`-th edge after its pop. Two stages each way by default,
+    // as in a two-flop synchronizer.
+    template <class T>
+    Link<T>& crossing(std::string name, const Component& from, const Component& to, std::size_t capacity,
+                      Cycle sync = 2, Cycle credit_sync = 2) {
+        if (&from.domain() == &to.domain())
+            throw std::invalid_argument("cycle::Simulator: crossing " + name + " joins " + from.name() + " and " +
+                                        to.name() + ", both in " + from.domain().name() + "; within a domain, use link()");
+        const std::size_t d = require_domain(from.domain(), "crossing " + name);
+        require_domain(to.domain(), "crossing " + name);
+        return own(d, std::make_unique<Link<T>>(std::move(name), from.domain(), to.domain(), capacity, sync, credit_sync));
     }
 
     // ONE SIMULATION STEP: the earliest clock edge across every domain. False when there is no
@@ -130,12 +142,15 @@ public:
     //           returns >= 1 cycle later, so no component sees another's work of this cycle, and the
     //           order of this loop cannot change the result (link.hpp);
     //        b. commit: components with registered state of their own latch it;
-    //        c. count: every component and link closes the cycle's counters (counters.hpp): its
-    //           state, and the items it holds into the occupancy integral;
-    //        d. check: every link's credit conservation and every component's invariants, after the
-    //           cycle has settled. This is the debug guarantee of the plan (§3.3): a violation stops
-    //           the run at the cycle it happens. set_checks(false) skips it, to measure its cost;
+    //        c. count: every component closes the cycle's counters (counters.hpp): its state;
+    //        d. check: every component's invariants, after the cycle has settled. This is the debug
+    //           guarantee of the plan (§3.3): a violation stops the run at the cycle it happens.
+    //           set_checks(false) skips it, to measure its cost;
     //        e. the domain's clock advances to its next edge.
+    //   3. Then, for every domain clocked at `t`, its links close the cycle: their counters (the
+    //      items they hold into the occupancy integral) and their credit conservation (checked).
+    //      After every domain at `t`, not within each: a crossing (link.hpp) is clocked with its
+    //      sender, and its receiver, in another domain, may pop at the same instant.
     //   A step costs O(the components and links of the domains clocked at `t`).
     //
     // WHY CYCLE-BASED, NOT AN EVENT QUEUE PER COMPONENT. An event-driven simulator keeps a priority
@@ -173,16 +188,27 @@ public:
                 if (s == State::Busy || (s == State::Stalled && n.last_cause() == Stall::External)) progress = true;
                 if (tracer_) tracer_->state(k.tracks[j], s, n.last_cause(), d.edge(c), d.edge(c + 1));
             }
-            for (LinkBase* l : k.links)
-                if (l->end_cycle(c) || l->transporting(c)) progress = true;
             active_[i] = progress;
-            if (checks_) {
-                for (LinkBase* l : k.links) guarded(l->name(), d, c, [&] { l->check(c); });
+            if (checks_)
                 for (Component* x : k.components) guarded(x->name(), d, c, [&] { x->check(c); });
-            }
             d.advance();
+            if (tracer_) tracer_->clock(clocks_[i], c, t, d.next_edge());
             last_domain_ = &d;
+            due_.push_back({i, c});
         }
+        // The links' cycles close once every domain with an edge at `t` has been clocked: a
+        // crossing's receiver may pop at the instant its sender's cycle ends, and its counts and
+        // conservation must not depend on which of the two domains was clocked first.
+        for (const auto& [i, c] : due_) {
+            const Domain& d = *domains_[i];
+            bool moved = false;
+            for (LinkBase* l : clocked_[i].links)
+                if (l->end_cycle(c) || l->transporting(c)) moved = true;
+            if (moved) active_[i] = true;
+            if (checks_)
+                for (LinkBase* l : clocked_[i].links) guarded(l->name(), d, c, [&] { l->check(c); });
+        }
+        due_.clear();
         if (checks_)
             for (const auto& [name, hook] : invariants_)
                 guarded("invariant " + name, *last_domain_, last_domain_->cycle() - 1, [&] { hook(); });
@@ -205,10 +231,12 @@ public:
     [[nodiscard]] std::uint64_t deadlock_window() const { return deadlock_window_; }
 
     // The trace: attach before adding components and links (each gets a track as it is added).
+    // Every domain gets a clock track, the domains added so far included.
     void attach(Tracer& t) {
         if (!components_.empty() || !links_.empty())
             throw std::logic_error("cycle::Simulator: attach the tracer before adding components and links");
         tracer_ = &t;
+        for (std::size_t i = 0; i < domains_.size(); ++i) clocks_[i] = t.add_clock(domains_[i]->name());
     }
 
     // Every domain, component and link, as they are now. While a domain's cycle is being clocked
@@ -282,6 +310,18 @@ public:
     }
 
 private:
+    template <class T>
+    Link<T>& own(std::size_t d, std::unique_ptr<Link<T>> l) {
+        Link<T>& ref = *l;
+        clocked_[d].links.push_back(&ref);
+        links_.push_back(std::move(l));
+        if (tracer_) ref.attach(tracer_, tracer_->add_track(ref.name(), domain_label(ref), true));
+        return ref;
+    }
+    static std::string domain_label(const LinkBase& l) {
+        return l.crossing() ? l.domain().name() + " -> " + l.rx_domain().name() : l.domain().name();
+    }
+
     // The index of `d` among this simulator's domains; refuses one it does not own.
     std::size_t require_domain(const Domain& d, const std::string& what) const {
         for (std::size_t i = 0; i < domains_.size(); ++i) if (domains_[i].get() == &d) return i;
@@ -331,11 +371,13 @@ private:
 
     std::vector<std::unique_ptr<Domain>> domains_;
     std::vector<Clocked> clocked_;                       // parallel to domains_
+    std::vector<std::uint32_t> clocks_;                  // each domain's clock track (when traced)
     bool checks_ = true;
     std::vector<std::pair<std::string, std::function<void()>>> invariants_;
     std::uint64_t deadlock_window_ = 10'000;            // edges without progress (0: off)
     std::uint64_t quiet_ = 0;                            // steps in a row without progress
     std::vector<bool> active_;                           // each domain's activity at its last edge
+    std::vector<std::pair<std::size_t, Cycle>> due_;     // the domains clocked this step, and their cycles
     const Domain* last_domain_ = nullptr;
     Tracer* tracer_ = nullptr;
     std::vector<std::unique_ptr<Component>> components_;

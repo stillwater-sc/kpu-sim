@@ -11,7 +11,14 @@
 //                   from its push to its pop -- beats overlap on a link, which complete events on one
 //                   thread may not -- and its OCCUPANCY as a counter track ("C"), at each change. The
 //                   slices' ids are process-local ("id2": {"local": ...}), so Perfetto files the link
-//                   tracks under the process, beside its components, not among its global events
+//                   tracks under the process, beside its components, not among its global events.
+//                   A clock-domain crossing is a link, named for both its domains
+//   a domain        its CYCLE NUMBER as a counter track (Perfetto names it "<domain> cycle": a counter
+//                   event's name and its argument's), one event per cycle, so
+//                   hovering anywhere reads each domain's cycle; on by default (cycle_tracks(false)
+//                   drops it). With clock_tracks(true), also a square-wave CLOCK ("<domain> clock"),
+//                   1 from each edge to the middle of the cycle and 0 after: two events per cycle,
+//                   for short runs, to see two domains' edges side by side at a crossing
 // Times are the domains' edges in picoseconds, written in microseconds (the format's unit), so
 // domains at different clocks line up. A cycle c spans [edge(c), edge(c + 1)).
 //
@@ -56,11 +63,30 @@ class Tracer {
 public:
     explicit Tracer(std::size_t limit = 1'000'000) : limit_(limit) {}
 
+    // Each domain's cycle-number track (on by default) and square-wave clock (off by default).
+    // Set them before the run.
+    void cycle_tracks(bool on) { cycles_ = on; }
+    void clock_tracks(bool on) { waves_ = on; }
+
     // A track per component (a thread) or per link (an async track and a counter track).
     std::uint32_t add_track(std::string name, std::string domain, bool link) {
-        tracks_.push_back({std::move(name), std::move(domain), link});
+        tracks_.push_back({std::move(name), std::move(domain), link ? Kind::Link : Kind::Component});
         runs_.push_back({});
         return static_cast<std::uint32_t>(tracks_.size() - 1);
+    }
+    // A domain's clock track: its cycle numbers and its square wave.
+    std::uint32_t add_clock(std::string domain) {
+        tracks_.push_back({domain, std::move(domain), Kind::Clock});
+        runs_.push_back({});
+        return static_cast<std::uint32_t>(tracks_.size() - 1);
+    }
+    // A domain's cycle `c`, from its edge `from` to the next, `to`.
+    void clock(std::uint32_t track, Cycle c, Picoseconds from, Picoseconds to) {
+        if (cycles_) add({Event::Kind::Counter, track, "cycle", from, 0, 0, c});
+        if (waves_) {
+            add({Event::Kind::Counter, track, "clock", from, 0, 0, 1});
+            add({Event::Kind::Counter, track, "clock", from + (to - from) / 2, 0, 0, 0});
+        }
     }
 
     // A component's state for the cycle [from, to): runs of one state become one event.
@@ -112,9 +138,12 @@ public:
         out << R"({"ph":"M","pid":1,"tid":0,"name":"process_name","args":{"name":"cycle core"}})";
         // Every track is named: a link's events carry its thread id too, so it is named "link ...".
         for (std::uint32_t t = 0; t < tracks_.size(); ++t) {
+            const Track& k = tracks_[t];
+            const std::string label = k.kind == Kind::Clock ? "clock " + k.domain
+                                    : (k.kind == Kind::Link ? "link " : "") + k.name + " (" + k.domain + ")";
             sep();
             out << R"({"ph":"M","pid":1,"tid":)" << tid(t) << R"(,"name":"thread_name","args":{"name":")"
-                << escape((tracks_[t].link ? "link " : "") + tracks_[t].name + " (" + tracks_[t].domain + ")") << "\"}}";
+                << escape(label) << "\"}}";
             sep();
             out << R"({"ph":"M","pid":1,"tid":)" << tid(t) << R"(,"name":"thread_sort_index","args":{"sort_index":)"
                 << t << "}}";
@@ -137,11 +166,14 @@ public:
                         << R"(","id2":{"local":")" << e.key << R"("},"ts":)" << ts << R"(,"args":{"beat":")" << escape(e.name)
                         << "\"}}";
                     break;
-                case Event::Kind::Counter:
+                case Event::Kind::Counter: {
+                    // A link's occupancy in beats; a domain's cycle number, or its clock's level.
+                    const bool clk = k.kind == Kind::Clock;
                     out << R"({"ph":"C","pid":1,"tid":)" << tid(e.track) << R"(,"name":")"
-                        << escape(k.name + " occupancy") << R"(","ts":)" << ts << R"(,"args":{"beats":)" << e.value
-                        << "}}";
+                        << escape(clk ? k.name : k.name + " occupancy") << R"(","ts":)" << ts << R"(,"args":{")"
+                        << (clk ? e.name : "beats") << R"(":)" << e.value << "}}";
                     break;
+                }
             }
         }
         out << "\n]}\n";
@@ -149,9 +181,10 @@ public:
     }
 
 private:
+    enum class Kind : std::uint8_t { Component, Link, Clock };
     struct Track {
         std::string name, domain;
-        bool link = false;
+        Kind kind = Kind::Component;
     };
     struct Run {
         bool open = false;
@@ -192,6 +225,7 @@ private:
     std::vector<Event> events_;
     std::size_t dropped_ = 0;
     std::uint64_t next_async_ = 1;
+    bool cycles_ = true, waves_ = false;
 };
 
 }  // namespace sw::kpu::cycle

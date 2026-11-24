@@ -249,7 +249,7 @@ TEST_CASE("Domains run side by side, each on its own clock", "[cycle][core]") {
     CHECK(cf.received == cs.received);                   // the same cycles in each domain
     CHECK(f.edge(cf.received.back().second) == 39'000);   // cycle 39 at 1 GHz
     CHECK(s.edge(cs.received.back().second) == 156'000);  // cycle 39 at 250 MHz
-    // A link across the two is a crossing, which this step refuses.
+    // A link across the two is a crossing, made with crossing() (test_cycle_crossing.cpp), not link().
     CHECK_THROWS_WITH(sim.link<Beat>("x", pf, cs, 1), ContainsSubstring("crossing"));
 }
 
