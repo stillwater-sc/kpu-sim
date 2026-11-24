@@ -16,6 +16,7 @@
 #include <sw/kpu/cycle/simulator.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -84,6 +85,12 @@ TEST_CASE("Domains: edges in picoseconds, exact for rational periods", "[cycle][
     CHECK(dram.edge(10) == 3125);
     CHECK(dram.edge(3'200'000'000ULL) == 1'000'000'000'000ULL);   // one second, no overflow
     CHECK_THROWS(Domain("bad", 0));
+    // A frequency the period cannot hold is refused before it is converted (#549's review).
+    CHECK_THROWS_WITH(Domain::from_ghz("x", 1e20), ContainsSubstring("too fast"));
+    CHECK_THROWS_WITH(Domain::from_ghz("x", std::numeric_limits<double>::infinity()), ContainsSubstring("finite"));
+    CHECK_THROWS_WITH(Domain::from_ghz("x", std::numeric_limits<double>::quiet_NaN()), ContainsSubstring("finite"));
+    CHECK_THROWS_WITH(Domain::from_ghz("x", 1e-9), ContainsSubstring("resolution"));
+    CHECK(Domain::from_ghz("x", 2.0).edge(1) == 500);
 }
 
 TEST_CASE("Domains: one period, written three ways, has the same edges, and no edge overflows", "[cycle][core]") {

@@ -14,6 +14,7 @@
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -109,8 +110,17 @@ private:
 
 // A frequency in GHz as a period of 1000 / ghz ps, kept rational to a millionth of a GHz.
 inline Domain Domain::from_ghz(std::string name, double ghz) {
-    if (!(ghz > 0.0)) throw std::invalid_argument("cycle::Domain " + name + ": the frequency must be positive");
-    const auto mhz_e3 = static_cast<std::uint64_t>(ghz * 1e6 + 0.5);   // GHz in millionths
+    if (!(ghz > 0.0) || !std::isfinite(ghz))
+        throw std::invalid_argument("cycle::Domain " + name + ": the frequency must be positive and finite");
+    // GHz in millionths, checked before the conversion: a double past the integer's range is
+    // undefined behaviour to convert, and the denominator must stay within 2^62.
+    const double scaled = ghz * 1e6 + 0.5;
+    if (scaled >= 4.611686018427387904e18)
+        throw std::invalid_argument("cycle::Domain " + name + ": " + std::to_string(ghz) + " GHz is too fast to represent");
+    if (scaled < 1.0)
+        throw std::invalid_argument("cycle::Domain " + name + ": " + std::to_string(ghz) +
+                                    " GHz is below the resolution of a millionth of a GHz");
+    const auto mhz_e3 = static_cast<std::uint64_t>(scaled);
     return Domain(std::move(name), 1000ULL * 1000000ULL, mhz_e3);
 }
 
