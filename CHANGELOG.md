@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cycle core, step 0a** (#533; epic #532, `docs/plans/cycle-based-kpu-prototype.md` §3). A new layer,
+  `include/sw/kpu/cycle/`, for building the KPU bottom-up as clocked components. Nothing existing changes.
+  - **Time** (`time.hpp`): picoseconds, with a clock domain per period, exact for rational periods such as LPDDR5's
+    312.5 ps.
+  - **Components** (`component.hpp`): clocked state machines that evaluate on each edge and never compute a future
+    completion time.
+  - **Links** (`link.hpp`): point-to-point channels with credit-based flow control. Both the data and the credit
+    return have a latency of at least one cycle, so the order components evaluate in can't change a run.
+    Conservation (credits + in flight + buffered + returning = capacity) is checked on every link every cycle.
+  - **The scheduler** (`simulator.hpp`): it takes the earliest edge across the domains. It refuses a link between
+    domains; that crossing is step 0d.
+  - **The test structure** (`tests/cycle/pipeline.hpp`): a producer, stages and a consumer, each with its own rate,
+    latency and depth. `test_cycle_core` checks hand-computed cycles for:
+    - the credit loop's bound on throughput, capacity / (latency + credit latency);
+    - a pipeline running at its slowest stage's rate, with its latency the sum of its stages';
+    - backpressure, with no beat lost or duplicated, and a lost beat caught by name;
+    - determinism, independent of the order components are added in;
+    - two domains side by side.
+
 - **Double buffering in L2 at L-CA, tested** (#387 step 3c; `tests/program/test_csp_double_buffer.cpp`). This is the
   RTL's test: an 8×8×16 int8 matmul on the RTL-derived 4×4 tile (`kpu_soc_2x2`), with one L2 buffer (`l2 = 3`) and
   two (`l2 = 6`).
