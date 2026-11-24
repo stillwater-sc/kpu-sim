@@ -97,7 +97,7 @@ TEST_CASE("the record's L3 series agrees with the run's own numbers", "[program]
     }
 }
 
-TEST_CASE("a transit's endpoints are the stations its hop connects, and L2/L1 say unmodelled",
+TEST_CASE("a transit's endpoints are the stations its hop connects, and L1 says unmodelled",
           "[program][record]") {
     const Run r = run_matmul(32, 16, 8);
     const TileFlowRecord rec = r.record();
@@ -115,9 +115,10 @@ TEST_CASE("a transit's endpoints are the stations its hop connects, and L2/L1 sa
         }
         CHECK(static_cast<Mover>(x.mover) == mover_of(static_cast<Hop>(x.hop)));
     }
-    // What L-T1 does not model is said, not drawn as empty.
-    CHECK(rec.unmodelled == std::vector<std::string>{"l2", "l1", "dmabuf"});
-    CHECK_FALSE(rec.stations[rec.station(r.spec.device(0).name + "/l2[*]")].modelled);
+    // What L-T1 does not model is said, not drawn as empty. L2 is modelled: on one compute tile
+    // L-T1 executes the walker's copies in their L2 slots (#387), so they occupy it.
+    CHECK(rec.unmodelled == std::vector<std::string>{"l1", "dmabuf"});
+    CHECK(rec.stations[rec.station(r.spec.device(0).name + "/l2[*]")].modelled);
     CHECK(rec.stations[rec.station(r.spec.device(0).name + "/l3[*]")].pooled);
 }
 
@@ -423,13 +424,25 @@ TEST_CASE("version 6: an L2 accumulator's partial is recorded as merged into, no
     r.outcome = driver::csp_run_level(driver::ExecutionLevel::BlockSequential, r.ast, &r.spec.device(0), r.inputs);
     REQUIRE_FALSE(r.outcome.skipped);
     const TileFlowRecord rec = r.record();
-    REQUIRE(rec.l2_residency.size() == 1);
-    CHECK((rec.l2_residency[0].partial == 1 && rec.l2_residency[0].merges == 2 && rec.l2_residency[0].feeds == 0));
+    // One partial; the rest of the rows are the walker's operand copies (#387), each fed once.
+    auto partials = [](const TileFlowRecord& t) {
+        std::vector<const L2Residency*> out;
+        for (const auto& x : t.l2_residency)
+            if (x.partial) out.push_back(&x);
+        return out;
+    };
+    const auto ps = partials(rec);
+    REQUIRE(ps.size() == 1);
+    CHECK((ps[0]->partial == 1 && ps[0]->merges == 2 && ps[0]->feeds == 0 && ps[0]->copy == 0));
+    for (const auto& x : rec.l2_residency)
+        if (!x.partial) CHECK((x.copy == L2Residency::kOperandCopy && x.feeds == 1));
     const std::string dir = scratch("v6-l2acc");
     write_tflow(rec, dir);
     const TileFlowRecord back = read_tflow(dir);
-    REQUIRE(back.l2_residency.size() == 1);
-    CHECK((back.l2_residency[0].partial == 1 && back.l2_residency[0].merges == 2));
+    REQUIRE(back.l2_residency.size() == rec.l2_residency.size());
+    const auto bp = partials(back);
+    REQUIRE(bp.size() == 1);
+    CHECK((bp[0]->partial == 1 && bp[0]->merges == 2));
 }
 
 TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and read back", "[program][record][l2]") {
@@ -448,14 +461,40 @@ TEST_CASE("version 6: the staged L2 copies and the fabric's chains, recorded and
     const TileFlowRecord rec = r.record();
     CHECK(rec.phases);
     CHECK(rec.l2_slots == 10);   // the panel (4), and 2 rounds of a call's 3
-    // Every staged copy, at the address L-T1 executed, with its reuse count: A[i,k] is fed once per j.
-    REQUIRE(rec.l2_residency.size() == 16);
-    REQUIRE(rec.l2_residency.size() == r.outcome.l2_slots.size());
-    for (std::size_t i = 0; i < rec.l2_residency.size(); ++i) {
+    // Every staged copy, at the address L-T1 executed, with its reuse count: A[i,k] is fed once per
+    // j. Then the walker's copies (#387): B's copy for each call, fed once, and each C tile's
+    // result slot, drained into and never fed.
+    REQUIRE(rec.l2_residency.size() == 16 + 64 + 16);
+    REQUIRE(r.outcome.l2_slots.size() == 16);
+    for (std::size_t i = 0; i < 16; ++i) {
         const L2Residency& x = rec.l2_residency[i];
         CHECK(x.slot == r.outcome.l2_slots[i].place.slot);
         CHECK(x.feeds == 4);
+        CHECK(x.copy == 0);
         CHECK(rec.tiles[x.tile].operand == "A");
+    }
+    std::size_t operand = 0, result = 0;
+    for (std::size_t i = 16; i < rec.l2_residency.size(); ++i) {
+        const L2Residency& x = rec.l2_residency[i];
+        if (x.copy == L2Residency::kOperandCopy) {
+            ++operand;
+            CHECK(x.feeds == 1);
+            CHECK(rec.tiles[x.tile].operand == "B");
+        } else {
+            ++result;
+            CHECK(x.copy == L2Residency::kResult);
+            CHECK(x.feeds == 0);
+            CHECK(rec.tiles[x.tile].operand == "C");
+        }
+    }
+    CHECK(operand == 64);
+    CHECK(result == 16);
+    {   // The copy column round-trips.
+        const std::string dir = scratch("v6-copies");
+        write_tflow(rec, dir);
+        const TileFlowRecord back = read_tflow(dir);
+        REQUIRE(back.l2_residency.size() == rec.l2_residency.size());
+        for (std::size_t i = 0; i < rec.l2_residency.size(); ++i) CHECK(back.l2_residency[i].copy == rec.l2_residency[i].copy);
     }
     // L2 is modelled when the program stages: its capacity is the program's slots.
     const Station& l2 = rec.stations[2];

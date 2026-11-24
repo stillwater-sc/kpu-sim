@@ -127,9 +127,13 @@ Each step is a PR, under #387, with no closing keyword until the last.
      legs in program order. A tile keeps one copy in L2 at a time: a Move waits for its earlier
      copy's L2Release, so the tile-keyed TagCAM stays valid. The records still show stagings only.
    - **3b (the pool done, 2026-11-23):** the `SlotPool` (FREE, OWNED, READY, READING) with faults and
-     the per-cycle invariants (§6), driven by the L2 tag CAM, every slot FREE at the end. Still to do:
-     slot-keyed placed entries, so a tile can hold two copies at once; the records gain the copies at
-     both levels, with a checker rule for a result's slot.
+     the per-cycle invariants (§6), driven by the L2 tag CAM, every slot FREE at the end. **The
+     records (done, 2026-11-24):**
+     - the `.tflow` L2 table carries the copies, with a `copy` kind (operand, result);
+     - TF13 requires an operand copy to be fed once and a result never;
+     - the `.dflow` timed records place them where the level did.
+
+     Still to do: slot-keyed placed entries, so a tile can hold two copies at once.
    - **3c (done, 2026-11-24):** the double-buffering test (§6) on `kpu_soc_2x2`, the RTL-derived
      4×4 tile with the RTL's slot counts (Q2): `tests/program/test_csp_double_buffer.cpp`. As it carries
      over (decided 2026-11-24):

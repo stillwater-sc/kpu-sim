@@ -55,11 +55,13 @@ enum Process : std::uint8_t { PDma, PBm, PStr, PCf };
 
 // `lb` is L-B's record of the run (every step: not cut, not refused), `records` the level's legs,
 // `values` its final values. `pe_rows` x `pe_cols` is the array's edge, when the deployment gives it.
+// `copies_placed`: the level ran the walker's L2 copies in their slots (slot-credits-at-lca.md §4):
+// L-CA does, and L-T1 on one compute tile; false records them unplaced, as L-T1 ran them on more.
 inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::string& level,
                                      const std::vector<csp::TransactionalInterpreter::Record>& records,
                                      const TileProgram& values, std::uint32_t pe_rows = 0, std::uint32_t pe_cols = 0,
                                      const std::vector<timing::CspDriver::Result::L2Booking>* bookings = nullptr,
-                                     const timing::L2Banks::Geometry* l2g = nullptr) {
+                                     const timing::L2Banks::Geometry* l2g = nullptr, bool copies_placed = true) {
     using DFR = DomainFlowRecord;
     using K = csp::Action::Kind;
     if (lb.cut) throw RecordError("record: a timed record needs every step; L-B's was cut at --dflow-limit");
@@ -206,10 +208,9 @@ inline DomainFlowRecord timed_record(const DomainFlowRecord& lb, const std::stri
         }
         const std::uint64_t slot = (st.flags & DFR::kHasPlace) ? std::uint64_t(st.slot) : kNone64;
         // A staged copy or a partial: the step's own, whatever address a banked L2 gives it. A copy
-        // the walker places (an unstaged operand's, a result's) is recorded as unplaced at both timed
-        // levels, though both execute its slot (slot-credits-at-lca.md §4, steps 2-3): the record
-        // gains the copies, and its checker a rule for a result's slot, with step 3's SlotPool.
-        const bool copy = (st.flags & DFR::kCopy) != 0;
+        // the walker places (an unstaged operand's, a result's) is recorded in its slot where the
+        // level ran it there (copies_placed), and as unplaced where it did not.
+        const bool copy = (st.flags & DFR::kCopy) != 0 && !copies_placed;
         const bool staged = (st.flags & DFR::kHasL2) != 0 && !copy;
         std::uint64_t l2 = staged ? std::uint64_t(st.l2_slot) : kNone64;
         // A banked L2 (#401): the transfer's booking gives its L2 address, the first row it took.

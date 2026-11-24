@@ -138,7 +138,8 @@ emit (with identities), typed element values, operand domains, expected values a
     E2 identities             no two events share a key (kind, process, tile, layers, their
                               addresses except L2's and the accumulator's, which are placement,
                               not identity; the position's program line and loop indices, row,
-                              beat), and none shares (kind, action, row, beat)
+                              beat; and an L2 credit's releasing action, since one statement may
+                              hold two copies of a tile), and none shares (kind, action, row, beat)
     E3 progress               a row event (BM_ROW, STR_ROW, DRAIN_ROW) is a child of a transaction
                               of its kind, of the same tile and action, its row inside the tile, and
                               (timed) inside its parent's [cycle, end]; only row events have rows
@@ -1389,6 +1390,11 @@ def check_v6(m, T, bad):
         key = (E["kind"][e], E["process"][e], E["tile"][e], E["src"][e], place(E["src"][e], E["src_addr"][e]), E["dst"][e],
                place(E["dst"][e], E["dst_addr"][e]), line_of(E["where"][e]), loops_of(E["where"][e]), E["row"][e],
                E["beat"][e])
+        # An L2 slot's credit is its copy's: a call that writes the tile it reads (getrf A[k,k] ->
+        # A[k,k]) holds two copies of one tile at one position, the operand's and the result's, and
+        # their credits are told apart by the action that releases each (#387).
+        if E["kind"][e] == EV_CREDIT and E["src"][e] == L2:
+            key += (E["action"][e],)
         if key in keys:
             bad("E2", f"events {keys[key]} and {e} ({EVENT_KINDS[E['kind'][e]]}) share an identity")
         keys.setdefault(key, e)

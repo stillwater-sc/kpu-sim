@@ -109,9 +109,15 @@ class L2AccViews(unittest.TestCase):
         partial = [i for i in range(n) if l2["partial"][i]]
         partials = len(partial)
         self.assertGreater(partials, 0, "the fixture has no partial")
+        # The walker's copies (#387's optional `copy` column: 1 an operand's, 2 a result's) are
+        # counted apart from the program's stagings.
+        copy = l2.get("copy") or [0] * n
+        staged = sum(1 for i in range(n) if not l2["partial"][i] and copy[i] == 0)
+        operand = sum(1 for i in range(n) if copy[i] == 1)
         page, errors = self.open(pack("tileflow", TFLOW, self.tmp / "tf.html"))
         summary = page.inner_text("#summary")
-        self.assertIn(f"{n - partials} staged cop", summary)
+        self.assertIn(f"{staged} staged cop", summary)
+        self.assertIn(f"{operand} operand cop", summary)
         self.assertIn(f"{partials} accumulator partial", summary)
         chains = rec["chain_rows"]
         self.assertRegex(summary, rf"fabric chains\s+{chains:,}")

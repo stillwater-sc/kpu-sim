@@ -127,23 +127,30 @@ TEST_CASE("Bank rows: a banked L-CA record has L2 by rows, and its transfers' ro
     CHECK(back.events.size() == r.events.size());
 }
 
-TEST_CASE("Bank rows: a banked record keeps an unstaged feed's credit", "[program][record][timed][banks]") {
-    // An unstaged copy's L2 rows are free once it is fed: its Feed returns the L2 credit. A banked
-    // L2 gives every transfer an address (its first row), so being staged is the step's own flag,
-    // not the address: the banked record has as many of these credits as the slotted one.
+TEST_CASE("Bank rows: a banked record keeps every L2 credit", "[program][record][timed][banks]") {
+    // An L2 slot's credit returns when its copy is done with: at the L2Release of a copy the level
+    // placed (a staging, and since #387 every copy the walker places), at the Feed of one it did
+    // not. A banked L2 gives every transfer an address (its first row), so which of the two it is
+    // is the step's own flag, not the address: the banked record has as many credits as the slotted
+    // one, and both name the same steps.
     const Run x = run();
     const auto banked = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values, 0, 0, &x.lca.l2_bookings,
                                              &*x.lca.l2_geometry);
     const auto slotted = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values);
-    auto feed_credits = [](const DomainFlowRecord& r) {
+    auto l2_credits = [](const DomainFlowRecord& r, K at) {
         std::size_t n = 0;
         for (const auto& e : r.events)
-            n += e.kind == ev::Credit && e.src == ev::L2 && e.process == ev::PStr &&
-                 static_cast<K>(r.steps.at(e.action).kind) == K::Feed;
+            n += e.kind == ev::Credit && e.src == ev::L2 && static_cast<K>(r.steps.at(e.action).kind) == at;
         return n;
     };
-    CHECK(feed_credits(slotted) > 0);
-    CHECK(feed_credits(banked) == feed_credits(slotted));
+    CHECK(l2_credits(slotted, K::L2Release) > 0);
+    CHECK(l2_credits(slotted, K::Feed) == 0);       // L-CA places every copy
+    CHECK(l2_credits(banked, K::L2Release) == l2_credits(slotted, K::L2Release));
+    CHECK(l2_credits(banked, K::Feed) == l2_credits(slotted, K::Feed));
+    // Recorded unplaced (as L-T1 runs copies on more than one compute tile), a copy's credit is its
+    // Feed's again.
+    const auto unplaced = record::timed_record(x.lb, "L-CA", x.lca.records, x.lca.values, 0, 0, nullptr, nullptr, false);
+    CHECK(l2_credits(unplaced, K::Feed) > 0);
 }
 
 TEST_CASE("Bank rows: a feed whose rows waited for their bank is the bubble's cause", "[program][csp][bubbles][banks]") {

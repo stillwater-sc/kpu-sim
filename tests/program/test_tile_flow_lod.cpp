@@ -56,6 +56,12 @@ std::vector<std::vector<std::uint32_t>> brute(const TileFlowRecord& rec, const L
                     if (rec.movers[m].name == to_string(static_cast<Mover>(x.mover)))
                         ++at[rec.stations.size() + m][c];
         at[rec.station(rec.device + "/l3[*]")][c] += static_cast<std::uint32_t>(rec.foreign_slots);
+        // Version 6: the L2 station's row counts every L2 hold -- stagings, partials and the
+        // walker's copies (#387) -- as tile_flow_lod.cpp's does.
+        if (rec.l2_slots > 0)
+            for (std::size_t s = 0; s < rec.stations.size(); ++s)
+                if (rec.stations[s].kind == "l2")
+                    for (const L2Residency& x : rec.l2_residency) at[s][c] += x.t0 <= c && c < x.t1;
         // Version 5: a slot row counts the residencies placed in that slot. Version 6: an L2 slot row
         // the staged copies in it, and a compute tile's in and out rows its chains' streams.
         for (std::size_t r = rec.stations.size() + rec.movers.size(); r < lod.rows.size(); ++r) {
@@ -178,9 +184,12 @@ TEST_CASE("the pyramid is written with the bundle and reads back unchanged", "[p
         CHECK(got.levels[i].peak == want.levels[i].peak);
         CHECK(got.levels[i].starts == want.levels[i].starts);
     }
-    // Rows that the level does not model say so.
-    for (const LodRow& r : got.rows)
-        if (r.kind == "l2" || r.kind == "l1") CHECK_FALSE(r.modelled);
+    // Rows that the level does not model say so: L1. L2 is modelled, since L-T1 executes the
+    // walker's copies in their L2 slots on one compute tile (#387).
+    for (const LodRow& r : got.rows) {
+        if (r.kind == "l1") CHECK_FALSE(r.modelled);
+        if (r.kind == "l2") CHECK(r.modelled);
+    }
 }
 
 TEST_CASE("a hostile pyramid file is refused, not allocated", "[program][record][lod]") {

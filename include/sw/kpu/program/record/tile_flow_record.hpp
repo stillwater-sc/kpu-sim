@@ -65,6 +65,8 @@
 //   compute.bin        columns op:u32 station:u32 t0:f64 t1:f64
 //   l2_residency.bin   (version 6) columns tile:u32 cf:u32 slot:u32 t0:f64 t1:f64 feeds:u32
 //                      optional (#455): partial:u8 merges:u32, an L2 accumulator's partial; absent: 0
+//                      optional (#387): copy:u8 (1 an operand's copy for its call, 2 a result's slot;
+//                      absent or 0: the program's staging or partial)
 //   chain.bin          (version 6) columns tile:u32 station:u32 rows:u32 cols:u32 calls:u32
 //                      in0:f64 front:f64 in1:f64 last:f64 out1:f64
 //                      optional (#395): dataflow:u8 (1 os, 2 ws, 3 is; absent: os) preload:u32 streamed:u32
@@ -130,8 +132,12 @@ struct Residency {
     std::uint32_t l3_tile = kNoSlot, slot = kNoSlot, bank = kNoSlot;
 };
 
-// A staged copy's L2 slot (version 6): held from its stage Move's credit to its L2Release.
+// An L2 slot's hold (version 6), from its credit to its L2Release: a staged copy, an L2
+// accumulator's partial, or a copy the walker places (slot-credits-at-lca.md: copy).
 struct L2Residency {
+    // What holds it, besides the program's stagings and partials (copy = 0).
+    static constexpr std::uint8_t kOperandCopy = 1;   // an operand's copy for its call: one Feed
+    static constexpr std::uint8_t kResult = 2;        // a result's slot: drained into, written back, never fed
     std::uint32_t tile = 0;
     std::uint32_t cf = 0, slot = 0;    // the L2 address: the compute tile's L2, and the slot in it
     Cycle t0 = 0, t1 = 0;
@@ -140,6 +146,7 @@ struct L2Residency {
     // (merges, the first included), written back once, never fed.
     std::uint8_t partial = 0;
     std::uint32_t merges = 0;
+    std::uint8_t copy = 0;
 };
 
 // An accumulator's gemm chain on the systolic array (version 6): L-T1's phases, uncalibrated.

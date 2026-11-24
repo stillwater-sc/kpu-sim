@@ -720,10 +720,12 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                 const auto dv = spec.device_view(0);
                 // L-CA's banked L2 (#401): its transfers' booked rows, as the record's row events.
                 const bool rows = lvl == ExecutionLevel::CycleAccurate && o.l2_geometry.has_value();
+                // The walker's L2 copies run in their slots at L-CA, and at L-T1 on one compute tile.
+                const bool copies_placed = lvl == ExecutionLevel::CycleAccurate || o.compute_tiles <= 1;
                 record::DomainFlowRecord rec = record::timed_record(
                     *lb_record, name, o.records, o.values, static_cast<std::uint32_t>(dv.pe_rows),
                     static_cast<std::uint32_t>(dv.pe_cols), rows ? &o.l2_bookings : nullptr,
-                    rows ? &*o.l2_geometry : nullptr);
+                    rows ? &*o.l2_geometry : nullptr, copies_placed);
                 rec.run_id = run_ids[li];
                 record::write_dflow(rec, path_);
                 std::cout << "wrote  " << path_ << "  (" << rec.events.size() << " events in " << rec.cycles << " "

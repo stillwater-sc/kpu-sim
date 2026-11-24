@@ -74,6 +74,23 @@ class TflowCheckV6SelfTest(unittest.TestCase):
         self.b.set("l2_residency", "feeds", 0, 0)
         self.assertFails("TF13")
 
+    def kind_row(self, kind):
+        """The first L2 row the walker placed as `kind` (#387's copy column: 1 operand, 2 result)."""
+        if "copy" not in {c["name"] for c in self.b.manifest["tables"]["l2_residency"]["columns"]}:
+            self.skipTest("the bundle has no copy column")
+        for i in range(self.rows("l2_residency")):
+            if self.b.get("l2_residency", "copy", i) == kind:
+                return i
+        self.skipTest(f"the bundle has no L2 row of kind {kind}")
+
+    def test_tf13_a_result_is_never_fed(self):
+        self.b.set("l2_residency", "feeds", self.kind_row(2), 1)
+        self.assertFails("TF13")
+
+    def test_tf13_an_operand_copy_is_fed_once(self):
+        self.b.set("l2_residency", "feeds", self.kind_row(1), 2)
+        self.assertFails("TF13")
+
     # -- TF14: the fabric's phases -------------------------------------------------
     def test_tf14_front_off_the_skew(self):
         self.b.set("chain", "front", 0, self.b.get("chain", "front", 0) + 1)

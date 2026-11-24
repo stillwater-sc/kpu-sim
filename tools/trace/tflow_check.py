@@ -43,12 +43,14 @@ Invariants:
                         inside its L3's capacity, and its bank is slot % l3_banks; the residencies
                         placed in one slot of one L3 never overlap in time (a zero-length one
                         occupies no time)
-    TF13 one copy per L2 slot (version 6: the program stages) every staged copy is in one of the
+    TF13 one copy per L2 slot (version 6: L2 holds anything) every staged copy is in one of the
                         program's l2_slots, held [t0, t1) inside the run and fed at least once; the
                         copies placed in one slot of one compute tile's L2 never overlap in time,
                         and no more than l2_slots are held at once. An L2 accumulator's partial
                         (#455; the optional columns partial and merges) shares the slots, and is
-                        merged into at least once and never fed instead
+                        merged into at least once and never fed instead; a copy the walker
+                        places (#387; the optional column copy) is fed exactly once if it is an
+                        operand's (1) and never if it is a result's slot (2)
     TF14 the fabric's phases (version 6) each chain runs on a compute tile with PEs and calls;
                         a weight- or input-stationary chain (#395; the optional columns dataflow,
                         preload, streamed) follows PRELOAD R, S rows streamed and its W columns:
@@ -142,7 +144,7 @@ def _named(rows, what):
 
 
 # Optional columns a later writer added (#455): checked when present, absent from older records.
-OPTIONAL = {"l2_residency": {"partial": "u8", "merges": "u32"},
+OPTIONAL = {"l2_residency": {"partial": "u8", "merges": "u32", "copy": "u8"},
             "chain": {"dataflow": "u8", "preload": "u32", "streamed": "u32"}}
 
 
@@ -514,6 +516,7 @@ def check(rec):
         cap = m["l2_slots"]
         part = l2r.get("partial") or [0] * nl2          # #455; absent from older records, which had none
         merges = l2r.get("merges") or [0] * nl2
+        copy = l2r.get("copy") or [0] * nl2             # #387: 1 an operand's copy, 2 a result; absent: none
         by_slot, ev = {}, []
         for i in range(nl2):
             who = f"{tile_name(l2r['tile'][i])}" if l2r["tile"][i] < len(tiles) else f"tile {l2r['tile'][i]}"
@@ -529,6 +532,14 @@ def check(rec):
                                    f"is merged into, never fed")
                 if merges[i] < 1:
                     r.fail("TF13", f"{who}'s partial in L2 slot {slot} is never merged into")
+            elif copy[i] == 2:
+                if l2r["feeds"][i]:
+                    r.fail("TF13", f"{who}'s result in L2 slot {slot} is fed {l2r['feeds'][i]} times; a result "
+                                   f"is drained into its slot and written back, never fed")
+            elif copy[i] == 1:
+                if l2r["feeds"][i] != 1:
+                    r.fail("TF13", f"{who}'s copy in L2 slot {slot} is fed {l2r['feeds'][i]} times; an operand's "
+                                   f"copy is fed once, by its call")
             elif l2r["feeds"][i] < 1:
                 r.fail("TF13", f"{who} is staged in L2 slot {slot} and never fed")
             if t1 > t0:

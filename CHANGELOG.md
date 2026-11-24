@@ -216,6 +216,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The records show the walker's L2 copies** (#387; `docs/plans/slot-credits-at-lca.md` §4). Both timed levels
+  execute every copy in its L2 slot (#523, #524), and now their records say so.
+  - **`.tflow` (L-T1).** The L2 table gains a row for each copy, with a new optional `copy` column: 1 for an
+    operand's copy for its call (fed once), 2 for a result's slot (drained into, written back, never fed). Older
+    records lack the column and read as 0, the program's stagings and partials. L2 is now modeled whenever
+    anything holds an L2 slot, so a matmul with no staging of its own draws its L2 too.
+  - **`tflow_check.py` TF13.** An operand copy must be fed exactly once, and a result never.
+  - **The viewer.** It tells stagings, partials, operand copies and results apart in its summary, hover text and
+    slot detail.
+  - **`.dflow` timed records.** A copy's credit returns at its L2Release wherever the level placed it (L-CA, and
+    L-T1 on one compute tile; `timed_record`'s `copies_placed`).
+  - **`dflow_check.py` E2.** An L2 credit's identity now includes its releasing action, because a call that
+    writes the tile it reads (LU's `getrf A[k,k] -> A[k,k]`) holds two copies of one tile at one position.
+  - **The viewer smoke test** now embeds the staged matmul's record. The linear run's record grew past `pack.py`'s
+    12 MiB embedding limit (11.9 → 12.6 MB) once its copies were drawn.
+
 - **Every placed L2 slot has a state, checked every cycle** (#387 step 3b; `docs/plans/slot-credits-at-lca.md`
   §3.4, §6).
   - **The `SlotPool`** (`timing/slot_pool.hpp`) keeps each of the program's L2 slots in exactly one state, as the
