@@ -21,7 +21,7 @@
 // its own (ADR 0004 §5). Likewise each staging's L2 slot (`stage ... in l2`), and each copy the
 // walker places in L2 (an operand's for its call, a result's). The example checks that L-T1 and
 // L-CA hold each tile in exactly the slot the walker assigned. L-T1 executes the copies on one
-// compute tile; L-CA runs them unplaced until slot-credits-at-lca.md §4's step 3.
+// compute tile, L-CA on every machine it runs (slot-credits-at-lca.md §4, steps 2 and 3).
 //
 //   program_run_levels [--program <file.csp>] [--deploy <spec.json>] [--placement]
 //
@@ -211,7 +211,10 @@ int main(int argc, char** argv) {
             }
             if (o.level == ExecutionLevel::CycleAccurate) {
                 ok = same("L-CA", "L3", walker_l3, lca_l3) && ok;
-                ok = same("L-CA", "L2", walker_l2, lca_l2) && ok;
+                // L-CA's L2 claims: the stagings and the copies, every slot the walker placed.
+                Residencies all = walker_l2;
+                all.insert(all.end(), walker_copies.begin(), walker_copies.end());
+                ok = same("L-CA", "L2 (stagings and copies)", all, lca_l2) && ok;
             }
         }
     }

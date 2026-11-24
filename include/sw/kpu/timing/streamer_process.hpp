@@ -482,11 +482,16 @@ private:
         // its turn; every later one merges into the entry its first merge put there, and takes
         // no credit (a read-modify-write of the slot it holds).
         const bool accumulate = tile.merge == TileDescriptor::kMergeAccumulate;
-        if (tile.merge != TileDescriptor::kMergeNone) {
+        // A result's Drain (merge None, placed): its call took the slot (decision 1 of
+        // slot-credits-at-lca.md), so it waits for nothing but that claim.
+        const bool result_slot = tile.merge == TileDescriptor::kMergeNone && tile.l2_slot >= 0;
+        if (tile.merge != TileDescriptor::kMergeNone || result_slot) {
             const auto slot = static_cast<uint32_t>(tile.l2_slot);
             const auto held = l2_tag_cam_.match(tile.tile_id);
-            const bool ready = accumulate ? held.has_value() && held->slot_id == slot
-                                          : !held.has_value() && l2_tag_cam_.slot_ready(slot, tile.l2_slot_turn);
+            const bool ready =
+                result_slot ? !held.has_value() && l2_tag_cam_.slot_owner(slot) == std::optional<TileID>(tile.tile_id)
+                : accumulate ? held.has_value() && held->slot_id == slot
+                             : !held.has_value() && l2_tag_cam_.slot_ready(slot, tile.l2_slot_turn);
             if (!ready) {
                 events.push_back(TimingEvent(
                     accumulate ? EventType::STR_STALL_TAG : EventType::STR_STALL_CREDIT,
@@ -504,7 +509,8 @@ private:
         // tiles, which have their own partition when the pool is
         // partitioned, per #89 - a flood of A/B moves can never starve
         // result draining.)
-        if (!accumulate && !l2_credits_.acquire(static_cast<size_t>(tile.tile_id.matrix))) {
+        // A placed drain (a partial's first merge, a result) holds its slot as its credit.
+        if (!accumulate && tile.l2_slot < 0 && !l2_credits_.acquire(static_cast<size_t>(tile.tile_id.matrix))) {
             events.push_back(TimingEvent(
                 EventType::STR_STALL_CREDIT,
                 current_cycle,
@@ -527,6 +533,8 @@ private:
         if (drain_tile.merge != TileDescriptor::kMergeNone) {
             l2_slot = static_cast<uint32_t>(drain_tile.l2_slot);
             if (!accumulate) l2_tag_cam_.claim_slot(l2_slot, drain_tile.tile_id, drain_tile.l2_slot_turn);
+        } else if (drain_tile.l2_slot >= 0) {
+            l2_slot = static_cast<uint32_t>(drain_tile.l2_slot);     // the result's slot, its call's claim
         } else {
             l2_slot = allocate_l2_slot();
         }

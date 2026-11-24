@@ -191,6 +191,14 @@ struct TileDescriptor {
     static constexpr uint8_t kMergeNone = 0, kMergeOverwrite = 1, kMergeAccumulate = 2;
     uint8_t merge = kMergeNone;
 
+    // A result's L2 slot, taken at the call that opens it (docs/plans/slot-credits-at-lca.md,
+    // decision 1): on that Call's compute, the slot and its turn. The compute starts only once the
+    // slot is free at its turn, and claims it; the result's Drain then writes the slot its call
+    // holds (`l2_slot`, merge None), its Writeback reads it `l2_held`, and its L2Release frees it.
+    // -1: the compute opens no result slot.
+    int32_t result_l2_slot = -1;
+    uint32_t result_l2_turn = 0;
+
     // L3 residency decided by a CSP program (docs/plans/csp-language.md step 1c.2): the program
     // releases this LOAD's L3 entry with an explicit Release (schedule_release), so the entry
     // holds one reference that Moves out of L3 do not consume. false = the legacy schedule path:

@@ -242,6 +242,7 @@ public:
         slot_turns_.clear();
         l2_turns_.clear();
         staged_.clear();
+        result_slot_.clear();
 
         Result r;
         const Cycle max = exec_.config().max_cycles;
@@ -370,6 +371,7 @@ private:
     std::size_t l2_ = 0;                                  // the program's L2 slots (`l2 = N`)
     std::map<std::uint32_t, std::uint32_t> l2_turns_;     // L2 slot -> stagings opened in it
     std::set<TileID> staged_;                             // tiles with an open staging
+    std::map<TileID, std::pair<std::uint32_t, std::uint32_t>> result_slot_;   // a result -> its call's (slot, turn)
     std::map<std::string, std::size_t> tagged_tk_;   // an operand other than A, B, C -> its tk tag
     std::uint64_t dram_bytes_ = 0;
     std::uint64_t seq_ = 0;                          // program order of the actions handed over
@@ -443,13 +445,9 @@ private:
                 check_call(*op);
             }
         }
-        // Slice 2's step 1 (slot-credits-at-lca.md §4): L-CA does not yet execute the copies the walker
-        // now places in L2. It runs them unplaced, as before, and a copy's L2Release has nothing to do.
-        if (a.copy && a.kind == Action::Kind::L2Release) {
-            ++pulled_;
-            return true;
-        }
-        a = program::csp::unplaced(a);
+        // Every L2 copy the walker places runs in its slot (slot-credits-at-lca.md §4, step 3): an
+        // operand's copy as a one-Feed staging (Move, Feed, L2Release), a result's in the slot its
+        // opening call takes (Call, Drain, Writeback, L2Release).
         if (keep_events_) handovers_.push_back({pulled_, a.kind, a.tile, exec_.current_cycle()});
         ++pulled_;
         TileDescriptor d = descriptor(a.tile);
@@ -491,9 +489,9 @@ private:
                 exec_.schedule_move(d, d.tile_id.matrix == isa::MatrixID::B && d.tile_id.tk == 0);
                 break;
             case Action::Kind::Feed:
-                if (a.l2) {                     // reads the staged copy, which stays in L2
+                if (a.l2) {                     // reads the copy in its slot, which its L2Release frees
                     d.l2_held = true;
-                    ++staged_feeds_;
+                    if (!a.copy) ++staged_feeds_;   // a staging the program states
                 }
                 if (a.seeds) inits_[a.seeds->to_string()] = d.tile_id;   // an accumulator's init stream
                 exec_.schedule_feed(d);
@@ -521,6 +519,14 @@ private:
                     exec_.schedule_merge(d, overwrite, inputs_.operand(a.tile.operand).acc_type(), std::move(epilogue));
                     break;
                 }
+                if (a.l2) {                     // a result: into the slot its opening call took
+                    const auto rs = result_slot_.find(d.tile_id);
+                    if (rs == result_slot_.end())
+                        throw std::logic_error("CspDriver: " + a.tile.to_string() + "'s Drain has no call that took its slot");
+                    d.l2_slot = static_cast<std::int32_t>(rs->second.first);
+                    d.l2_slot_turn = rs->second.second;
+                    result_slot_.erase(rs);
+                }
                 if (a.context.empty()) { exec_.schedule_drain(d); break; }
                 std::vector<VectorStage> fabric, drain;
                 for (const auto& st : a.context)
@@ -545,6 +551,16 @@ private:
                 break;
             case Action::Kind::Call: {
                 const program::TileCoord& y = op->outputs.at(0);
+                // The call that opens its result's L2 slot takes it, at its turn (decision 1).
+                TileDescriptor result = descriptor(y);
+                if (a.result_l2) {
+                    if (!staged_.insert(result.tile_id).second)
+                        throw std::invalid_argument("CspDriver: " + y.to_string() + " is in L2 twice at once");
+                    const std::uint32_t turn = l2_turns_[a.result_l2->slot]++;
+                    result.result_l2_slot = static_cast<std::int32_t>(a.result_l2->slot);
+                    result.result_l2_turn = turn;
+                    result_slot_[result.tile_id] = {a.result_l2->slot, turn};
+                }
                 if (op->kind == program::TileOpKind::MatMulAccum || op->kind == program::TileOpKind::MatMulMerge) {
                     const bool partial = op->kind == program::TileOpKind::MatMulMerge;
                     ConcurrentTimingExecutor::MatMulComputeSpec spec;
@@ -565,7 +581,7 @@ private:
                         spec.init = in->second;     // the chain's first call starts from its init
                         inits_.erase(in);
                     }
-                    exec_.schedule_matmul_compute(descriptor(y), spec);
+                    exec_.schedule_matmul_compute(result, spec);
                     break;
                 }
                 // The unfused epilogue, in the fabric on what was fed: L0's element functions.
@@ -586,7 +602,7 @@ private:
                         return out;
                     };
                 }
-                exec_.schedule_functional_compute(descriptor(y), spec);
+                exec_.schedule_functional_compute(result, spec);
                 break;
             }
             case Action::Kind::Release:
