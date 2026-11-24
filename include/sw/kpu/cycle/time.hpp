@@ -66,20 +66,24 @@ public:
     [[nodiscard]] Cycle cycle() const { return cycle_; }
     // The time of edge n, in picoseconds (exact to the picosecond below).
     // Edge n at phase + floor(n * num / den), exact (mul_div): never a rounded period accumulated.
-    [[nodiscard]] Picoseconds edge(Cycle n) const { return phase_ + mul_div(n, num_, den_); }
+    [[nodiscard]] Picoseconds edge(Cycle n) const { return add(phase_, mul_div(n, num_, den_)); }
     // The next edge, kept as a whole part and a remainder that advance() steps exactly, so the
     // scheduler's hot path neither multiplies nor divides. Equal to edge(cycle()).
     [[nodiscard]] Picoseconds next_edge() const { return next_; }
     [[nodiscard]] double period_ps() const { return static_cast<double>(num_) / static_cast<double>(den_); }
 
+    // Raises std::overflow_error, leaving the clock as it was, if the next edge is past 2^64 ps
+    // (about 213 days), rather than wrapping to an earlier time.
     void advance() {
-        ++cycle_;
-        next_ += whole_;
-        rem_ += frac_;                      // rem_, frac_ < den_ <= 2^62: no overflow
-        if (rem_ >= den_) {
-            rem_ -= den_;
-            ++next_;
+        std::uint64_t rem = rem_ + frac_;   // rem_, frac_ < den_ <= 2^62: no overflow
+        std::uint64_t next = add(next_, whole_);
+        if (rem >= den_) {
+            rem -= den_;
+            next = add(next, 1);
         }
+        ++cycle_;
+        next_ = next;
+        rem_ = rem;
     }
     void reset() {
         cycle_ = 0;
@@ -88,6 +92,12 @@ public:
     }
 
 private:
+    [[nodiscard]] std::uint64_t add(std::uint64_t a, std::uint64_t b) const {
+        if (a > ~std::uint64_t{0} - b)
+            throw std::overflow_error("cycle::Domain " + name_ + ": an edge past 2^64 ps");
+        return a + b;
+    }
+
     std::string name_;
     std::uint64_t num_, den_;
     Picoseconds phase_;

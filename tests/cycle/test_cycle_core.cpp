@@ -107,6 +107,15 @@ TEST_CASE("Domains: one period, written three ways, has the same edges, and no e
     // (2^64 - 1) * 3 / 4 = 3 * 2^62 - 3/4: a 66-bit product, floored to 3 * 2^62 - 1.
     CHECK(mul_div(~0ULL, 3, 4) == 0xBFFF'FFFF'FFFF'FFFFULL);
     CHECK_THROWS_AS(mul_div(~0ULL, 2, 1), std::overflow_error);
+    // Past 2^64 ps the clock refuses to advance, rather than wrapping to an earlier time (#549's review).
+    Domain big("big", 1ULL << 63);
+    big.advance();
+    CHECK(big.next_edge() == 1ULL << 63);
+    CHECK_THROWS_AS(big.advance(), std::overflow_error);
+    CHECK(big.cycle() == 1);                           // unchanged by the refusal
+    CHECK(big.next_edge() == 1ULL << 63);
+    CHECK_THROWS_AS(big.edge(2), std::overflow_error);
+    CHECK_THROWS_AS(Domain("phased", 1, 1, ~0ULL).edge(1), std::overflow_error);   // the phase's addition
 }
 
 TEST_CASE("Links: latency, credits, and their conservation", "[cycle][core]") {
