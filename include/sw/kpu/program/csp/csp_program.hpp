@@ -253,8 +253,9 @@ struct Action {
     // accumulator's from then on. None on every other action.
     std::optional<TileCoord> seeds;
     // A copy the walker places in L2 as of slice 2 (an unstaged operand's Move and Feed; a result's
-    // Drain, Writeback and L2Release). L-B and L-T1 execute these slots (slice 2's steps 1 and 2);
-    // L-CA sees them through unplaced() until step 3 (docs/plans/slot-credits-at-lca.md §4).
+    // Drain, Writeback and L2Release). Every level executes these slots (docs/plans/
+    // slot-credits-at-lca.md §4, steps 1-3); L-T1 on more than one compute tile sees them through
+    // unplaced() (a level-1 program places every copy in compute tile 0's L2).
     bool copy = false;
     // A Call that opens its result's L2 slot (decision 1 of slot-credits-at-lca.md): a fabric
     // accumulator's first call, or a writing call. The slot is the one its result's Drain writes,
@@ -263,8 +264,9 @@ struct Action {
     std::optional<L2Address> result_l2;
 };
 
-// The action as L-CA executes it until slice 2's step 3: a copy without its L2 slot, and no
-// result slot taken at a call, as every level ran it before the walker placed them.
+// The action without the walker's copies: a copy without its L2 slot, and no result slot taken at
+// a call, as every level ran it before the walker placed them. L-T1 on more than one compute tile
+// runs this, and the printer and the tile-command lowering read it (without_copies).
 inline Action unplaced(const Action& a) {
     Action b = a;
     b.result_l2.reset();

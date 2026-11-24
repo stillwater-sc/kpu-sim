@@ -310,16 +310,16 @@ TEST_CASE("CSP driver: the STREAM runs at L-CA -- the trace's cycles, in a bound
             CHECK(r.peak_held <= w + 1);        // one pull hands over at most one more
             CHECK(r.dram_loads == 32);
             check_c(r.values, ref);
-            // A window is lookahead, and less of it is no faster, as a rule: window 1 is the
-            // slowest, and from 64 up every window is within 3% of the whole program (#462). At
-            // S1's movers (128 and 256 bytes a cycle) lookahead matters more than it did at the
-            // executor's old rates, where the threshold was 16: a window of 16 is ~10% off (10582
-            // of 9659 cycles), 64 is 2.3% under (9436), 256 within 0.1%. Not "never faster": handed
-            // everything at once, the mover runs ahead and holds L2 credits that nearer Moves
-            // need, so a window of 64 is a little faster than no window (#424).
+            // A window is lookahead. Window 1 is the slowest, but more lookahead is NOT "no
+            // slower": the DMA engines issue every Load the window hands them, the hosted LPDDR5
+            // controller grants its engines round-robin, and prefetched Loads (B's next column)
+            // take DRAM time from the ones the next call needs. Measured on this program's ladder
+            // (2x2x2 to 4x4x4 tiles of 32): at 64^3 window 64 is ~13% slower than window 16 (and
+            // ~19% on main before #387 step 3); here window 64 is ~8.9k cycles, 256 ~9.9k and
+            // the whole program ~10.9k. Program-order (oldest-first) DRAM arbitration is a
+            // controller strategy to compare under #516. So only window 1's place is asserted.
             if (w == 1) slowest = r.cycles;
             CHECK(r.cycles <= slowest);
-            if (w >= 64) CHECK(std::abs(double(r.cycles) - double(t.cycles)) <= 0.03 * double(t.cycles));
             std::printf("csp driver, streamed matmul 128^3/32^3 on S1, window %2zu: %llu cycles (trace %llu)\n", w,
                         static_cast<unsigned long long>(r.cycles), static_cast<unsigned long long>(t.cycles));
         }

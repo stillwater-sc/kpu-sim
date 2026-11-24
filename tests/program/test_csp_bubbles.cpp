@@ -207,15 +207,10 @@ TEST_CASE("Bubbles: L-CA's run, read from its protocol events, is the program's 
         const auto lca = driver::csp_run_level(driver::ExecutionLevel::CycleAccurate, ast, &d, in, 256, true);
         REQUIRE_FALSE(lca.skipped);
         CHECK(lca.unmatched_events == 0);
-        // One leg per action, as at L-T1 (a Store has two), kind by kind. L-T1 also times a copy's
-        // L2Release, which L-CA runs unplaced until slice 2's step 3 (slot-credits-at-lca.md §4).
-        const csp::CspProgram prog = lang::compile(ast);
+        // One leg per action, as at L-T1 (a Store has two), kind by kind -- a copy's L2Release
+        // included, now that both levels place every copy (slot-credits-at-lca.md §4).
         std::map<std::pair<std::size_t, int>, std::size_t> a, b;
-        for (const auto& r : lt1.records) {
-            const csp::Action& act = prog.actions.at(r.action);
-            if (act.copy && act.kind == csp::Action::Kind::L2Release) continue;
-            ++a[{r.action, static_cast<int>(r.kind)}];
-        }
+        for (const auto& r : lt1.records) ++a[{r.action, static_cast<int>(r.kind)}];
         for (const auto& r : lca.records) ++b[{r.action, static_cast<int>(r.kind)}];
         CHECK(a == b);
         for (const auto& r : lca.records) {

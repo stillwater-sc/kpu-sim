@@ -206,6 +206,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **L-CA executes every L2 slot the walker places** (#387 step 3a; `docs/plans/slot-credits-at-lca.md` §4). Until
+  now L-CA ran an unstaged operand's copy and a fabric result unplaced, in transient slots outside the program's
+  `l2 = N`.
+  - **Copies and results.** An operand's copy runs as a one-Feed staging: its Move claims the walker's slot at its
+    turn, its Feed reads it, and its L2Release frees it. A result's slot is claimed when the call that opens it
+    starts computing (decision 1); its Drain writes it, its Writeback reads it, and its L2Release frees it.
+  - **A placed transfer's credit is its slot.** It takes nothing from L2's per-matrix count pool, which now serves
+    only unplaced (legacy) transfers. The BlockMover's dedup is off for CSP runs, since every CSP Move is placed;
+    legacy schedules keep it until #266.
+  - **The BlockMover runs a program's legs in program order**: the oldest ready Move, Writeback or Store ejection
+    first, as the RTL's command queue does. Legacy schedules keep Move, then Writeback, then ejection. With a
+    result holding its slot until its Writeback, a Writeback or ejection left behind newer Moves held back the
+    next result's first call.
+  - **Timing.** The program's `l2 = N` now binds at L-CA. Values don't move: every level agrees with L-B, and
+    `examples/program --placement` checks that L-T1 and L-CA execute every slot the walker places. L-CA
+    makespans on `kpu_s1`, main against this change:
+    - `linear_64_t16_relu` 3950 → 3950;
+    - `matmul_48_stage_a` 1673 → 1678;
+    - `matmul_48x48x48_t16` 1638 → 1690;
+    - an int8 64³ matmul 3949 → 4039;
+    - `matmul_32x32x32_t16` 572 → 706. An operand copy's ring slot is the one the previous result holds until its
+      Writeback, so at `l2 = 6` the copy waits for it.
+  - **Debugged on a ladder.** One tile moved once (identical to main), then reuse, then larger. A 16³–64³ ladder in
+    16×16 tiles is consistent across windows.
+  - **Window rule restated.** `test_csp_driver`'s "from window 64 up, within 3% of the whole program" no longer
+    holds. Its cause is DRAM arbitration, not L2: the hosted LPDDR5 controller grants its DMA engines round-robin,
+    so prefetched Loads take DRAM time from the next call's. Main shows the same at 64³ (window 64 is 19% slower
+    than window 16). Program-order DRAM grants are filed under #516, and the test now asserts only that window 1
+    is the slowest.
+  - **Staging now costs slots.** A staged panel holds its slots for the block, so the staging test gives the
+    staged program its panel's slots (`l2 = 11` against 8): 3856 cycles against 3886.
+  - **Records unchanged.** The `.tflow`/`.dflow` records still show only the program's stagings at both levels;
+    they gain the copies with step 3b.
+
 - **L-T1 executes every L2 slot the walker places** (#387 step 2; `docs/plans/slot-credits-at-lca.md` §4).
   Until now L-T1 ran an unstaged operand's copy and a fabric result's slot unplaced.
   - **Copies take their slots.** Each copy's Move waits for its own slot's credit, and its L2Release returns it, as
