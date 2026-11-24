@@ -542,3 +542,27 @@ TEST_CASE("L-CA refuses a Move without its L2 slot (#524's review)", "[csp][plac
     CHECK_THROWS_WITH(sw::kpu::timing::CspDriver(exec, p).run(),
                       Catch::Matchers::ContainsSubstring("Move carries no L2 slot"));
 }
+
+TEST_CASE("L-CA runs a program that declares every L2 slot the machine has (#524's review)",
+          "[csp][placement][lca][l2]") {
+    // Every copy is placed, so no slot need be left for unplaced copies: l2 equal to the L2's
+    // capacity runs, with placed operands and placed results, every slot FREE at the end.
+    const auto cfg = sw::kpu::timing::csp_config_from(s1().device(0));
+    REQUIRE(cfg.has_value());
+    const std::size_t cap = cfg->config.l2_bank_count;
+    REQUIRE(cap >= 3);
+    const std::string text = staged_matmul(false, static_cast<int>(cap));
+    const lang::Program ast = lang::parse(text);
+    CHECK_FALSE(driver::csp_level_supported(ExecutionLevel::CycleAccurate, ast, &s1().device(0)).has_value());
+    const auto ca = run(ExecutionLevel::CycleAccurate, text);
+    REQUIRE_FALSE(ca.skipped);
+    const auto lb = run(ExecutionLevel::Behavioral, text);
+    CHECK(ca.values.operand("C").values == lb.values.operand("C").values);
+    for (const auto& [t, slot] : ca.l2_placement) CHECK(slot < cap);
+    // One more than the machine has is refused, by name.
+    const auto over = driver::csp_level_supported(ExecutionLevel::CycleAccurate,
+                                                  lang::parse(staged_matmul(false, static_cast<int>(cap + 1))),
+                                                  &s1().device(0));
+    REQUIRE(over.has_value());
+    CHECK(over->find("the machine's L2 holds " + std::to_string(cap)) != std::string::npos);
+}

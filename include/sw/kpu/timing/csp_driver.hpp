@@ -382,13 +382,13 @@ private:
     std::map<TileID, std::uint64_t> loads_pulled_;   // each tile's Loads and Inherits, in program order
 
     void check_machine(std::size_t l3, std::size_t l2) {
-        // The program's L2 slots are the L2 CAM's first `l2`; unstaged copies need the rest.
+        // The program's L2 slots are the L2 CAM's first `l2`. Every copy is placed (an unplaced
+        // Move is refused), so the program may use every slot the machine has.
         l2_ = l2;
-        if (l2 >= exec_.l2_tag_cam().capacity())
+        if (l2 > exec_.l2_tag_cam().capacity())
             throw std::invalid_argument("CspDriver: the program stages into " + std::to_string(l2) +
                                         " L2 slots; the machine's L2 holds " +
-                                        std::to_string(exec_.l2_tag_cam().capacity()) +
-                                        " (one at least is left for unstaged copies)");
+                                        std::to_string(exec_.l2_tag_cam().capacity()));
         // csp_level_supported admits an operand other than A, B and C only as a vector or as an
         // accumulator's init; both are tagged.
         for (const auto& name : inputs_.operand_order()) {
