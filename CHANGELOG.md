@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cycle core's trace, state dump, invariant hooks and deadlock detector, step 0c** (#535; epic #532).
+  - **Trace** (`include/sw/kpu/cycle/trace.hpp`). Chrome trace-event JSON for Perfetto, opt-in with
+    `Simulator::attach(Tracer&)`:
+    - each component's state as runs of `busy` and `stall: <cause>` slices on its own track;
+    - each beat as an async slice from its push to its pop, on its link's track;
+    - each link's occupancy as a counter track.
+
+    Times are the domains' edges in picoseconds, so clocks line up. The event count is bounded, and the file
+    records how many were dropped.
+  - **Counters file.** `write_counters_json` writes every domain and every component and link's counts.
+  - **Failures.**
+    - Any exception a component or link raises while clocked or checked, and any failed `add_invariant` hook,
+      stops the run as an `InvariantViolation`. It names the component, link or hook, the domain and the cycle,
+      and carries the state dump (`Simulator::dump()`; `Component::describe()` adds internal state).
+    - The deadlock detector stops a run as a `Deadlock` when nothing has made progress for a window of edges
+      (10 000 by default) while work remains, naming every blocked component and every link's credits. A
+      component that is busy, or held by an outside control, counts as progress, so a long latency is not a
+      deadlock.
+  - **Tests** (`test_cycle_debug`):
+    - a three-node credit cycle is named exactly 20 edges after its last progress;
+    - a ring with room, a 1000-cycle latency and a 1000-cycle hold all run clean;
+    - a lost beat and a failing hook stop with the cycle and the component;
+    - the state dump is checked line by line, and the trace is bounded.
+
+    Two mutations of the detector each fail the tests.
+  - **The demo trace.** `cycle_trace_demo` writes a two-clock demo's trace and counters. `check_trace.py` (CTest
+    `cycle_trace_check`) validates the format and checks the slices against the counters. Perfetto's own trace
+    processor, run by hand, loads the file, and its slices and counters match the counters to the cycle.
+
 - **The cycle core's operational-analysis counters, and its throughput benchmark, step 0b** (#534; epic #532).
   - **Counters** (`include/sw/kpu/cycle/counters.hpp`). Every component and link counts, exactly, over its domain's
     cycles:

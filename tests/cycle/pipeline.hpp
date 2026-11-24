@@ -62,6 +62,9 @@ public:
         next_at_ = now + interval_;
     }
     [[nodiscard]] bool idle() const override { return next_id_ == count_; }
+    [[nodiscard]] std::string describe() const override {
+        return "pushed " + std::to_string(next_id_) + " of " + std::to_string(count_);
+    }
     void reset() override {
         next_id_ = 0;
         next_at_ = 0;
@@ -111,6 +114,13 @@ public:
         else if (accepted || forwarded || !held_.empty()) counters().busy();
     }
     [[nodiscard]] bool idle() const override { return held_.empty(); }
+    [[nodiscard]] std::string describe() const override {
+        std::string s = "holds " + std::to_string(held_.size()) + " of " + std::to_string(depth_);
+        if (!held_.empty())
+            s += ", oldest beat " + std::to_string(held_.front().second.id) + " ready at cycle " +
+                 std::to_string(held_.front().first);
+        return s;
+    }
     void check(Cycle now) const override {
         if (held_.size() > depth_)
             throw std::logic_error(name() + " at cycle " + std::to_string(now) + ": holds more than its depth");
@@ -153,6 +163,7 @@ public:
         next_at_ = now + interval_;
     }
     [[nodiscard]] bool idle() const override { return true; }
+    [[nodiscard]] std::string describe() const override { return "received " + std::to_string(received.size()); }
     void check(Cycle now) const override {
         if (bad_payload_) throw std::logic_error(name() + " at cycle " + std::to_string(now) + ": a beat's bytes are not its own");
         if (!received.empty() && received.back().first + 1 != received.size())

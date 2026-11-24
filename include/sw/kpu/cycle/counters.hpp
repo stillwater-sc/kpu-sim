@@ -86,6 +86,15 @@ struct Counters {
 // cycle stands; none is idle.
 enum class State : std::uint8_t { Idle, Busy, Stalled };
 
+inline const char* to_string(State s) {
+    switch (s) {
+        case State::Idle: return "idle";
+        case State::Busy: return "busy";
+        case State::Stalled: return "stalled";
+    }
+    return "?";
+}
+
 class ComponentCounters {
 public:
     // The component's evaluate() reports its state for this cycle.
@@ -107,8 +116,9 @@ public:
     // A completion of an item the component never held (a source: it creates and sends at once).
     void produce() { ++c_.completions; }
 
-    // The simulator closes every cycle: tally its state and its occupancy.
-    void end_cycle() {
+    // The simulator closes every cycle: tally its state and its occupancy. Returns the state, which
+    // stays readable (last_state(), last_cause()) until the next close.
+    State end_cycle() {
         ++c_.cycles;
         switch (state_) {
             case State::Busy: ++c_.busy; break;
@@ -117,19 +127,26 @@ public:
         }
         c_.occupancy_integral += c_.occupancy;
         if (c_.occupancy > c_.max_occupancy) c_.max_occupancy = c_.occupancy;
+        last_state_ = state_;
+        last_cause_ = cause_;
         state_ = State::Idle;
+        return last_state_;
     }
+    [[nodiscard]] State last_state() const { return last_state_; }
+    [[nodiscard]] Stall last_cause() const { return last_cause_; }
 
     [[nodiscard]] const Counters& counts() const { return c_; }
     void reset() {
         c_.reset();
-        state_ = State::Idle;
+        state_ = last_state_ = State::Idle;
     }
 
 private:
     Counters c_;
     State state_ = State::Idle;
     Stall cause_ = Stall::NoCredit;
+    State last_state_ = State::Idle;
+    Stall last_cause_ = Stall::NoCredit;
 };
 
 }  // namespace sw::kpu::cycle
