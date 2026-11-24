@@ -30,6 +30,9 @@ def run(trace, counters):
 
 class CheckTrace(unittest.TestCase):
     def setUp(self):
+        # Collected by a plain pytest run, which passes no paths: skip rather than error.
+        if TRACE is None or COUNTERS is None:
+            self.skipTest("needs the trace and counters paths: run through CTest, or pass them on the command line")
         with open(TRACE) as f:
             self.trace = json.load(f)
         with open(COUNTERS) as f:
