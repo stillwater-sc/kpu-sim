@@ -11,6 +11,8 @@
 #include <sw/kpu/timing/tile_descriptor.hpp>
 
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -380,6 +382,9 @@ public:
     /// program's placed slots, so an unplaced copy never carries a placed slot's number.
     [[nodiscard]] uint32_t transient_slot(uint32_t& next) const {
         const uint32_t span = static_cast<uint32_t>(capacity_) - placed_slots_;
+        if (span == 0)
+            throw std::logic_error("TagCAM: an unplaced transfer needs a slot outside the program's " +
+                                   std::to_string(placed_slots_) + ", and the buffer has none left");
         return placed_slots_ + (next++ % span);
     }
 

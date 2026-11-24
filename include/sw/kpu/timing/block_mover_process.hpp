@@ -16,6 +16,7 @@
 #include <sw/kpu/timing/work_queue.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <deque>
 #include <functional>
@@ -224,15 +225,23 @@ public:
 
         // Step 3: If idle, try to start new work
         if (!in_flight_.has_value()) {
-            // Priority: moves over writebacks (keep pipeline fed)
+            // Priority: moves over writebacks over ejections (keep the pipeline fed) for a legacy
+            // schedule. A program's legs go in program order instead, the oldest ready one
+            // first, as the RTL's BlockMover runs its commands: a result holds its L2 slot until
+            // its Writeback and L2Release (slot-credits-at-lca.md §4, step 3), and a store holds
+            // its L3 slot until its ejection, so Moves run ahead of them hold the program's
+            // slots behind them.
             const Cycle stalls_before = stall_cycles_tag_ + stall_cycles_credit_;
-            if (!try_start_move(current_cycle, events) &&
-                !try_start_writeback(current_cycle, events)) {
-                // An ejection's stall counts only in a tick no other leg already stalled in:
-                // a mover stalls at most one cycle per cycle.
-                try_start_eject(current_cycle, events,
-                                stall_cycles_tag_ + stall_cycles_credit_ == stalls_before);
+            const Order order = leg_order();
+            bool started = false;
+            for (const Leg leg : order.legs) {
+                if (leg == Leg::Move) started = try_start_move(current_cycle, events);
+                else if (leg == Leg::Writeback) started = try_start_writeback(current_cycle, events);
+                else started = try_start_eject(current_cycle, events, stall_cycles_tag_ + stall_cycles_credit_ == stalls_before);
+                if (started) break;
             }
+            // (An ejection's stall counts only in a tick no other leg already stalled in: a mover
+            // stalls at most one cycle per cycle.)
         }
 
         // Direct active-cycle measurement (follow-on 1b): this cycle counts as
@@ -469,15 +478,18 @@ private:
                 // Move complete: tile arrived at L2. The ref count is seeded
                 // with the tile's consumer count (broadcast 1:1:k, #100);
                 // the ordinary pipeline has consumer_count = 1.
-                if (in_flight_->tile.ordered && in_flight_->tile.l2_slot < 0)
-                    // A CSP Move lands its own copy, with its own credit, even when an earlier
-                    // copy of the tile is still in L2 (#424).
-                    l2_tag_cam_.insert_copy(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle);
-                else
-                    l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id,
-                                       current_cycle,
-                                       static_cast<uint32_t>(
-                                           in_flight_->tile.consumer_count));
+                // A tile that cannot land is an error, never dropped: its consumers would stall and
+                // its credit would never return (#524's review).
+                const bool landed =
+                    in_flight_->tile.ordered && in_flight_->tile.l2_slot < 0
+                        // A CSP Move lands its own copy, with its own credit, even when an earlier
+                        // copy of the tile is still in L2 (#424).
+                        ? l2_tag_cam_.insert_copy(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle)
+                        : l2_tag_cam_.insert(in_flight_->tile.tile_id, in_flight_->slot_id, current_cycle,
+                                             static_cast<uint32_t>(in_flight_->tile.consumer_count));
+                if (!landed)
+                    throw std::logic_error("BlockMover: " + in_flight_->tile.tile_id.to_string() +
+                                           " moved, but L2's tag CAM is full: it cannot land");
                 // Only release L3 credit if tile was fully removed (ref_count reached 0). A
                 // program-held entry is not the Move's to consume: its Release retires it.
                 const auto l3_source = l3_tag_cam_.match(in_flight_->tile.tile_id);   // the slot it frees
@@ -727,8 +739,9 @@ private:
         for (size_t i = 0; i < move_queue_.size(); ++i) {
             const auto& tile = move_queue_.at(i);
             if (!released_before(tile)) continue;    // the copy in L3 is an earlier residency's
-            if (behind_staging(i)) continue;          // after the tile's staging Move, in program order
             auto l3_entry = l3_tag_cam_.match(tile.tile_id);
+            if (!l3_entry.has_value()) continue;      // not in L3 yet (checked first: behind_staging scans)
+            if (behind_staging(i)) continue;          // after the tile's staging Move, in program order
             // A staging Move (#399) takes the L2 slot the program placed the copy in, at its
             // turn, once the tile's earlier copy has left L2. Skipped while it waits, so a later
             // Move is not held behind it.
@@ -791,8 +804,12 @@ private:
         // before Streamers.
         const size_t move_part =
             static_cast<size_t>(move_queue_.at(found_index).tile_id.matrix);
-        if (l2_credits_.available(move_part) <= config_.l2_credit_reserve ||
-            !l2_credits_.acquire(move_part)) {
+        // A placed Move's credit is its slot (claimed below, at its turn): the program's L2 slots
+        // bound what L2 holds, so it takes nothing from the count pool, which serves unplaced
+        // transfers (slot-credits-at-lca.md §4, step 3).
+        const bool placed = move_queue_.at(found_index).l2_slot >= 0;
+        if (!placed && (l2_credits_.available(move_part) <= config_.l2_credit_reserve ||
+                        !l2_credits_.acquire(move_part))) {
             const auto& tile = move_queue_.at(found_index);
             events.push_back(TimingEvent(
                 EventType::BM_STALL_CREDIT,
@@ -865,6 +882,49 @@ private:
      * Work-conserving: Scan queue for any tile ready in L2, not just the head.
      * Priority aging: When enabled, prefers oldest ready tile to prevent starvation.
      */
+    // The order the idle mover tries its legs in. A legacy schedule: Move, Writeback, Eject.
+    // A program (every queued leg ordered): by the program position of the oldest ready
+    // Writeback, the oldest ready ejection, and the oldest ready Move.
+    struct Order { std::array<Leg, 3> legs; };
+    [[nodiscard]] Order leg_order() const {
+        constexpr uint64_t none = std::numeric_limits<uint64_t>::max();
+        Order legacy{{Leg::Move, Leg::Writeback, Leg::Eject}};
+        uint64_t mv = none, wb = none, ej = none;
+        for (size_t i = 0; i < move_queue_.size(); ++i) {
+            const auto& m = move_queue_.at(i);
+            if (!m.ordered) return legacy;
+            if (m.program_seq >= mv) continue;
+            // Ready: the conditions try_start_move scans for (its L2 credit aside, which a
+            // placed Move does not take).
+            if (!released_before(m) || !l3_tag_cam_.match(m.tile_id) || behind_staging(i)) continue;
+            if (m.l2_slot >= 0 && (l2_tag_cam_.lookup(m.tile_id) ||
+                                   !l2_tag_cam_.slot_ready(static_cast<uint32_t>(m.l2_slot), m.l2_slot_turn)))
+                continue;
+            mv = m.program_seq;
+        }
+        for (size_t i = 0; i < writeback_queue_.size(); ++i) {
+            const auto& tile = writeback_queue_.at(i);
+            if (!tile.ordered) return legacy;
+            if (tile.program_seq >= wb) continue;
+            if (writeback_guard_ && writeback_guard_(tile)) continue;
+            if (!l2_tag_cam_.match(tile.tile_id)) continue;
+            if (!tile.l3_held && tile.l3_slot >= 0 &&
+                !l3_tag_cam_.slot_ready(static_cast<uint32_t>(tile.l3_slot), tile.l3_slot_turn))
+                continue;
+            wb = tile.program_seq;
+        }
+        for (const Eject& e : eject_queue_) {
+            if (!e.tile.ordered) return legacy;
+            if (e.tile.program_seq >= ej) continue;
+            if (!written_before(e.tile) || !l3_tag_cam_.match(e.tile.tile_id)) continue;
+            if (e.target->held() >= e.target->capacity()) continue;
+            ej = e.tile.program_seq;
+        }
+        std::array<std::pair<uint64_t, Leg>, 3> by{{{mv, Leg::Move}, {wb, Leg::Writeback}, {ej, Leg::Eject}}};
+        std::stable_sort(by.begin(), by.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+        return Order{{by[0].second, by[1].second, by[2].second}};
+    }
+
     bool try_start_writeback(Cycle current_cycle, std::vector<TimingEvent>& events) {
         if (writeback_queue_.empty()) return false;
 

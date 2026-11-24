@@ -1346,7 +1346,8 @@ inline void ConcurrentTimingExecutor::retire_l2_releases() {
         TimingEvent e(EventType::CREDIT_RELEASED, current_cycle_, 0, tile, "L2:release");
         e.set_slot(entry->slot_id);
         e.detail = "l2";                                // the pool it frees (#402)
-        if (l2_tag_cam_.invalidate(tile)) l2_credits_.release(static_cast<size_t>(tile.matrix));
+        // The slot's claim ends with its entry; a placed copy took no count credit, so none returns.
+        (void)l2_tag_cam_.invalidate(tile);
         apply_payload_event(e);
         events_.push_back(e);
         it = pending_l2_releases_.erase(it);
@@ -1880,6 +1881,13 @@ inline bool ConcurrentTimingExecutor::step() {
                         ? pc.dependencies.size() / 2 : 1;
                     pc.latency = config_.compute_latency +
                         static_cast<Cycle>(k_slices - 1) * config_.compute_cycles_per_k_slice;
+                }
+                // A call that opens its result's L2 slot (decision 1 of slot-credits-at-lca.md)
+                // starts once that slot is free at its turn, and claims it: the result has a home
+                // before any compute.
+                if (pc.tile.result_l2_slot >= 0) {
+                    const auto slot = static_cast<uint32_t>(pc.tile.result_l2_slot);
+                    if (!l2_tag_cam_.claim_slot(slot, pc.tile.tile_id, pc.tile.result_l2_turn)) continue;
                 }
                 pc.started = true;
                 pc.cf_tile = cf;
