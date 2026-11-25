@@ -248,6 +248,12 @@ if(KPU_BUILD_TESTS)
             COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/check_run_dir.py ${_blocked} --status error)
         set_tests_properties(kpu_run_summary_blocked_says_error PROPERTIES LABELS "program;driver;cycle;memory"
                              FIXTURES_REQUIRED summary_blocked_run)
+        # mflow_check.py's M7 (waits) and M8 (the record against the run's own counts), on the run
+        # directory's cycle-core bundle.
+        add_test(NAME kpu_run_mflow_check_run_selftest
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_mflow_check_run.py ${_run_dir})
+        set_tests_properties(kpu_run_mflow_check_run_selftest PROPERTIES LABELS "program;driver;cycle;memory;mflow"
+                             FIXTURES_REQUIRED memory_s1_run_dir)
         add_test(NAME kpu_run_run_dir_check_selftest
             COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir})
         set_tests_properties(kpu_run_run_dir_check kpu_run_run_dir_mflow_check kpu_run_run_dir_trace_check
