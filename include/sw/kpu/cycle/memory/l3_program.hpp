@@ -11,8 +11,14 @@
 //            two pushes, never a read of L3 by the engine (credits up, data down).
 //   Release  the slot's tile is no longer needed: the L3 tile frees the slot and returns its credit
 //            to the DMA engine, for the next Load into it.
-// Both components execute the same list, each its own part (the engine: Loads and Stores; the
-// tile: Stores and Releases), in the list's order. An action's index is its ticket: a Store's
+//   Fill     `data` into an L3 slot, with no DRAM: a tile that arrives in L3 from elsewhere. In
+//            Phase 1 it stands in for what the compute subsystem writes back (a program's
+//            Writeback, with L-B's result as the data) and for a tile that is resident from the
+//            start (an Inherit). The DMA engine executes it as it does a Load -- under the slot's
+//            credit, one beat at a time over the L3 link -- so it is timed as a Load without its
+//            DRAM reads.
+// Both components execute the same list, each its own part (the engine: Loads, Fills and
+// Stores; the tile: Stores and Releases), in the list's order. An action's index is its ticket: a Store's
 // beats carry it from the tile to the engine, which matches them to its own Store.
 //
 // THE LINKS (the engine and the tile in one domain, over a direct link: no NoC yet):
@@ -36,28 +42,34 @@ namespace sw::kpu::cycle {
 inline constexpr std::uint32_t kL3BeatBytes = 64;
 
 struct L3Action {
-    enum class Kind : std::uint8_t { Load, Store, Release };
+    enum class Kind : std::uint8_t { Load, Store, Release, Fill };
     Kind kind = Kind::Load;
     std::uint32_t slot = 0;
     std::uint64_t dram_address = 0;   // Load and Store
-    std::uint32_t bytes = 0;          // Load and Store: the tile's size
+    std::uint32_t bytes = 0;          // Load, Store and Fill: the tile's size
+    std::vector<std::uint8_t> data;   // Fill: the tile's bytes, `bytes` of them
 };
 
 using L3Program = std::vector<L3Action>;
 
 inline L3Action l3_load(std::uint32_t slot, std::uint64_t dram_address, std::uint32_t bytes) {
-    return {L3Action::Kind::Load, slot, dram_address, bytes};
+    return {L3Action::Kind::Load, slot, dram_address, bytes, {}};
 }
 inline L3Action l3_store(std::uint32_t slot, std::uint64_t dram_address, std::uint32_t bytes) {
-    return {L3Action::Kind::Store, slot, dram_address, bytes};
+    return {L3Action::Kind::Store, slot, dram_address, bytes, {}};
 }
-inline L3Action l3_release(std::uint32_t slot) { return {L3Action::Kind::Release, slot, 0, 0}; }
+inline L3Action l3_release(std::uint32_t slot) { return {L3Action::Kind::Release, slot, 0, 0, {}}; }
+inline L3Action l3_fill(std::uint32_t slot, std::vector<std::uint8_t> data) {
+    const auto n = static_cast<std::uint32_t>(data.size());
+    return {L3Action::Kind::Fill, slot, 0, n, std::move(data)};
+}
 
 inline const char* to_string(L3Action::Kind k) {
     switch (k) {
         case L3Action::Kind::Load: return "Load";
         case L3Action::Kind::Store: return "Store";
         case L3Action::Kind::Release: return "Release";
+        case L3Action::Kind::Fill: return "Fill";
     }
     return "?";
 }
@@ -79,6 +91,12 @@ inline void validate_l3_program(const L3Program& p, std::uint32_t slots, std::ui
         if (a.bytes > slot_bytes)
             throw std::invalid_argument(at + ": " + std::to_string(a.bytes) + " bytes, past the slot's " +
                                         std::to_string(slot_bytes));
+        if (a.kind == L3Action::Kind::Fill) {
+            if (a.data.size() != a.bytes)
+                throw std::invalid_argument(at + ": " + std::to_string(a.data.size()) + " bytes of data for a tile of " +
+                                            std::to_string(a.bytes));
+            continue;   // no DRAM
+        }
         if (a.dram_address % kL3BeatBytes != 0)
             throw std::invalid_argument(at + ": DRAM address " + std::to_string(a.dram_address) +
                                         " is not on a " + std::to_string(kL3BeatBytes) + "-byte burst boundary");

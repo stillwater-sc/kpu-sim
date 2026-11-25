@@ -77,6 +77,18 @@ set_target_properties(test_cycle_noc PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_noc COMMAND test_cycle_noc)
 set_tests_properties(test_cycle_noc PROPERTIES LABELS "cycle;noc;dma;memory;v0.10")
 
+# Step 1d (#540): a real matmul program's L3 traffic, the hypothesized C from L-B.
+add_executable(test_cycle_csp_l3 test_cycle_csp_l3.cpp)
+target_link_libraries(test_cycle_csp_l3 PRIVATE Catch2::Catch2WithMain kpu_simulator kpu_memory_components kpu_trace
+                      kpu_program)
+target_include_directories(test_cycle_csp_l3 PRIVATE ${CMAKE_SOURCE_DIR}/include
+                           ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common)
+target_compile_definitions(test_cycle_csp_l3 PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+kpu_set_target_options(test_cycle_csp_l3)
+set_target_properties(test_cycle_csp_l3 PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_csp_l3 COMMAND test_cycle_csp_l3)
+set_tests_properties(test_cycle_csp_l3 PROPERTIES LABELS "cycle;csp;l3;dma;memory;v0.10")
+
 # Step 0c (#535): the test structure's trace and counters files, validated against each other.
 # Open build/tests/cycle/cycle_trace_demo.json in https://ui.perfetto.dev
 add_executable(cycle_trace_demo cycle_trace_demo.cpp)
@@ -156,4 +168,32 @@ if(KPU_PYTHON3)
                 ${CMAKE_CURRENT_BINARY_DIR}/cycle_l3_dma_demo.counters.json)
     set_tests_properties(cycle_l3_dma_trace_check PROPERTIES LABELS "cycle;l3;dma;trace;v0.10"
                          FIXTURES_REQUIRED cycle_l3_dma)
+endif()
+
+# Step 1d (#540): rung 4, an int8 64^3 matmul's L3 traffic. The controller trace answers to the
+# LPDDR5 trace validator; the core trace and counters to check_trace.py.
+add_executable(cycle_csp_l3_demo cycle_csp_l3_demo.cpp)
+target_link_libraries(cycle_csp_l3_demo PRIVATE kpu_simulator kpu_memory_components kpu_trace kpu_program)
+target_include_directories(cycle_csp_l3_demo PRIVATE ${CMAKE_SOURCE_DIR}/include
+                           ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common)
+kpu_set_target_options(cycle_csp_l3_demo)
+set_target_properties(cycle_csp_l3_demo PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME cycle_csp_l3_demo
+    COMMAND cycle_csp_l3_demo ${CMAKE_SOURCE_DIR}
+                              ${CMAKE_CURRENT_BINARY_DIR}/cycle_csp_l3_demo.lpddr5.json
+                              ${CMAKE_CURRENT_BINARY_DIR}/cycle_csp_l3_demo.json
+                              ${CMAKE_CURRENT_BINARY_DIR}/cycle_csp_l3_demo.counters.json)
+set_tests_properties(cycle_csp_l3_demo PROPERTIES LABELS "cycle;csp;l3;dma;trace;v0.10" FIXTURES_SETUP cycle_csp_l3)
+if(KPU_PYTHON3)
+    add_test(NAME cycle_csp_l3_trace_validator
+        COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common/trace_validator.py
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_csp_l3_demo.lpddr5.json)
+    set_tests_properties(cycle_csp_l3_trace_validator PROPERTIES LABELS "cycle;csp;l3;dma;trace;v0.10"
+                         FIXTURES_REQUIRED cycle_csp_l3)
+    add_test(NAME cycle_csp_l3_trace_check
+        COMMAND ${KPU_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/check_trace.py
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_csp_l3_demo.json
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_csp_l3_demo.counters.json)
+    set_tests_properties(cycle_csp_l3_trace_check PROPERTIES LABELS "cycle;csp;l3;dma;trace;v0.10"
+                         FIXTURES_REQUIRED cycle_csp_l3)
 endif()
