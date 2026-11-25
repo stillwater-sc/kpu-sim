@@ -24,7 +24,10 @@
 // next queue only if a second slot stays free there: it needs two credits. A flit continuing along
 // the ring it is on needs one. So every unidirectional ring always keeps a free slot, a flit on it
 // can always move, and with dimension-ordered routing and sinks that drain (the L3 tiles, and DMA
-// engines whose store path never waits on reads, dma_engine.hpp), no cycle of waits can form.
+// engines whose store path never waits on reads, dma_engine.hpp), no cycle of waits can form. (The
+// engine's split windows remove the dependency a shared window would add. One remains, a program's
+// own: a Store to bytes an earlier Load has yet to read waits for that read, and so, through the
+// read window, on L3. The argument assumes no program has it; dma_engine.hpp's program-order rule.)
 // noc_fabric.hpp checks the free slot on every ring every cycle.
 //
 // ARBITRATION is greedy and stateless: each output, in channel order and then the L3, takes the
@@ -49,6 +52,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -118,7 +122,7 @@ public:
             if (in_[i].link->can_pop(now)) heads.push_back(head(i, in_[i].link->peek(now)));
         std::optional<NocFlit> local;
         if (from_l3_ && from_l3_->can_pop(now)) {
-            local = flit_from_l3(now, from_l3_->peek(now));
+            local = flit_from_l3(now);   // its route; the beat moves only when it is granted
             heads.push_back(head(kL3, *local));
         }
         std::sort(heads.begin(), heads.end(), [](const Head& a, const Head& b) { return older(*a.flit, *b.flit); });
@@ -174,9 +178,13 @@ public:
     void reset() override {
         hub_counts_reset();
         uid_count_ = 0;
+        if (on_reset_) on_reset_();
     }
 
     [[nodiscard]] NocDim hub() const { return hub_; }
+    [[nodiscard]] bool has_l3() const { return to_l3_ != nullptr; }
+    // Run on reset(), after the hub's own: how the fabric's checks start afresh with the simulator.
+    void on_reset(std::function<void()> f) { on_reset_ = std::move(f); }
     [[nodiscard]] const NocHubCounts& noc() const { return noc_; }
 
     // Where a flit goes from hub `at`, having arrived on `in_channel` (nullopt: it entered here).
@@ -226,7 +234,7 @@ private:
         return !topo_->channel(in_[h.in].channel).same_ring(topo_->channel(out));
     }
 
-    NocFlit flit_from_l3(Cycle now, const L3Beat& b) const {
+    NocFlit flit_from_l3(Cycle now) const {
         NocFlit f;
         f.id = ((uid_count_ + 1) << 16) | hub_;
         f.born = now;
@@ -235,13 +243,12 @@ private:
         f.dst_engine = store_engine_;
         f.dst_hub = topo_->exit_hub(store_port_, hub_);
         f.fresh = true;
-        f.beat = b;
         return f;
     }
 
     NocFlit pop(Cycle now, std::size_t in, std::optional<NocFlit>& local) {
         if (in == kL3) {
-            from_l3_->pop(now);
+            local->beat = from_l3_->pop(now);
             ++uid_count_;
             ++noc_.from_l3;
             return std::move(*local);
@@ -259,6 +266,7 @@ private:
     Link<L3Beat>* from_l3_ = nullptr;
     NocDim store_port_ = 0, store_engine_ = 0;
     std::uint64_t uid_count_ = 0;
+    std::function<void()> on_reset_;
     NocHubCounts noc_;
 };
 

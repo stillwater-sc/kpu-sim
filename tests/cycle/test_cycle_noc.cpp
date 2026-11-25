@@ -108,6 +108,14 @@ private:
 };
 using Catcher = CatcherOf<L3Beat>;
 
+// A component that does nothing: a subject for attachments that are refused.
+class Inert : public Component {
+public:
+    Inert(std::string name, Domain& d) : Component(std::move(name), d) {}
+    void evaluate(Cycle) override {}
+    [[nodiscard]] bool idle() const override { return true; }
+};
+
 // `n` beats from source `src` (in `ticket`), each with its index in `offset`.
 std::vector<L3Beat> stream(std::uint64_t src, std::size_t n) {
     std::vector<L3Beat> v;
@@ -127,7 +135,14 @@ void check_caught(const std::vector<Catcher*>& catchers, const std::map<std::uin
                   std::size_t n) {
     std::map<std::size_t, std::map<std::uint64_t, std::vector<std::uint32_t>>> seen;
     for (std::size_t c = 0; c < catchers.size(); ++c)
-        for (const auto& b : catchers[c]->got) seen[c][b.ticket].push_back(b.offset);
+        for (const auto& b : catchers[c]->got) {
+            // Every beat is one of the expected sources', at its catcher (#556's review).
+            const auto it = source_to_catcher.find(b.ticket);
+            CAPTURE(c, b.ticket);
+            REQUIRE(it != source_to_catcher.end());
+            CHECK(it->second == c);
+            seen[c][b.ticket].push_back(b.offset);
+        }
     for (const auto& [src, c] : source_to_catcher) {
         CAPTURE(src, c);
         REQUIRE(seen[c].count(src));
@@ -328,12 +343,16 @@ TEST_CASE("A port on its own: ring-through, ejection at its exit hub, ring traff
         CatcherOf<NocFlit>& to_a;
         Pusher& engine;
         Catcher& engine_out;
-        Bench(const NocTopology& t, std::vector<NocFlit> a, std::vector<NocFlit> b, std::size_t injections)
+        Pusher* engine2 = nullptr;
+        // `hold_b`: hub 1's side takes nothing before that cycle. `second`: a second engine, with
+        // that many beats for hub 0.
+        Bench(const NocTopology& t, std::vector<NocFlit> a, std::vector<NocFlit> b, std::size_t injections,
+              Cycle hold_b = 0, std::size_t second = 0)
             : d(sim.add_domain(Domain::from_ghz("kpu", 1.0))),
               port(sim.add<NocPort>("port", d, t, 1)),
               from_a(sim.add<PusherOf<NocFlit>>("from hub 0", d, std::move(a))),
               from_b(sim.add<PusherOf<NocFlit>>("from hub 1", d, std::move(b))),
-              to_b(sim.add<CatcherOf<NocFlit>>("hub 1", d)),
+              to_b(sim.add<CatcherOf<NocFlit>>("hub 1", d, hold_b)),
               to_a(sim.add<CatcherOf<NocFlit>>("hub 0", d)),
               engine(sim.add<Pusher>("engine", d, stream(7, injections))),
               engine_out(sim.add<Catcher>("engine out", d)) {
@@ -351,6 +370,15 @@ TEST_CASE("A port on its own: ring-through, ejection at its exit hub, ring traff
             engine_out.connect(eo);
             port.connect_ring(ia, ob, ib, oa);
             REQUIRE(port.connect_engine(ei, eo, 1) == 0);
+            if (second) {
+                engine2 = &sim.add<Pusher>("engine 2", d, stream(8, second));
+                auto& c2 = sim.add<Catcher>("engine 2 out", d);
+                auto& e2i = sim.link<L3Beat>("engine 2->port", *engine2, port, 2);
+                auto& e2o = sim.link<L3Beat>("port->engine 2", port, c2, 2);
+                engine2->connect(e2i);
+                c2.connect(e2o);
+                REQUIRE(port.connect_engine(e2i, e2o, 0) == 1);
+            }
         }
     };
     SECTION("ring traffic first: an injection waits for a cycle the channel is free") {
@@ -379,6 +407,21 @@ TEST_CASE("A port on its own: ring-through, ejection at its exit hub, ring traff
         CHECK(b.to_a.got[0].id == 2);             // from hub 1: on to hub 0, which turns it back
         CHECK(b.port.noc().ejected == 1);
         CHECK(b.port.noc().ring_through == 1);
+    }
+    SECTION("a head the bubble holds is counted while a younger one injects") {
+        // #556's review. Hub 1's side holds 3 of its 4 slots (ring flits it does not take until
+        // cycle 100): engine 0's beats for hub 1 have one credit, and the rule wants two. Engine 1's
+        // for hub 0 go. Engine 0's wait is counted, as a bubble wait, while engine 1 injects.
+        std::vector<NocFlit> ring;
+        for (std::uint64_t i = 1; i <= 3; ++i) ring.push_back(flit(i, NocFlit::Dest::L3, 1));
+        // Engine 1 injects every cycle through the hold, so every one of engine 0's waits is in a
+        // cycle another engine injected.
+        Bench b(t, ring, {}, 1, 100, 200);
+        REQUIRE(b.sim.run_until_idle(kLimit));
+        CHECK(b.to_a.got.size() == 200);   // engine 1's
+        CHECK(b.to_b.got.size() == 4);     // the ring flits, then engine 0's
+        CHECK(b.port.noc().bubble_waits >= 90);
+        CHECK(b.port.noc().injection_waits >= b.port.noc().bubble_waits);
     }
     SECTION("a flit no hub has routed is a fault") {
         auto f = flit(1, NocFlit::Dest::L3, 1);
@@ -561,6 +604,73 @@ TEST_CASE("Two runs over the NoC, and a run after reset, are identical", "[cycle
     check_data(a, programs, wa);
 }
 
+TEST_CASE("The NoC's checks outlive the fabric object, and start afresh on reset", "[cycle][noc]") {
+    // #556's review. The fabric's checks (and the topology its hubs and ports point into) are held
+    // by the simulator, so the fabric object may go first.
+    Simulator sim;
+    Domain& d = sim.add_domain(Domain::from_ghz("kpu", 1.0));
+    Catcher* l3 = nullptr;
+    {
+        NocFabric noc(sim, d, layout("kpu_t16.json"), {});
+        l3 = &sim.add<Catcher>("l3", d);
+        auto& p = sim.add<Pusher>("engine", d, stream(1, 40));
+        const auto e = noc.attach_engine(0, p, 5);
+        p.connect(e.to_noc);
+        l3->connect(noc.attach_l3(5, *l3, 0, e.engine).to_l3);
+    }
+    REQUIRE(sim.run_until_idle(kLimit));
+    CHECK(l3->got.size() == 40);
+
+    // Reset: the rings' peaks start again from zero.
+    Simulator s2;
+    Domain& d2 = s2.add_domain(Domain::from_ghz("kpu", 1.0));
+    NocFabric noc(s2, d2, layout("kpu_t4.json"), {});
+    auto& c = s2.add<Catcher>("l3", d2);
+    auto& p = s2.add<Pusher>("engine", d2, stream(2, 40));
+    const auto e = noc.attach_engine(1, p, 1);
+    p.connect(e.to_noc);
+    c.connect(noc.attach_l3(1, c, 1, e.engine).to_l3);
+    REQUIRE(s2.run_until_idle(kLimit));
+    std::size_t peak = 0;
+    for (const auto& r : noc.ring_peaks()) peak = std::max(peak, r.peak);
+    REQUIRE(peak > 0);
+    s2.reset();
+    for (const auto& r : noc.ring_peaks()) CHECK(r.peak == 0);
+    REQUIRE(s2.run_until_idle(kLimit));
+    std::size_t again = 0;
+    for (const auto& r : noc.ring_peaks()) again = std::max(again, r.peak);
+    CHECK(again == peak);
+}
+
+TEST_CASE("The NoC refuses an attachment before it adds anything", "[cycle][noc]") {
+    // #556's review: a refused attach leaves the simulator as it was (no links), a hub takes one L3
+    // tile, and a store engine that does not exist is found before the first cycle closes.
+    Simulator sim;
+    Domain& d = sim.add_domain(Domain::from_ghz("kpu", 1.0));
+    NocFabric noc(sim, d, layout("kpu_t4.json"), {});
+    auto& c = sim.add<Inert>("c", d);
+    const std::size_t rows = report(sim).size();
+    CHECK_THROWS_WITH(noc.attach_l3(0, c, 9, 0), ContainsSubstring("there is no port 9"));
+    CHECK_THROWS_WITH(noc.attach_l3(5, c, 0, 0), ContainsSubstring("there is no hub 5"));
+    CHECK_THROWS_WITH(noc.attach_engine(0, c, 7), ContainsSubstring("there is no hub 7"));
+    CHECK_THROWS_WITH(noc.attach_engine(8, c, 0), ContainsSubstring("there is no port 8"));
+    CHECK(report(sim).size() == rows);
+    auto& l3 = sim.add<Catcher>("l3", d);
+    l3.connect(noc.attach_l3(0, l3, 0, 1).to_l3);   // port 0's engine 1: not attached yet
+    auto& other = sim.add<Inert>("other", d);
+    CHECK_THROWS_WITH(noc.attach_l3(0, other, 0, 0), ContainsSubstring("hub 0 already has an L3 tile"));
+    auto& p = sim.add<Pusher>("engine", d, stream(1, 4));
+    p.connect(noc.attach_engine(0, p, 0).to_noc);   // engine 0 only
+    try {
+        sim.run_until_idle(kLimit);
+        FAIL("the store target should be refused");
+    } catch (const InvariantViolation& e) {
+        CHECK(e.cycle() == 0);
+        CHECK_THAT(e.what(), ContainsSubstring("hub 0's L3 tile stores to engine 1 of noc port") &&
+                                 ContainsSubstring("which has 1"));
+    }
+}
+
 TEST_CASE("The NoC refuses what it cannot build", "[cycle][noc]") {
     Simulator sim;
     Domain& d = sim.add_domain(Domain::from_ghz("kpu", 1.0));
@@ -569,8 +679,4 @@ TEST_CASE("The NoC refuses what it cannot build", "[cycle][noc]") {
     CHECK_THROWS_WITH(NocFabric(sim, d, layout("kpu_t4.json"), one), ContainsSubstring("cannot keep a bubble"));
     CHECK_THROWS_WITH(NocFabric(sim, d, layout("kpu_soc_2x2.json"), {}), ContainsSubstring("NocTopology"));
     CHECK_THROWS_WITH(NocFabric::Config::from(device("kpu_soc_2x2.json")), ContainsSubstring("declares no noc"));
-    NocFabric noc(sim, d, layout("kpu_t4.json"), {});
-    auto& c = sim.add<Catcher>("c", d);
-    CHECK_THROWS_WITH(noc.attach_l3(0, c, 9, 0), ContainsSubstring("there is no port 9"));
-    CHECK_THROWS_WITH(noc.attach_engine(0, c, 7), ContainsSubstring("there is no hub 7"));
 }
