@@ -16,23 +16,28 @@
 // The engine holds every slot's credit at the start. A Load waiting for a credit holds the
 // commands after it (they start in order); commands already started keep going.
 //
-// THE BURST WINDOW. At most `window` bursts, reads and writes, are in flight (sent, not yet
-// answered). Each cycle the engine sends at most one burst: the oldest started command's next
-// one (a Load's next read, or a Store's first staged beat).
+// THE BURST WINDOWS. At most `window` reads and `write_window` writes are in flight. A read is in
+// flight from its request until its beat has been pushed to L3: its response is always taken off
+// the response link, into a landing buffer the read window bounds, so a read waiting for L3 never
+// holds up the writes' acknowledgments behind it. The two windows are separate so that the store
+// path always drains: a Store's writes never wait on reads, which can wait on L3 (over the NoC,
+// behind the very ejections the Stores drain; noc_fabric.hpp). Each cycle the engine sends at
+// most one burst: the oldest started command's next one (a Load's next read, or a Store's first
+// staged beat) that its window allows.
 //
-// Each cycle, in this order: (1) every landed slot credit is taken; (2) the oldest DRAM response:
-// a read's beat is pushed to L3 (or waits for the L3 link's credit, holding the responses behind
-// it), a write's acknowledgment is counted; (3) one ejected beat is staged, if the store buffer
-// has room; (4) one burst is sent, within the window and with the request link's credit; (5) the
-// next command starts, if it can.
+// Each cycle, in this order: (1) every landed slot credit is taken; (2) the oldest DRAM response
+// is taken: a read's beat lands in the landing buffer, a write's acknowledgment is counted; (3)
+// the oldest landed beat is pushed to L3, if the L3 link has a credit; (4) one ejected beat is
+// staged, if the store buffer has room; (5) one burst is sent, within its window and with the
+// request link's credit; (6) the next command starts, if it can.
 //
 // COUNTERS. A command is an item (counters.hpp): it arrives when it starts and completes when its
 // last burst does. The engine is busy in a cycle anything moves, or while bursts are in flight;
-// otherwise stalled on what blocked it (no credit: a slot's, L3's, the request link's, the window
+// otherwise stalled on what blocked it (no credit: a slot's, L3's, the request link's, a window
 // or the store buffer). dma() adds the engine's own: bursts, the most in flight, and the cycles
 // each cause held something up (several can in one cycle).
 //
-// CHECKS, every cycle: the window and the store buffer within their bounds, and a slot credit
+// CHECKS, every cycle: the windows and the store buffer within their bounds, and a slot credit
 // never received twice. check_slot_credits() checks the engine and its L3 tile together: a slot's
 // credit is never with the engine while the slot is live.
 //
@@ -77,7 +82,8 @@ inline const char* to_string(DmaWait w) {
 struct DmaCounts {
     std::uint64_t loads = 0, stores = 0;            // completed
     std::uint64_t read_bursts = 0, write_bursts = 0; // sent
-    std::uint64_t max_in_flight = 0;
+    std::uint64_t max_in_flight = 0;                 // reads and writes together
+    std::uint64_t max_reads_in_flight = 0, max_writes_in_flight = 0;
     std::array<std::uint64_t, kDmaWaits> waits{};    // cycles each cause held something up
     [[nodiscard]] std::uint64_t waited(DmaWait w) const { return waits[static_cast<std::size_t>(w)]; }
 };
@@ -87,7 +93,8 @@ public:
     struct Config {
         std::uint32_t slots = 2;               // the L3 tile's: the engine starts with every credit
         std::uint32_t slot_bytes = 4096;       // the L3 tile's, to check the program
-        std::size_t window = 8;                // bursts in flight
+        std::size_t window = 8;                // reads in flight
+        std::size_t write_window = 0;          // writes in flight; 0 = `window`
         std::size_t store_buffer_beats = 4;
     };
     // When each command started and completed, for the tests.
@@ -99,6 +106,7 @@ public:
 
     DmaEngine(std::string name, Domain& d, Config cfg, const L3Program& program)
         : Component(std::move(name), d), config_(cfg) {
+        if (config_.write_window == 0) config_.write_window = cfg.window;
         if (cfg.slots == 0 || cfg.window == 0 || cfg.store_buffer_beats == 0)
             throw std::invalid_argument("cycle::DmaEngine " + this->name() +
                                         ": slots, the window and the store buffer must be positive");
@@ -136,37 +144,43 @@ public:
             held_[c.slot] = true;
             moved = true;
         }
-        // 2. The oldest DRAM response.
+        // 2. The oldest DRAM response, always taken.
         if (from_dram_->can_pop(now)) {
-            const auto it = in_flight_.find(from_dram_->peek(now).id);
+            DramResponse r = from_dram_->pop(now);
+            const auto it = in_flight_.find(r.id);
             if (it == in_flight_.end())
-                throw std::logic_error(where(now) + ": a DRAM response to request " +
-                                       std::to_string(from_dram_->peek(now).id) + ", which it never sent");
-            const Burst burst = it->second;
-            Command& c = commands_[burst.command];
-            if (c.action.kind == L3Action::Kind::Load) {
-                if (to_l3_->can_push(now)) {
-                    DramResponse r = from_dram_->pop(now);
-                    L3Beat b;
-                    b.id = ++beat_id_;
-                    b.ticket = c.ticket;
-                    b.slot = c.action.slot;
-                    b.offset = burst.offset;
-                    b.tile_bytes = c.action.bytes;
-                    b.bytes = std::move(r.bytes);
-                    to_l3_->push(now, std::move(b));
-                    finish_burst(now, it);
-                    moved = true;
-                } else {
-                    wait(DmaWait::L3Credit);
-                }
+                throw std::logic_error(where(now) + ": a DRAM response to request " + std::to_string(r.id) +
+                                       ", which it never sent");
+            if (commands_[it->second.command].action.kind == L3Action::Kind::Load) {
+                landed_.push_back({r.id, std::move(r.bytes)});
             } else {
-                from_dram_->pop(now);
+                --writes_;
+                finish_burst(now, it);
+            }
+            moved = true;
+        }
+        // 3. The oldest landed read's beat, to L3.
+        if (!landed_.empty()) {
+            if (to_l3_->can_push(now)) {
+                const auto it = in_flight_.find(landed_.front().id);
+                const Command& c = commands_[it->second.command];
+                L3Beat b;
+                b.id = ++beat_id_;
+                b.ticket = c.ticket;
+                b.slot = c.action.slot;
+                b.offset = it->second.offset;
+                b.tile_bytes = c.action.bytes;
+                b.bytes = std::move(landed_.front().bytes);
+                landed_.pop_front();
+                to_l3_->push(now, std::move(b));
+                --reads_;
                 finish_burst(now, it);
                 moved = true;
+            } else {
+                wait(DmaWait::L3Credit);
             }
         }
-        // 3. One ejected beat into the store buffer.
+        // 4. One ejected beat into the store buffer.
         if (from_l3_->can_pop(now)) {
             if (staged_.size() < config_.store_buffer_beats) {
                 L3Beat b = from_l3_->pop(now);
@@ -182,9 +196,9 @@ public:
                 wait(DmaWait::StoreBuffer);
             }
         }
-        // 4. One burst: the oldest started command's next.
+        // 5. One burst: the oldest started command's next.
         if (send_burst(now, wait)) moved = true;
-        // 5. The next command, in the program's order.
+        // 6. The next command, in the program's order.
         if (next_ < commands_.size()) {
             Command& c = commands_[next_];
             const bool load = c.action.kind == L3Action::Kind::Load;
@@ -214,9 +228,12 @@ public:
     [[nodiscard]] bool idle() const override { return next_ == commands_.size() && active_.empty() && staged_.empty(); }
 
     void check(Cycle now) const override {
-        if (in_flight_.size() > config_.window)
-            throw std::logic_error(where(now) + ": " + std::to_string(in_flight_.size()) + " bursts in flight, past the window " +
-                                   std::to_string(config_.window));
+        if (reads_ > config_.window || writes_ > config_.write_window || reads_ + writes_ != in_flight_.size() ||
+            landed_.size() > reads_)
+            throw std::logic_error(where(now) + ": " + std::to_string(reads_) + " reads (" + std::to_string(landed_.size()) +
+                                   " landed) and " + std::to_string(writes_) + " writes in flight, " +
+                                   std::to_string(in_flight_.size()) + " in all; the windows are " +
+                                   std::to_string(config_.window) + " and " + std::to_string(config_.write_window));
         if (staged_.size() > config_.store_buffer_beats)
             throw std::logic_error(where(now) + ": " + std::to_string(staged_.size()) +
                                    " beats in the store buffer, past its " + std::to_string(config_.store_buffer_beats));
@@ -285,9 +302,9 @@ private:
                 r->write = true;
                 r->address = c.action.dram_address + staged->offset;
             }
-            if (in_flight_.size() >= config_.window) {
+            if (r->write ? writes_ >= config_.write_window : reads_ >= config_.window) {
                 wait(DmaWait::Window);
-                return false;
+                continue;   // the other window may let a younger command's burst go
             }
             if (!to_dram_->can_push(now)) {
                 wait(DmaWait::RequestCredit);
@@ -301,13 +318,17 @@ private:
                 r->bytes = std::move(staged->bytes);
                 staged_.erase(staged);
                 ++dma_.write_bursts;
+                ++writes_;
             } else {
                 ++dma_.read_bursts;
+                ++reads_;
             }
             in_flight_.emplace(r->id, Burst{ci, offset});
             to_dram_->push(now, std::move(*r));
             ++c.sent;
             dma_.max_in_flight = std::max<std::uint64_t>(dma_.max_in_flight, in_flight_.size());
+            dma_.max_reads_in_flight = std::max<std::uint64_t>(dma_.max_reads_in_flight, reads_);
+            dma_.max_writes_in_flight = std::max<std::uint64_t>(dma_.max_writes_in_flight, writes_);
             return true;
         }
         return false;
@@ -335,6 +356,8 @@ private:
         active_.clear();
         staged_.clear();
         in_flight_.clear();
+        landed_.clear();
+        reads_ = writes_ = 0;
         spans_.clear();
         dma_ = {};
         beat_id_ = request_id_ = 0;
@@ -348,6 +371,12 @@ private:
     std::vector<std::size_t> active_;                          // started, not complete, in start order
     std::deque<L3Beat> staged_;                                // the store buffer
     std::unordered_map<std::uint64_t, Burst> in_flight_;       // by DRAM request id
+    struct Landed {
+        std::uint64_t id;
+        std::vector<std::uint8_t> bytes;
+    };
+    std::deque<Landed> landed_;                                // reads answered, not yet pushed to L3
+    std::size_t reads_ = 0, writes_ = 0;                       // in flight
     std::vector<Span> spans_;
     DmaCounts dma_;
     std::uint64_t beat_id_ = 0, request_id_ = 0;

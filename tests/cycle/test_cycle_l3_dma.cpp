@@ -266,7 +266,9 @@ TEST_CASE("The burst window and the store buffer bound what is in flight", "[cyc
         preload_and_watch(*r, p, seen);
         REQUIRE(r->sim.run_until_idle(kLimit));
         check_data(*r, p, seen);
-        CHECK(r->dma.dma().max_in_flight == window);   // reached, never passed (the engine's check)
+        // Each window reached, never passed (the engine's check).
+        CHECK(r->dma.dma().max_reads_in_flight == window);
+        CHECK(r->dma.dma().max_writes_in_flight <= window);
         return r;
     };
     const auto one = run(1, 1, 1);
