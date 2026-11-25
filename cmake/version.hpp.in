@@ -17,6 +17,10 @@ inline constexpr std::string_view VERSION_FULL = "@KPU_VERSION_FULL@";
 
 inline constexpr bool IS_RELEASE_BUILD = @KPU_VERSION_IS_RELEASE_CPP@;
 
+// The full commit the build was configured at ("unavailable" without git). Configure-time, as
+// the version is: a build reconfigured after a commit names the new one.
+inline constexpr std::string_view GIT_COMMIT = "@KPU_GIT_COMMIT@";
+
 // Semantic version comparison helpers
 inline constexpr int version_number() {
     return VERSION_MAJOR * 10000 + VERSION_MINOR * 100 + VERSION_PATCH;

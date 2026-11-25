@@ -82,6 +82,23 @@ else()
     message(STATUS "KPU Version: ${KPU_VERSION_FULL} (fallback)")
 endif()
 
+# The commit the build was configured at, in full, for run manifests (kpu-run --run-dir): the
+# version string names it only on a development build. "unavailable" without git.
+set(KPU_GIT_COMMIT "unavailable")
+if(GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE _kpu_git_commit
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _kpu_git_commit_result
+    )
+    if(_kpu_git_commit_result EQUAL 0 AND _kpu_git_commit MATCHES "^[0-9a-f]+$")
+        set(KPU_GIT_COMMIT "${_kpu_git_commit}")
+    endif()
+endif()
+
 # Generate version header for C++ code
 configure_file(
     "${CMAKE_SOURCE_DIR}/cmake/version.hpp.in"

@@ -435,7 +435,11 @@ Each step is one PR, one concern, with its own tests.
      v4 bundle would fail) and the memflow viewer (which reads v4 and draws nothing new yet).
 3. **`kpu-run` writes it** (C++)
    - `--memory-mflow <dir>`.
-   - `--run-dir <dir>`: every requested artifact under the fixed names, plus `run.json`.
+   - `--run-dir <dir>`: every requested artifact under the fixed names, plus `run.json`. As built,
+     it applies to a `--memory-subsystem` run (`kind: memory-subsystem`), and takes the place of
+     the other `--memory-*` paths. The level runs (`--tflow`, `--dflow`) get a `kind` of their own
+     when the server needs them. `tools/kpu-run/check_run_dir.py` checks a directory against its
+     `run.json`.
    - CTests run `mflow_check.py` on a kpu_s1 matmul bundle and on a T4 NoC bundle, both passing.
 4. **The checker** (Python)
    - `tools/trace/mflow_check.py`: M7 and M8. (The M1 split and the Fill exemption went in with
