@@ -19,7 +19,8 @@ Invariants:
                         the open row; a PRE closes the open row; a REF finds the bank closed. A
                         RD/WR also names its burst's bank and row, and moves its direction.
     TF11 data bus       a channel's data bus never carries two bursts at once
-    M1   window         an engine never has more than W bursts in flight
+    M1   window         an engine never has more than W bursts in flight; one with a write window
+                        too (version 4) never more than `window` reads nor `write_window` writes
     M2   store buffer   a store buffer never holds more than its capacity, nor stages more than
                         it holds
     M3   credit first   a request's lifetime is ordered: offered <= credit <= first burst <=
@@ -27,7 +28,7 @@ Invariants:
                         a store's never precedes its buffer slot
     M4   bursts         every burst completes exactly once: its times are ordered inside the run,
                         exactly one RD/WR serves it, and every request's bursts are exactly the
-                        ones its bytes span, from its own engine
+                        ones its bytes span, from its own engine (a Fill's: none)
     M6   round robin    with round_robin arbitration: while an engine has a burst posted and not
                         granted, no other engine of its controller is granted more than two turns
                         (2 x grant_quantum bursts) -- a fair arbiter serves every waiting engine
@@ -53,7 +54,10 @@ import json
 import sys
 from pathlib import Path
 
-VERSION = 3
+VERSION = 4
+OLDEST = 3                                            # the oldest version this checker reads
+LOAD, STORE, FILL = range(3)                          # enum RequestKind, in order
+WAIT_REASONS = 6                                      # enum WaitReason has 6 values
 NONE = 0xFFFFFFFF
 DTYPES = {"u8": ("B", 1), "u32": ("I", 4), "u64": ("Q", 8), "f64": ("d", 8)}
 ACT, RD, WR, PRE, REF = range(5)                      # enum CommandKind, in order
@@ -75,6 +79,11 @@ SCHEMA = {
                  "t_last": "f64", "t_retired": "f64"},
     "buffers": {"engine": "u32", "held": "u32", "staged": "u32", "t": "f64"},
     "ports": {"port": "u32", "engine": "u32", "request": "u32", "kind": "u8", "t": "f64"},
+}
+# Version 4's additions: a request's kind, program action and L3 slot; the waits table.
+SCHEMA_V4 = {
+    "requests": {"kind": "u8", "ticket": "u32", "slot": "u32"},
+    "waits": {"engine": "u32", "reason": "u8", "t_from": "f64", "t_to": "f64"},
 }
 TIMING = ["tRCD", "tRP", "tRAS", "tRC", "tRFCpb", "tRRD_L", "tRRD_S", "tCCD_L", "tCCD_S", "tFAW"]
 
@@ -123,8 +132,9 @@ def load(path):
         raise Unreadable(f"a version-{m.get('version')} bundle lacks "
                          f"{'controller-clock columns' if m.get('version') == 1 else 'bursts.t_posted'}; "
                          "re-record it with this build's kpu-memsim")
-    if m.get("version") != VERSION:
-        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads ({VERSION})")
+    if m.get("version") not in range(OLDEST, VERSION + 1):
+        raise Unreadable(f"version {m.get('version')!r} is not one this checker reads ({OLDEST} to {VERSION})")
+    v4 = m["version"] >= 4
     rec = {"manifest": m}
     try:
         _count(m["makespan"], "makespan")
@@ -150,7 +160,15 @@ def load(path):
             _count(params.get(p), f"dram_timing.params.{p}")
         if not isinstance(dt["ticks_per_cycle"], (int, float)) or dt["ticks_per_cycle"] <= 0:
             raise Unreadable("dram_timing.ticks_per_cycle is not a positive number")
-        for name, schema in SCHEMA.items():
+        if v4:
+            if not isinstance(m.get("source"), str):
+                raise Unreadable("a version-4 manifest names its source")
+            _count(m.get("write_window"), "write_window")
+        schemas = {n: dict(c) for n, c in SCHEMA.items()}
+        if v4:
+            for n, c in SCHEMA_V4.items():
+                schemas.setdefault(n, {}).update(c)
+        for name, schema in schemas.items():
             t = m["tables"][name]
             rows = _count(t["rows"], f"the row count of {name}")
             declared = {c["name"]: c["dtype"] for c in t["columns"]}
@@ -170,6 +188,21 @@ def load(path):
             raise Unreadable(f"command {i} has kind {C['kind'][i]}")
         if C["burst"][i] != NONE and C["burst"][i] >= rec["bursts_rows"]:
             raise Unreadable(f"command {i} names burst {C['burst'][i]}, past the bursts table")
+    Q = rec["requests"]
+    nq = rec["requests_rows"]
+    if not v4:
+        # Version 3 states no kind: a request is a load or a store, by its direction.
+        Q["kind"] = [LOAD if Q["is_load"][q] else STORE for q in range(nq)]
+        rec["waits"], rec["waits_rows"] = {"engine": [], "reason": [], "t_from": [], "t_to": []}, 0
+    for q in range(nq):
+        if Q["kind"][q] > FILL:
+            raise Unreadable(f"request {q} has kind {Q['kind'][q]}")
+        if (Q["kind"][q] == STORE) == bool(Q["is_load"][q]):
+            raise Unreadable(f"request {q} is of kind {Q['kind'][q]} but is_load {Q['is_load'][q]}")
+    W = rec["waits"]
+    for i in range(rec["waits_rows"]):
+        if W["reason"][i] >= WAIT_REASONS:
+            raise Unreadable(f"wait {i} has reason {W['reason'][i]}")
     for i in range(rec["bursts_rows"]):
         if B["request"][i] != NONE and B["request"][i] >= rec["requests_rows"]:
             raise Unreadable(f"burst {i} names request {B['request'][i]}, past the requests table")
@@ -314,6 +347,20 @@ def check(rec):
         if over:
             r.fail("M1", f"dma[{e}]: {over[1]} bursts in flight at cycle {int(over[0])}, over its "
                          f"window of {window[e]}")
+    # An engine with a write window as well (version 4): its reads within `window`, its writes
+    # within `write_window`, each on its own (the station's capacity is the two together).
+    ww = m.get("write_window", 0)
+    if ww:
+        for load, cap, what in ((True, m["window"], "reads"), (False, ww, "writes")):
+            by = {}
+            for i in range(nb):
+                if bool(B["is_load"][i]) == load:
+                    by.setdefault(B["engine"][i], []).append((B["t_submit"][i], B["t_done"][i]))
+            for e, iv in by.items():
+                over = _peak_over(iv, cap)
+                if over:
+                    r.fail("M1", f"dma[{e}]: {over[1]} {what} in flight at cycle {int(over[0])}, over its "
+                                 f"{'write ' if not load else ''}window of {cap}")
 
     # M2 --------------------------------------------------------------------
     r.ran("M2")
@@ -366,7 +413,8 @@ def check(rec):
     if bb > 0:
         for q in range(nq):
             a, n = Q["address"][q], Q["bytes"][q]
-            want = -(-(a + n) // bb) - a // bb if n else 0
+            # A Fill puts the program's bytes in L3 with no DRAM traffic: it has no bursts.
+            want = 0 if Q["kind"][q] == FILL else (-(-(a + n) // bb) - a // bb if n else 0)
             if of_request[q] != want:
                 r.fail("M4", f"request {q}: {of_request[q]} bursts, but its {n} bytes at {a:#x} span {want}")
     else:

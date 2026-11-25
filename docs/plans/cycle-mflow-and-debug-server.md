@@ -430,12 +430,16 @@ Each step is one PR, one concern, with its own tests.
      `write_window`, the request columns, the `waits` table, the `dmawait` stations.
    - `read_mflow` reads v3 and v4.
    - The round-trip test covers v4; a stored v3 bundle still reads.
+   - Every reader follows the version in the same PR, since each refuses a version it does not
+     know: `mflow_check.py` (with the M1 split and the Fill exemption, without which a cycle-core
+     v4 bundle would fail) and the memflow viewer (which reads v4 and draws nothing new yet).
 3. **`kpu-run` writes it** (C++)
    - `--memory-mflow <dir>`.
    - `--run-dir <dir>`: every requested artifact under the fixed names, plus `run.json`.
    - CTests run `mflow_check.py` on a kpu_s1 matmul bundle and on a T4 NoC bundle, both passing.
 4. **The checker** (Python)
-   - `tools/trace/mflow_check.py`: the M1 split, the Fill exemptions, M7, M8.
+   - `tools/trace/mflow_check.py`: M7 and M8. (The M1 split and the Fill exemption went in with
+     step 2.)
    - The ports from `trace_validator.py` (§3.7): M9–M11 for INV-001–004 and INV-006, and tWTR and
      tRTW in M5. The manifest's timing table already carries tWTR_L, tWTR_S and tRTW, from both
      `dram_bridge.cpp` and the recorder.

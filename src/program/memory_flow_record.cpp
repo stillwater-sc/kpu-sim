@@ -53,6 +53,26 @@ const char* to_string(MFR::PortKind k) {
     return "?";
 }
 
+const char* to_string(MFR::RequestKind k) {
+    switch (k) {
+        case MFR::RequestKind::Load: return "load";
+        case MFR::RequestKind::Store: return "store";
+        case MFR::RequestKind::Fill: return "fill";
+    }
+    return "?";
+}
+const char* to_string(MFR::WaitReason r) {
+    switch (r) {
+        case MFR::WaitReason::SlotCredit: return "slot_credit";
+        case MFR::WaitReason::L3Credit: return "l3_credit";
+        case MFR::WaitReason::RequestCredit: return "request_credit";
+        case MFR::WaitReason::Window: return "window";
+        case MFR::WaitReason::StoreBuffer: return "store_buffer";
+        case MFR::WaitReason::Order: return "order";
+    }
+    return "?";
+}
+
 std::uint32_t MFR::station(const std::string& name) const {
     for (std::size_t i = 0; i < stations.size(); ++i)
         if (stations[i].name == name) return static_cast<std::uint32_t>(i);
@@ -90,6 +110,7 @@ Lod build_mflow_lod(const MFR& rec) {
     }
     for (const auto& r : rec.requests)
         if (!r.is_load) add(rec.device + "/dmabuf[" + std::to_string(r.engine) + "]", r.credit, r.retired);
+    for (const auto& w : rec.waits) add(rec.device + "/dmawait[" + std::to_string(w.engine) + "]", w.from, w.to);
     std::map<std::uint32_t, Cycle> accepted;
     for (const auto& p : rec.ports) {
         if (p.kind == MFR::PortKind::Accept) accepted[p.request] = p.t;
@@ -121,7 +142,17 @@ void write_mflow(const MFR& rec, const std::string& dir) {
     exact(rec.makespan, "makespan");
     for (const auto& b : rec.bursts) { exact(b.done, "burst done"); exact(b.data_end, "burst data end"); }
     for (const auto& c : rec.commands) exact(c.end, "command end");
-    for (const auto& r : rec.requests) exact(r.retired, "request retired");
+    for (const auto& r : rec.requests) {
+        exact(r.retired, "request retired");
+        // is_load and the kind say the same thing: a Store, and only a Store, is not a load.
+        if ((r.kind == MFR::RequestKind::Store) == r.is_load)
+            throw RecordError(std::string("record: a request of kind ") + to_string(r.kind) + " with is_load " +
+                              (r.is_load ? "true" : "false"));
+    }
+    for (const auto& w : rec.waits) {
+        exact(w.to, "wait end");
+        if (w.to < w.from) throw RecordError("record: a wait ends before it starts");
+    }
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     if (ec) throw RecordError("record: cannot create " + dir + ": " + ec.message());
@@ -129,9 +160,11 @@ void write_mflow(const MFR& rec, const std::string& dir) {
     json m = json::object();
     m["format"] = "kpu-mflow";
     m["version"] = kMflowVersion;
+    m["source"] = rec.source;
     m["device"] = rec.device;
     m["makespan"] = rec.makespan;
     m["window"] = rec.window;
+    m["write_window"] = rec.write_window;
     m["timing_note"] = rec.timing_note;
     m["ceiling_bytes_per_cycle"] = rec.ceiling_bytes_per_cycle;
     m["burst_bytes"] = rec.burst_bytes;
@@ -201,7 +234,19 @@ void write_mflow(const MFR& rec, const std::string& dir) {
         t.put("t_first", "f64", column<double>(v, +[](const MFR::Request& r) { return static_cast<double>(r.first_burst); }));
         t.put("t_last", "f64", column<double>(v, +[](const MFR::Request& r) { return static_cast<double>(r.last_burst); }));
         t.put("t_retired", "f64", column<double>(v, +[](const MFR::Request& r) { return static_cast<double>(r.retired); }));
+        t.put("kind", "u8", column<std::uint8_t>(v, +[](const MFR::Request& r) { return static_cast<std::uint8_t>(r.kind); }));
+        t.put("ticket", "u32", column<std::uint32_t>(v, +[](const MFR::Request& r) { return r.ticket; }));
+        t.put("slot", "u32", column<std::uint32_t>(v, +[](const MFR::Request& r) { return r.slot; }));
         tables["requests"] = write_table(t, dir);
+    }
+    {
+        Table t{"waits", "waits.bin", rec.waits.size(), {}};
+        const auto& v = rec.waits;
+        t.put("engine", "u32", column<std::uint32_t>(v, +[](const MFR::Wait& w) { return w.engine; }));
+        t.put("reason", "u8", column<std::uint8_t>(v, +[](const MFR::Wait& w) { return static_cast<std::uint8_t>(w.reason); }));
+        t.put("t_from", "f64", column<double>(v, +[](const MFR::Wait& w) { return static_cast<double>(w.from); }));
+        t.put("t_to", "f64", column<double>(v, +[](const MFR::Wait& w) { return static_cast<double>(w.to); }));
+        tables["waits"] = write_table(t, dir);
     }
     {
         Table t{"buffers", "buffers.bin", rec.buffers.size(), {}};
@@ -239,13 +284,17 @@ MFR read_mflow(const std::string& dir) {
     }
     if (m.value("format", "") != "kpu-mflow")
         throw RecordError("record: " + dir + " is not a .mflow bundle (format '" + m.value("format", "") + "')");
-    if (m.value("version", 0u) != kMflowVersion)
-        throw RecordError("record: .mflow version " + std::to_string(m.value("version", 0u)) +
-                          "; this reader reads version " + std::to_string(kMflowVersion));
+    const std::uint32_t version = m.value("version", 0u);
+    if (version < kMflowOldestVersion || version > kMflowVersion)
+        throw RecordError("record: .mflow version " + std::to_string(version) + "; this reader reads versions " +
+                          std::to_string(kMflowOldestVersion) + " to " + std::to_string(kMflowVersion));
+    const bool v4 = version >= 4;
     MFR rec;
+    rec.source = v4 ? m.at("source").get<std::string>() : std::string("memory-side-harness");
     rec.device = m.at("device").get<std::string>();
     rec.makespan = m.at("makespan").get<Cycle>();
     rec.window = m.at("window").get<std::uint32_t>();
+    rec.write_window = v4 ? m.at("write_window").get<std::uint32_t>() : 0u;
     rec.timing_note = m.value("timing_note", "");
     rec.ceiling_bytes_per_cycle = m.value("ceiling_bytes_per_cycle", 0.0);
     rec.burst_bytes = m.value("burst_bytes", 0u);
@@ -350,9 +399,46 @@ MFR read_mflow(const std::string& dir) {
         auto tf = read_col<double>(t, b, "t_first", "f64", n);
         auto tl = read_col<double>(t, b, "t_last", "f64", n);
         auto tr = read_col<double>(t, b, "t_retired", "f64", n);
-        for (std::size_t i = 0; i < n; ++i)
-            rec.requests.push_back({engine[i], port[i], ld[i] != 0, addr[i], bytes[i], t64(to, i),
-                                    t64(tc, i), t64(tf, i), t64(tl, i), t64(tr, i)});
+        std::vector<std::uint8_t> kind;
+        std::vector<std::uint32_t> ticket, slot;
+        if (v4) {
+            kind = read_col<std::uint8_t>(t, b, "kind", "u8", n);
+            ticket = read_col<std::uint32_t>(t, b, "ticket", "u32", n);
+            slot = read_col<std::uint32_t>(t, b, "slot", "u32", n);
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            MFR::Request q{engine[i], port[i], ld[i] != 0, addr[i], bytes[i], t64(to, i),
+                           t64(tc, i), t64(tf, i), t64(tl, i), t64(tr, i)};
+            if (v4) {
+                if (kind[i] > static_cast<std::uint8_t>(MFR::RequestKind::Fill))
+                    throw RecordError("record: request " + std::to_string(i) + " has an unknown kind");
+                q.kind = static_cast<MFR::RequestKind>(kind[i]);
+                if ((q.kind == MFR::RequestKind::Store) == q.is_load)
+                    throw RecordError("record: request " + std::to_string(i) + " is a " + to_string(q.kind) +
+                                      " but its is_load says otherwise");
+                q.ticket = ticket[i];
+                q.slot = slot[i];
+            } else {
+                q.kind = q.is_load ? MFR::RequestKind::Load : MFR::RequestKind::Store;
+            }
+            rec.requests.push_back(q);
+        }
+    }
+    if (v4) {
+        std::string b;
+        const json& t = load("waits", b);
+        const std::size_t n = t.at("rows").get<std::size_t>();
+        auto engine = read_col<std::uint32_t>(t, b, "engine", "u32", n);
+        auto reason = read_col<std::uint8_t>(t, b, "reason", "u8", n);
+        auto tf = read_col<double>(t, b, "t_from", "f64", n);
+        auto tt = read_col<double>(t, b, "t_to", "f64", n);
+        for (std::size_t i = 0; i < n; ++i) {
+            if (reason[i] >= MFR::kWaitReasons)
+                throw RecordError("record: wait " + std::to_string(i) + " has an unknown reason");
+            const MFR::Wait w{engine[i], static_cast<MFR::WaitReason>(reason[i]), t64(tf, i), t64(tt, i)};
+            if (w.to < w.from) throw RecordError("record: wait " + std::to_string(i) + " ends before it starts");
+            rec.waits.push_back(w);
+        }
     }
     {
         std::string b;

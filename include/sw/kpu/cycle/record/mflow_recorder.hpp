@@ -19,18 +19,16 @@
 //             acknowledgment taken). Its bank, row, column and page outcome are its CAS's
 //   commands  every command the controller issues, the burst it serves (a PRECHARGE: the burst that
 //             opened the page; a REFRESH: none), in KPU cycles and in the controller's own ticks
-//   requests  one per Load and Store: offered (the action before it started; 0 for the first),
-//             credit (it started: a Load holds its slot's credit), its first and last bursts, and
-//             retired (complete). Record version 3 has no column for an action's kind, so a Fill,
-//             which has no bursts, is not a request row; actions() keeps every action
+//   requests  one per Load, Store and Fill, with its kind, ticket and slot: offered (the action
+//             before it started; 0 for the first), credit (it started: a Load or a Fill holds its
+//             slot's credit), its first and last bursts (a Fill has none: both are its start), and
+//             retired (complete)
 //   buffers   the store buffer's occupancy each time it changes (held = staged: a beat is in the
 //             buffer only once it has been ejected into it)
-//   window    the engine's bound on bursts in flight, reads and writes together: window +
-//             write_window. Version 3 has one window per engine, and the cycle core's engine has
-//             two; version 4 (step 2) records both, and mflow_check.py's M1 checks each (step 4)
-//   waits()   the causes that held a DMA engine up, as intervals [from, to) of KPU cycles, one per
+//   windows   the engine's two: `window` its reads in flight, `write_window` its writes
+//   waits     the causes that held a DMA engine up, as intervals [from, to) of KPU cycles, one per
 //             run of consecutive cycles a cause held. Several causes can hold in one cycle, so two
-//             causes' intervals may overlap; one cause's never do. (Version 4's table; step 2.)
+//             causes' intervals may overlap; one cause's never do
 //
 // TIME. The record's times are whole KPU cycles: an event at time t is in the KPU cycle n with
 // edge(n) <= t < edge(n + 1). That is monotone, so ordered events stay ordered. A command's points
@@ -72,6 +70,11 @@ struct MflowSetup {
     std::size_t store_buffer_beats = 4;
     Lpddr5Channel::Controller::Config dram;    // the channel's controller (lpddr5_one_channel())
 };
+
+// The record's wait reasons are the engine's DmaWait, in its order.
+static_assert(static_cast<int>(program::record::MemoryFlowRecord::WaitReason::Order) == static_cast<int>(DmaWait::Order) &&
+                  program::record::MemoryFlowRecord::kWaitReasons == kDmaWaits,
+              "MemoryFlowRecord::WaitReason must list DmaWait's causes in its order");
 
 class MflowRecorder : public MemoryEvents {
 public:
@@ -236,10 +239,11 @@ public:
     [[nodiscard]] Record record(Picoseconds end) const {
         require_clocks();
         Record rec;
+        rec.source = "cycle-core";
         rec.device = setup_.device;
         rec.makespan = kpu_cycle(end);
-        const std::size_t in_flight = setup_.window + setup_.write_window;   // see WHAT IS RECORDED
-        rec.window = static_cast<std::uint32_t>(in_flight);
+        rec.window = static_cast<std::uint32_t>(setup_.window);
+        rec.write_window = static_cast<std::uint32_t>(setup_.write_window);
         rec.burst_bytes = kL3BeatBytes;
         rec.arbitration = "fixed";   // one engine a channel: its requests in the order it sends them
         rec.grant_quantum = 1;
@@ -253,7 +257,7 @@ public:
              << " controller ticks per KPU cycle; recorded on the cycle core (one channel, one DMA engine)";
         rec.timing_note = note.str();
 
-        // Stations: banks, the data bus, the engine, its store buffer (memory_flow_record.hpp's order).
+        // Stations: banks, the data bus, the engine, its store buffer, its waits (memory_flow_record.hpp's order).
         const std::uint32_t per_group = setup_.dram.banks_per_channel / setup_.dram.bank_groups;
         const std::string mc = setup_.device + "/mc[0]/ch[0]";
         for (std::uint32_t g = 0; g < setup_.dram.bank_groups; ++g)
@@ -261,18 +265,24 @@ public:
                 rec.stations.push_back({mc + "/bg[" + std::to_string(g) + "]/ba[" + std::to_string(b) + "]", "dram_bank", 1});
         rec.stations.push_back({mc + "/bus", "dram_bus", 1});
         const std::uint32_t engine = engine_.value_or(0);
-        rec.stations.push_back({setup_.device + "/dma[" + std::to_string(engine) + "]", "dma", in_flight});
+        rec.stations.push_back({setup_.device + "/dma[" + std::to_string(engine) + "]", "dma", setup_.window + setup_.write_window});
         rec.stations.push_back({setup_.device + "/dmabuf[" + std::to_string(engine) + "]", "dmabuf", setup_.store_buffer_beats});
+        rec.stations.push_back({setup_.device + "/dmawait[" + std::to_string(engine) + "]", "dmawait", Record::kWaitReasons});
 
-        // Requests: the Loads and Stores, in the order they started.
+        // Requests: the Loads, Stores and Fills, in the order they started.
         std::unordered_map<std::size_t, std::uint32_t> request_of;   // ticket -> request row
         for (const Action& a : actions_) {
-            if (a.kind != L3Action::Kind::Load && a.kind != L3Action::Kind::Store) continue;
+            if (a.kind == L3Action::Kind::Release) continue;   // never an engine's action
             request_of[a.ticket] = static_cast<std::uint32_t>(rec.requests.size());
             Record::Request q;
             q.engine = a.engine;
             q.port = 0;
-            q.is_load = a.kind == L3Action::Kind::Load;
+            q.is_load = a.kind != L3Action::Kind::Store;   // a Fill lands in L3, as a Load does
+            q.kind = a.kind == L3Action::Kind::Load    ? Record::RequestKind::Load
+                   : a.kind == L3Action::Kind::Store   ? Record::RequestKind::Store
+                                                       : Record::RequestKind::Fill;
+            q.ticket = static_cast<std::uint32_t>(a.ticket);
+            q.slot = a.slot;
             q.address = a.address;
             q.bytes = a.bytes;
             q.offered = a.offered;
@@ -289,6 +299,8 @@ public:
         }
         rec.commands = commands_;
         rec.buffers = buffers_;
+        for (const Wait& w : waits_)
+            rec.waits.push_back({w.engine, static_cast<Record::WaitReason>(w.why), w.from, w.to});
         return rec;
     }
 
