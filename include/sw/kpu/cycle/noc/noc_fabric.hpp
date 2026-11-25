@@ -20,6 +20,10 @@
 // every ring link takes at most one flit a cycle. A violation stops the run naming the ring or link. With the rule off (Config::bubble = false, only to show
 // what it prevents), the check is what fails, or the deadlock detector.
 //
+// LIFETIME. What the checks read (the topology the hubs and ports point into, the rings) is shared
+// with the simulator's hooks, so the fabric object may be destroyed before the simulator is; and
+// Simulator::reset() starts the checks afresh, through hub 0's reset.
+//
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
@@ -73,22 +77,23 @@ public:
     };
 
     NocFabric(Simulator& sim, Domain& d, const sw::kpu::program::platform::ArrayLayout& layout, Config c)
-        : sim_(&sim), domain_(&d), config_(c), topo_(std::make_unique<NocTopology>(layout)) {
+        : sim_(&sim), config_(c), state_(std::make_shared<State>(layout, d, c.ring_queue)) {
         if (c.ring_queue < 2 && c.bubble)
             throw std::invalid_argument("cycle::NocFabric: a ring queue of " + std::to_string(c.ring_queue) +
                                         " flit cannot keep a bubble; it needs two");
         if (c.ring_queue == 0 || c.l3_link == 0 || c.engine_link == 0)
             throw std::invalid_argument("cycle::NocFabric: every link needs a credit");
-        const NocTopology& t = *topo_;
+        const NocTopology& t = state_->topo;
         for (NocDim h = 0; h < t.hub_count(); ++h)
             hubs_.push_back(&sim.add<NocHub>("noc hub " + std::to_string(h), d, t, h, c.bubble));
         for (NocDim k = 0; k < t.port_count(); ++k)
             ports_.push_back(&sim.add<NocPort>("noc port " + t.port(k).label(), d, t, k, c.bubble));
+        state_->ports = ports_;
         std::vector<std::map<NocDim, std::pair<Link<NocFlit>*, Link<NocFlit>*>>> fold(t.port_count());
         for (const auto& ch : t.channels()) {
             const std::string name = "ch" + std::to_string(ch.id) + " " + std::to_string(ch.from_hub) + "->" +
                                      std::to_string(ch.to_hub);
-            Ring& ring = rings_[{ch.loop, ch.forward}];
+            Ring& ring = state_->rings[{ch.loop, ch.forward}];
             ring.label = (ch.column ? "column loop " : "row loop ") + std::to_string(ch.loop) +
                          (ch.forward ? ", forward" : ", backward");
             if (ch.port) {
@@ -113,33 +118,51 @@ public:
             auto& b = fold[k].at(p.hub_b);
             ports_[k]->connect_ring(*a.first, *a.second, *b.first, *b.second);
         }
-        for (auto& [key, r] : rings_) r.arrivals.assign(r.links.size(), 0);
-        sim.add_invariant("noc bubble: every ring keeps a free slot", [this] { check_rings(); });
+        state_->clear();
+        // The simulator holds the state through its hooks, so the fabric may go before it does.
+        std::shared_ptr<State> st = state_;
+        sim.add_invariant("noc bubble: every ring keeps a free slot", [st] { st->check(); });
+        hubs_.front()->on_reset([st] { st->clear(); });
     }
     NocFabric(const NocFabric&) = delete;
     NocFabric& operator=(const NocFabric&) = delete;
 
     // An L3 tile at `hub`; its Stores' beats go to `engine` on `port`. The caller connects the
-    // tile: l3.connect(links.to_l3, links.from_l3, its credit link).
+    // tile: l3.connect(links.to_l3, links.from_l3, its credit link). Everything is checked before
+    // anything is added, so a refused call leaves the simulator as it was; the engine, which may be
+    // attached later, is checked before the first cycle closes.
     L3Links attach_l3(NocDim hub, const Component& l3, NocDim store_port, NocDim store_engine) {
-        NocHub& h = *hubs_.at(hub);
+        if (hub >= hubs_.size())
+            throw std::invalid_argument("cycle::NocFabric: there is no hub " + std::to_string(hub));
+        if (store_port >= ports_.size())
+            throw std::invalid_argument("cycle::NocFabric: hub " + std::to_string(hub) + "'s L3 tile stores to port " +
+                                        std::to_string(store_port) + ": there is no port " + std::to_string(store_port));
+        NocHub& h = *hubs_[hub];
+        if (h.has_l3())
+            throw std::invalid_argument("cycle::NocFabric: hub " + std::to_string(hub) + " already has an L3 tile");
         auto& to = sim_->link<L3Beat>(h.name() + " -> " + l3.name(), h, l3, config_.l3_link);
         auto& from = sim_->link<L3Beat>(l3.name() + " -> " + h.name(), l3, h, config_.l3_link);
         h.connect_l3(to, from, store_port, store_engine);
+        state_->stores.push_back({hub, store_port, store_engine});
         return {to, from};
     }
 
     // A DMA engine on `port`, its Loads bound for the L3 tile at `l3_hub`. The caller connects the
     // engine: dma.connect(to DRAM, from DRAM, links.to_noc, links.from_noc, its credit link).
     EngineLinks attach_engine(NocDim port, const Component& dma, NocDim l3_hub) {
-        NocPort& p = *ports_.at(port);
+        if (port >= ports_.size()) throw std::invalid_argument("cycle::NocFabric: there is no port " + std::to_string(port));
+        if (l3_hub >= hubs_.size())
+            throw std::invalid_argument("cycle::NocFabric: an engine on port " + std::to_string(port) +
+                                        " bound for hub " + std::to_string(l3_hub) + ": there is no hub " +
+                                        std::to_string(l3_hub));
+        NocPort& p = *ports_[port];
         auto& to = sim_->link<L3Beat>(dma.name() + " -> " + p.name(), dma, p, config_.engine_link);
         auto& from = sim_->link<L3Beat>(p.name() + " -> " + dma.name(), p, dma, config_.engine_link);
         const NocDim e = p.connect_engine(to, from, l3_hub);
         return {to, from, e};
     }
 
-    [[nodiscard]] const NocTopology& topology() const { return *topo_; }
+    [[nodiscard]] const NocTopology& topology() const { return state_->topo; }
     [[nodiscard]] NocHub& hub(NocDim h) { return *hubs_.at(h); }
     [[nodiscard]] NocPort& port(NocDim k) { return *ports_.at(k); }
     [[nodiscard]] const Config& config() const { return config_; }
@@ -151,7 +174,7 @@ public:
     };
     [[nodiscard]] std::vector<RingPeak> ring_peaks() const {
         std::vector<RingPeak> v;
-        for (const auto& [key, r] : rings_) v.push_back({r.label, r.peak, r.links.size() * config_.ring_queue});
+        for (const auto& [key, r] : state_->rings) v.push_back({r.label, r.peak, r.links.size() * config_.ring_queue});
         return v;
     }
 
@@ -162,39 +185,71 @@ private:
         std::vector<std::uint64_t> arrivals;   // each link's, at the last check
         std::size_t peak = 0;
     };
+    struct Store {
+        NocDim hub, port, engine;
+    };
+    // What the fabric's checks read, shared with the simulator's hooks: the topology (which the
+    // hubs and ports point into), the rings, and the L3 tiles' store targets.
+    struct State {
+        State(const sw::kpu::program::platform::ArrayLayout& layout, Domain& d, std::size_t q)
+            : topo(layout), domain(&d), ring_queue(q) {}
+        NocTopology topo;
+        Domain* domain;
+        std::size_t ring_queue;
+        std::map<std::pair<NocDim, bool>, Ring> rings;
+        std::vector<NocPort*> ports;
+        std::vector<Store> stores;
+        Cycle checked = ~Cycle{0};
+        bool validated = false;
 
-    void check_rings() {
-        if (domain_->cycle() == 0) return;          // the NoC's domain has not ticked yet
-        const Cycle now = domain_->cycle() - 1;   // its cycle just closed
-        if (now == checked_) return;                // a step of another domain only
-        checked_ = now;
-        for (auto& [key, r] : rings_) {
-            // One flit a cycle on each link: a channel carries one, whoever drives it.
-            for (std::size_t i = 0; i < r.links.size(); ++i) {
-                const std::uint64_t a = r.links[i]->counts().arrivals;
-                if (a > r.arrivals[i] + 1)
-                    throw std::logic_error("link " + r.links[i]->name() + " took " + std::to_string(a - r.arrivals[i]) +
-                                           " flits in cycle " + std::to_string(now));
-                r.arrivals[i] = a;
+        // A run starts afresh: peaks, link baselines, the last cycle checked.
+        void clear() {
+            for (auto& [key, r] : rings) {
+                r.arrivals.assign(r.links.size(), 0);
+                r.peak = 0;
             }
-            std::size_t held = 0;
-            for (Link<NocFlit>* l : r.links) held += l->in_flight(now) + l->buffered(now);
-            r.peak = std::max(r.peak, held);
-            const std::size_t slots = r.links.size() * config_.ring_queue;
-            if (held >= slots)
-                throw std::logic_error("the " + r.label + " ring holds " + std::to_string(held) + " flits in its " +
-                                       std::to_string(slots) + " slots: no bubble left");
+            checked = ~Cycle{0};
+            validated = false;
         }
-    }
+
+        void check() {
+            if (!validated) {
+                for (const Store& s : stores)
+                    if (s.engine >= ports[s.port]->engines())
+                        throw std::logic_error("hub " + std::to_string(s.hub) + "'s L3 tile stores to engine " +
+                                               std::to_string(s.engine) + " of " + ports[s.port]->name() + ", which has " +
+                                               std::to_string(ports[s.port]->engines()));
+                validated = true;
+            }
+            if (domain->cycle() == 0) return;          // the NoC's domain has not ticked yet
+            const Cycle now = domain->cycle() - 1;   // its cycle just closed
+            if (now == checked) return;                // a step of another domain only
+            checked = now;
+            for (auto& [key, r] : rings) {
+                // One flit a cycle on each link: a channel carries one, whoever drives it.
+                for (std::size_t i = 0; i < r.links.size(); ++i) {
+                    const std::uint64_t a = r.links[i]->counts().arrivals;
+                    if (a > r.arrivals[i] + 1)
+                        throw std::logic_error("link " + r.links[i]->name() + " took " + std::to_string(a - r.arrivals[i]) +
+                                               " flits in cycle " + std::to_string(now));
+                    r.arrivals[i] = a;
+                }
+                std::size_t held = 0;
+                for (Link<NocFlit>* l : r.links) held += l->in_flight(now) + l->buffered(now);
+                r.peak = std::max(r.peak, held);
+                const std::size_t slots = r.links.size() * ring_queue;
+                if (held >= slots)
+                    throw std::logic_error("the " + r.label + " ring holds " + std::to_string(held) + " flits in its " +
+                                           std::to_string(slots) + " slots: no bubble left");
+            }
+        }
+    };
 
     Simulator* sim_;
-    Domain* domain_;
     Config config_;
-    std::unique_ptr<NocTopology> topo_;
+    std::shared_ptr<State> state_;
     std::vector<NocHub*> hubs_;
     std::vector<NocPort*> ports_;
-    std::map<std::pair<NocDim, bool>, Ring> rings_;
-    Cycle checked_ = ~Cycle{0};
 };
 
 }  // namespace sw::kpu::cycle

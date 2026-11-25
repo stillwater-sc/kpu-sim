@@ -48,7 +48,7 @@ namespace sw::kpu::cycle {
 
 struct NocPortCounts {
     std::uint64_t ring_through = 0, injected = 0, ejected = 0;
-    std::uint64_t injection_waits = 0;   // cycles an engine's head waited to enter
+    std::uint64_t injection_waits = 0;   // cycles an engine's head waited to enter (another may have)
     std::uint64_t bubble_waits = 0;      // of those, the ones with one credit, where the rule wanted two
 };
 
@@ -127,7 +127,7 @@ public:
             if (!g.head_since) g.head_since = now;
         }
         std::vector<std::size_t> order;
-        bool bubble_flag = false;
+        bool blocked = false, bubble_flag = false;   // an older head waited this cycle, whoever injected
         for (std::size_t e = 0; e < engines_.size(); ++e)
             if (engines_[e].head_since) order.push_back(e);
         std::stable_sort(order.begin(), order.end(),
@@ -136,9 +136,13 @@ public:
             Engine& g = engines_[e];
             const NocDim to = topo_->injection_hub(port_, g.l3_hub);
             const int d = to == hub_b_ ? 0 : 1;
-            if (used[d]) continue;
+            if (used[d]) {
+                blocked = true;
+                continue;
+            }
             const std::size_t have = dir_[d].out->credits(now);
             if (have < (bubble_ ? 2u : 1u)) {
+                blocked = true;
                 if (bubble_ && have == 1) bubble_flag = true;
                 continue;
             }
@@ -158,11 +162,11 @@ public:
             counters().complete();
             break;
         }
-        if (!best && !order.empty()) {
-            waited = true;
+        if (blocked) {
             ++noc_.injection_waits;
             if (bubble_flag) ++noc_.bubble_waits;
         }
+        if (!best && !order.empty()) waited = true;
         if (moved) counters().busy();
         else if (waited) counters().stall(Stall::NoCredit);
     }
@@ -180,6 +184,7 @@ public:
     }
 
     [[nodiscard]] NocDim port() const { return port_; }
+    [[nodiscard]] std::size_t engines() const { return engines_.size(); }
     [[nodiscard]] const NocPortCounts& noc() const { return noc_; }
 
 private:
