@@ -31,7 +31,8 @@
 // when accepted and a completion when its response is pushed; the channel is stalled (no credit)
 // in a cycle a response waits for `out`'s credit, busy while anything is outstanding, idle
 // otherwise. dram() adds the channel's own: reads, writes, the page outcomes (hit, empty,
-// conflict), refreshes, and the data bus's busy cycles (each CAS's burst), for its utilization.
+// conflict), refreshes, and the data bus's busy cycles (the cycles so far a CAS's burst was on
+// it), for its utilization.
 //
 // CHECKS, every cycle (Simulator::set_checks): the controller's invariants (it checks them as it
 // ticks), the data bus never carrying two bursts at once, and the outstanding bound. Any failure
@@ -108,6 +109,10 @@ public:
                                         std::to_string(config_.num_channels) + ")");
         if (config_.queue_depth == 0)
             throw std::invalid_argument("cycle::Lpddr5Channel " + this->name() + ": queue depth must be at least 1");
+        // The controller holds 16 banks a channel: a wider bank field would decode a bank past them.
+        if (config_.bank_bits > 4 || config_.banks_per_channel > 16)
+            throw std::invalid_argument("cycle::Lpddr5Channel " + this->name() + ": the controller models 16 banks a channel (bank_bits " +
+                                        std::to_string(config_.bank_bits) + ", banks " + std::to_string(config_.banks_per_channel) + ")");
         build();
     }
 
@@ -118,11 +123,13 @@ public:
 
     // Bytes in DRAM before the run (and again after reset()): the program's inputs.
     void preload(std::uint64_t address, const std::vector<std::uint8_t>& bytes) {
+        require_range(address, bytes.size(), "preload");
         write_bytes(image_, address, bytes.data(), bytes.size());
         write_bytes(store_, address, bytes.data(), bytes.size());
     }
     // Bytes in DRAM now.
     [[nodiscard]] std::vector<std::uint8_t> peek(std::uint64_t address, std::size_t size) const {
+        require_range(address, size, "peek");
         std::vector<std::uint8_t> v(size);
         read_bytes(store_, address, v.data(), size);
         return v;
@@ -150,6 +157,7 @@ public:
         // 3. The controller's cycle; what it completes is pushed from the next cycle.
         mc_->tick();
         ++dram_.cycles;
+        count_bus(now);
         if (blocked) counters().stall(Stall::NoCredit);
         else if (outstanding_ > 0) counters().busy();
     }
@@ -179,6 +187,7 @@ public:
         outstanding_ = 0;
         dram_ = {};
         bus_end_ = 0;
+        bus_windows_.clear();
         bus_error_.clear();
     }
 
@@ -222,7 +231,8 @@ private:
         mc_ = std::make_unique<Controller>(config_);
         mc_->enable_invariants(true);
         mc_->enable_tracing(trace_);
-        // Each CAS's data-bus window [data_start, data_end): its busy cycles, and no two at once.
+        // Each CAS's data-bus window [data_start, data_end), reported when the CAS issues: no two at
+        // once, and its cycles counted busy as they pass (count_bus), not ahead of time.
         mc_->set_command_observer([this](const Controller::CommandRecord& r) {
             using K = Controller::CommandRecord::Kind;
             if (r.kind != K::Read && r.kind != K::Write) return;
@@ -230,11 +240,24 @@ private:
                 bus_error_ = "a burst on the data bus at controller cycle " + std::to_string(r.data_start) +
                              " overlaps the one ending at " + std::to_string(bus_end_);
             bus_end_ = std::max(bus_end_, r.data_end);
-            dram_.data_bus_busy += r.data_end - r.data_start;
+            bus_windows_.emplace_back(r.data_start, r.data_end);
         });
+    }
+    // Cycle c of the controller: busy if a burst's window covers it. Windows do not overlap and
+    // arrive in the order they start (checked above), so only the oldest can cover c.
+    void count_bus(Cycle c) {
+        while (!bus_windows_.empty() && bus_windows_.front().second <= c) bus_windows_.pop_front();
+        if (!bus_windows_.empty() && bus_windows_.front().first <= c) ++dram_.data_bus_busy;
+    }
+    // [address, address + size) must not wrap past 2^64 (a one-byte access at the top is fine).
+    void require_range(std::uint64_t address, std::size_t size, const char* what) const {
+        if (size > 0 && address > ~std::uint64_t{0} - (size - 1))
+            throw std::invalid_argument("cycle::Lpddr5Channel " + name() + ": " + what + " of " + std::to_string(size) +
+                                        " bytes at " + std::to_string(address) + " wraps past the top of the address space");
     }
 
     void accept(Cycle now, DramRequest q) {
+        require_range(q.address, q.write && !q.bytes.empty() ? q.bytes.size() : q.size, q.write ? "a write" : "a read");
         counters().accept();
         ++outstanding_;
         DramResponse r;
@@ -293,6 +316,7 @@ private:
     std::size_t outstanding_ = 0;
     DramCounts dram_;
     std::uint64_t bus_end_ = 0;
+    std::deque<std::pair<std::uint64_t, std::uint64_t>> bus_windows_;   // bursts not yet past
     std::string bus_error_;
     bool trace_ = false;
 };

@@ -84,7 +84,9 @@ class Event:
 
         args = item.get('args', {})
         txn_id = args.get('txn_id')
-        if txn_id is None:
+        # An event without a txn_id is not a command (bus and bank state), except a REFRESH
+        # that lost its id: kept, with txn_id None, so INV-006 reports it.
+        if txn_id is None and item.get('name') != 'REFRESH':
             return None
 
         return cls(
@@ -224,7 +226,7 @@ class TraceValidator:
     def _check_inv006_refresh_has_no_transaction(self):
         """INV-006: A REFRESH belongs to no transaction: it carries txn_id 0 (request ids start at 1)."""
         for e in getattr(self, 'refreshes', []):
-            if e.txn_id != 0:
+            if e.txn_id is None or isinstance(e.txn_id, bool) or e.txn_id != 0:
                 self.violations.append(Violation(
                     invariant='INV-006',
                     severity=Severity.ERROR,

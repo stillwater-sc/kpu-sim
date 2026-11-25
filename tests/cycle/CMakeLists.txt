@@ -104,4 +104,8 @@ if(KPU_PYTHON3)
                 ${CMAKE_CURRENT_BINARY_DIR}/cycle_dram_demo.json
                 ${CMAKE_CURRENT_BINARY_DIR}/cycle_dram_demo.counters.json)
     set_tests_properties(cycle_dram_trace_check PROPERTIES LABELS "cycle;lpddr5;trace;v0.10" FIXTURES_REQUIRED cycle_dram)
+    # The validator's INV-006 on synthetic traces: a refresh with txn_id 0 passes, any other fails.
+    add_test(NAME lpddr5_trace_validator_selftest
+        COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common/test_trace_validator.py)
+    set_tests_properties(lpddr5_trace_validator_selftest PROPERTIES LABELS "cycle;lpddr5;trace;v0.10")
 endif()

@@ -5,9 +5,10 @@
 // DRAM requests, each no earlier than its cycle, one a cycle while it holds a credit; the sink
 // pops responses, at most one every `interval` cycles, except in its stall windows, and logs them.
 //
-// COUNTERS (counters.hpp): the requester is busy when it pushes and stalled (no credit) when a
-// request is due without a credit; the sink is busy when it pops and stalled (held) in a stall
-// window with a response waiting.
+// COUNTERS (counters.hpp): the requester is busy when it pushes, stalled (no credit) when a
+// request is due without a credit, and stalled (held) while its next request is scheduled for a
+// later cycle; the sink is busy when it pops and stalled (held) with a response waiting in a stall
+// window or before its interval allows the next pop. A held wait is not a deadlock (simulator.hpp).
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -34,7 +35,11 @@ public:
     void connect(Link<DramRequest>& out) { out_ = &out; }
 
     void evaluate(Cycle now) override {
-        if (next_ == items_.size() || now < items_[next_].at) return;
+        if (next_ == items_.size()) return;
+        if (now < items_[next_].at) {
+            counters().stall(Stall::External);   // waiting on its schedule, not stuck
+            return;
+        }
         if (!out_->can_push(now)) {
             counters().stall(Stall::NoCredit);
             return;
@@ -74,7 +79,11 @@ public:
                 if (in_->can_pop(now)) counters().stall(Stall::External);
                 return;
             }
-        if (now < next_at_ || !in_->can_pop(now)) return;
+        if (!in_->can_pop(now)) return;
+        if (now < next_at_) {
+            counters().stall(Stall::External);   // a response waits for the sink's interval
+            return;
+        }
         received.push_back(in_->pop(now));
         popped_at.push_back(now);
         next_at_ = now + interval_;

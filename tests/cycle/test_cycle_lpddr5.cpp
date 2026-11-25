@@ -26,6 +26,7 @@
 #include <sw/kpu/cycle/report.hpp>
 #include <sw/kpu/cycle/simulator.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -145,7 +146,23 @@ TEST_CASE("Every pattern workload runs on the core exactly as on the bare contro
         CHECK(a.page_empty == b.page_empty);
         CHECK(a.page_conflicts == b.page_conflicts);
         CHECK(a.refreshes == b.refreshes);
-        CHECK(rig.ch->controller().trace_entries().size() == mc.trace_entries().size());
+        // The controller's trace, command by command, up to the cycle both had reached: the channel
+        // keeps ticking (refresh) while its last response drains, the replay stops when done.
+        const std::uint64_t horizon = std::min(rig.ch->controller().current_cycle(), mc.current_cycle());
+        std::vector<const sw::trace::TraceEntry*> ta, tb;
+        for (const auto& e : rig.ch->controller().trace_entries()) if (e.cycle_issue < horizon) ta.push_back(&e);
+        for (const auto& e : mc.trace_entries()) if (e.cycle_issue < horizon) tb.push_back(&e);
+        REQUIRE(ta.size() == tb.size());
+        for (std::size_t i = 0; i < ta.size(); ++i) {
+            CAPTURE(i, ta[i]->description);
+            CHECK(ta[i]->cycle_issue == tb[i]->cycle_issue);
+            CHECK(ta[i]->cycle_complete == tb[i]->cycle_complete);
+            CHECK(ta[i]->component_type == tb[i]->component_type);
+            CHECK(ta[i]->component_id == tb[i]->component_id);
+            CHECK(ta[i]->transaction_type == tb[i]->transaction_type);
+            CHECK(ta[i]->transaction_id == tb[i]->transaction_id);
+            CHECK(ta[i]->description == tb[i]->description);
+        }
         // The pattern suite's own expected page outcomes, where it states them.
         if (w.expected.page_empty + w.expected.page_hits + w.expected.page_conflicts > 0) {
             CHECK(a.page_hits == w.expected.page_hits);
@@ -245,6 +262,7 @@ TEST_CASE("Backpressure: a held sink fills the channel to its bound and stops th
     REQUIRE(rig.sink->received.size() == 40);
     std::vector<bool> seen(40, false);
     for (const auto& r : rig.sink->received) {
+        REQUIRE(r.id < seen.size());
         CHECK_FALSE(seen[r.id]);
         seen[r.id] = true;
     }
@@ -282,6 +300,28 @@ TEST_CASE("Counters: the data bus carries one burst per request, and refresh run
         CHECK(static_cast<double>(d.data_bus_busy) / window >= 0.85);
         CHECK(d.data_bus_utilization() > 0.0);
     }
+    SECTION("the data bus is counted as its cycles pass, not when the command issues") {
+        // One read of an idle bank: ACTIVATE, tRCD, READ, then tCL before its burst. Sampled every
+        // cycle, the count never runs ahead of the cycles, rises one a cycle through the burst, and
+        // starts no earlier than tRCD + tCL.
+        Requester::Item it;
+        it.request.address = pl::make_address(0, 100, 0);
+        Rig rig({it}, cfg);
+        std::vector<std::uint64_t> busy;
+        while (!rig.sim.idle() || busy.empty()) {
+            REQUIRE(rig.sim.step());
+            if (rig.dram.cycle() > busy.size()) busy.push_back(rig.ch->dram().data_bus_busy);
+        }
+        REQUIRE(busy.back() == cfg.timing.tBurst_BL16);
+        std::size_t first = busy.size();
+        for (std::size_t c = 0; c < busy.size(); ++c) {
+            CHECK(busy[c] <= c + 1);
+            if (c > 0) CHECK(busy[c] - busy[c - 1] <= 1);
+            if (busy[c] > 0 && first == busy.size()) first = c;
+        }
+        CHECK(first >= cfg.timing.tRCD + cfg.timing.tCL);
+        CHECK(busy[first + cfg.timing.tBurst_BL16 - 1] == cfg.timing.tBurst_BL16);   // back to back
+    }
     SECTION("refresh, with nothing to do") {
         Rig rig({}, cfg);
         const Cycle horizon = 20ull * 16 * cfg.timing.tREFIpb;
@@ -314,6 +354,31 @@ TEST_CASE("The channel refuses what it cannot model", "[cycle][lpddr5]") {
     auto zero = pl::single_channel_config();
     zero.queue_depth = 0;
     CHECK_THROWS_WITH(sim.add<Lpddr5Channel>("zero", d, zero), ContainsSubstring("queue depth"));
+    // A bank field past the controller's 16 banks.
+    auto wide = pl::single_channel_config();
+    wide.bank_bits = 5;
+    CHECK_THROWS_WITH(sim.add<Lpddr5Channel>("wide", d, wide), ContainsSubstring("16 banks"));
+    // Byte ranges that wrap past 2^64; one byte at the top is fine.
+    auto& top = sim.add<Lpddr5Channel>("top", d, pl::single_channel_config());
+    CHECK_THROWS_WITH(top.preload(~std::uint64_t{0}, {1, 2}), ContainsSubstring("wraps"));
+    CHECK_THROWS_WITH(top.peek(~std::uint64_t{0} - 2, 4), ContainsSubstring("wraps"));
+    top.preload(~std::uint64_t{0}, {7});
+    CHECK(top.peek(~std::uint64_t{0}, 1) == std::vector<std::uint8_t>{7});
+    CHECK(top.peek(0, 0).empty());
+    // A request whose bytes wrap stops the run, naming the channel.
+    {
+        Requester::Item it;
+        it.request.address = ~std::uint64_t{0};
+        it.request.size = 2;
+        Rig rig({it});
+        try {
+            rig.sim.run_until_idle(kLimit);
+            FAIL("a wrapping request was accepted");
+        } catch (const InvariantViolation& e) {
+            CHECK(e.where() == "lpddr5");
+            CHECK_THAT(e.what(), ContainsSubstring("wraps"));
+        }
+    }
     // Not connected: the first cycle says so, as an InvariantViolation naming the channel.
     sim.add<Lpddr5Channel>("loose", d, pl::single_channel_config());
     CHECK_THROWS_WITH(sim.step(), ContainsSubstring("not connected"));
