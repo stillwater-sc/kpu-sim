@@ -2,7 +2,7 @@
 """
 Smoke test for the memory-side debugger and pack.py (docs/plans/memory-side-debugger.md step 5).
 
-Usage: python3 test_viewer.py <bundle.mflow>
+Usage: python3 test_viewer.py <bundle.mflow> [--expect-fills] [--expect-waits]
 
 Packs the bundle, checks the payload is embedded and parses, checks a non-bundle is refused
 with exit 2, and -- when Node.js is on PATH -- syntax-checks the viewer's script and runs its
@@ -24,6 +24,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 READER = HERE.parent / "common" / "mflow.js"
 BUNDLE = None
+EXPECT_FILLS = False   # --expect-fills: the bundle's run has Fills (a matmul's C, from L-B)
+EXPECT_WAITS = False   # --expect-waits: the bundle's run stalls its DMA engine
 
 
 def extract(page, signature):
@@ -262,7 +264,7 @@ for (let b = 0; b < R.B.rows; b++) if (R.B.request[b] !== Mflow.NONE && R.Q.kind
 process.stdout.write(JSON.stringify({ source: R.m.source || null, fills, fillBursts, dram, burstBytes: R.B.rows * R.m.burst_bytes }));""")
         self.assertEqual(got["fillBursts"], 0)
         self.assertEqual(got["dram"], got["burstBytes"])
-        if got["source"] == "cycle-core":
+        if EXPECT_FILLS:   # a fixture that promises Fills (--expect-fills): a load-only run has none
             self.assertGreater(got["fills"], 0)
 
     def test_the_real_bundles_waits_are_grouped_and_found(self):
@@ -285,7 +287,7 @@ process.stdout.write(JSON.stringify({ source: R.m.source || null, rows: W.rows, 
         self.assertNotIn("error", got)
         self.assertEqual(got["grouped"], got["rows"])
         self.assertEqual(got["found"], got["rows"])
-        if got["source"] == "cycle-core":
+        if EXPECT_WAITS:   # a fixture that promises stalls (--expect-waits): a run need not stall
             self.assertGreater(got["rows"], 0)
             self.assertGreater(got["cycles"], 0)
 
@@ -321,4 +323,8 @@ if __name__ == "__main__":
         print(__doc__)
         sys.exit(2)
     BUNDLE = sys.argv.pop(1)
+    for flag in ("--expect-fills", "--expect-waits"):
+        if flag in sys.argv:
+            sys.argv.remove(flag)
+            globals()["EXPECT_" + flag.split("-")[-1].upper()] = True
     unittest.main()
