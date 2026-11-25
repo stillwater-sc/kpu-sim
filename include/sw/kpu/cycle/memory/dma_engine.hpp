@@ -48,6 +48,11 @@
 // or the store buffer). dma() adds the engine's own: bursts, the most in flight, and the cycles
 // each cause held something up (several can in one cycle).
 //
+// EVENTS (memory_events.hpp): with a sink attached (set_events), the engine reports each action's
+// start and completion, each burst's post and retirement, the store buffer's occupancy when it
+// changes, and the causes that held something up in a cycle. It only reports: nothing it does
+// depends on the sink.
+//
 // CHECKS, every cycle: the windows and the store buffer within their bounds, and a slot credit
 // never received twice. check_slot_credits() checks the engine and its L3 tile together: a slot's
 // credit is never with the engine while the slot is live.
@@ -61,6 +66,7 @@
 #include <sw/kpu/cycle/memory/l3_program.hpp>
 #include <sw/kpu/cycle/memory/l3_tile.hpp>
 #include <sw/kpu/cycle/memory/lpddr5_channel.hpp>
+#include <sw/kpu/cycle/memory/memory_events.hpp>
 
 #include <algorithm>
 #include <array>
@@ -75,21 +81,6 @@
 #include <vector>
 
 namespace sw::kpu::cycle {
-
-enum class DmaWait : std::uint8_t { SlotCredit, L3Credit, RequestCredit, Window, StoreBuffer, Order };
-inline constexpr std::size_t kDmaWaits = 6;
-
-inline const char* to_string(DmaWait w) {
-    switch (w) {
-        case DmaWait::SlotCredit: return "no slot credit";
-        case DmaWait::L3Credit: return "no L3 link credit";
-        case DmaWait::RequestCredit: return "no DRAM request credit";
-        case DmaWait::Window: return "burst window full";
-        case DmaWait::StoreBuffer: return "store buffer full";
-        case DmaWait::Order: return "an earlier command's burst to the same address";
-    }
-    return "?";
-}
 
 struct DmaCounts {
     std::uint64_t loads = 0, stores = 0, fills = 0; // completed
@@ -144,6 +135,12 @@ public:
         credits_ = &credits;
     }
 
+    // The sink this engine reports to, as engine `engine` (null: none, the default).
+    void set_events(MemoryEvents* events, std::uint32_t engine = 0) {
+        events_ = events;
+        engine_ = engine;
+    }
+
     void evaluate(Cycle now) override {
         if (!to_dram_ || !from_dram_ || !to_l3_ || !from_l3_ || !credits_)
             throw std::logic_error("cycle::DmaEngine " + name() + ": not connected");
@@ -174,6 +171,7 @@ public:
                 landed_.push_back({r.id, std::move(r.bytes)});
             } else {
                 --writes_;
+                if (events_) events_->burst_retired(engine_, domain().edge(now), r.id);
                 finish_burst(now, it);
             }
             moved = true;
@@ -208,9 +206,11 @@ public:
                 b.offset = it->second.offset;
                 b.tile_bytes = c.action.bytes;
                 b.bytes = std::move(landed_.front().bytes);
+                const std::uint64_t id = landed_.front().id;
                 landed_.pop_front();
                 to_l3_->push(now, std::move(b));
                 --reads_;
+                if (events_) events_->burst_retired(engine_, domain().edge(now), id);
                 finish_burst(now, it);
                 moved = true;
             } else {
@@ -228,6 +228,7 @@ public:
                                            " (slot " + std::to_string(b.slot) + ", " + std::to_string(b.tile_bytes) +
                                            " bytes), which is not one of its Stores");
                 staged_.push_back(std::move(b));
+                if (events_) events_->store_buffer(engine_, domain().edge(now), staged_.size());
                 moved = true;
             } else {
                 wait(DmaWait::StoreBuffer);
@@ -244,6 +245,7 @@ public:
                 active_.push_back(next_);
                 spans_.push_back({c.ticket, now, std::nullopt});
                 c.span = spans_.size() - 1;
+                if (events_) events_->action_started(engine_, domain().edge(now), c.ticket, c.action);
                 counters().accept();
                 ++next_;
                 moved = true;
@@ -253,11 +255,14 @@ public:
         }
 
         std::optional<Stall> stall;
+        std::uint32_t mask = 0;
         for (std::size_t w = 0; w < kDmaWaits; ++w)
             if (waiting[w]) {
                 ++dma_.waits[w];
+                mask |= 1u << w;
                 if (!stall) stall = Stall::NoCredit;
             }
+        if (events_ && mask) events_->dma_waits(engine_, domain().edge(now), mask);
         if (moved || !in_flight_.empty()) counters().busy();
         else if (stall) counters().stall(*stall);
     }
@@ -373,10 +378,12 @@ private:
             r->size = kL3BeatBytes;
             r->tag = c.ticket;
             const std::uint32_t offset = static_cast<std::uint32_t>(r->address - c.action.dram_address);
+            if (events_) events_->burst_posted(engine_, domain().edge(now), c.ticket, r->id, r->address, r->write);
             if (r->write) {
                 c.sent_beats[offset / kL3BeatBytes] = true;
                 r->bytes = std::move(staged->bytes);
                 staged_.erase(staged);
+                if (events_) events_->store_buffer(engine_, domain().edge(now), staged_.size());
                 ++dma_.write_bursts;
                 ++writes_;
             } else {
@@ -405,6 +412,7 @@ private:
         active_.erase(std::find(active_.begin(), active_.end(), ci));
         spans_[c.span].completed = now;
         counters().complete();
+        if (events_) events_->action_completed(engine_, domain().edge(now), c.ticket);
         if (c.action.kind == L3Action::Kind::Load) ++dma_.loads;
         else if (c.action.kind == L3Action::Kind::Fill) ++dma_.fills;
         else ++dma_.stores;
@@ -457,6 +465,8 @@ private:
     Link<L3Beat>* to_l3_ = nullptr;
     Link<L3Beat>* from_l3_ = nullptr;
     Link<SlotCredit>* credits_ = nullptr;
+    MemoryEvents* events_ = nullptr;
+    std::uint32_t engine_ = 0;
 };
 
 // The engine and its L3 tile together: a slot's credit is never with the engine while the slot is

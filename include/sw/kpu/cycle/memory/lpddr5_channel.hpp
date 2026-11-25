@@ -38,6 +38,10 @@
 // ticks), the data bus never carrying two bursts at once, and the outstanding bound. Any failure
 // stops the run as an InvariantViolation naming the channel and the cycle.
 //
+// EVENTS (memory_events.hpp): with a sink attached (set_events), each request the controller
+// accepts, under the id the controller gives it, and each command the controller issues, as the
+// controller's own record (from the observer that also checks the data bus).
+//
 // TRACE. The controller's own trace -- banks, buses, commands -- for
 // patterns/memory/lpddr5/common/trace_validator.py: enable_dram_trace() before the run,
 // write_dram_trace() after. The component's state is on the cycle core's trace as any other's.
@@ -48,6 +52,7 @@
 
 #include <sw/kpu/cycle/component.hpp>
 #include <sw/kpu/cycle/link.hpp>
+#include <sw/kpu/cycle/memory/memory_events.hpp>
 #include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
@@ -119,6 +124,12 @@ public:
     void connect(Link<DramRequest>& in, Link<DramResponse>& out) {
         in_ = &in;
         out_ = &out;
+    }
+
+    // The sink this channel reports to, as channel `channel` (null: none, the default).
+    void set_events(MemoryEvents* events, std::uint32_t channel = 0) {
+        events_ = events;
+        channel_ = channel;
     }
 
     // Bytes in DRAM before the run (and again after reset()): the program's inputs.
@@ -235,6 +246,7 @@ private:
         // once, and its cycles counted busy as they pass (count_bus), not ahead of time.
         mc_->set_command_observer([this](const Controller::CommandRecord& r) {
             using K = Controller::CommandRecord::Kind;
+            if (events_) events_->dram_command(channel_, r);
             if (r.kind != K::Read && r.kind != K::Write) return;
             if (r.data_start < bus_end_ && bus_error_.empty())
                 bus_error_ = "a burst on the data bus at controller cycle " + std::to_string(r.data_start) +
@@ -287,6 +299,7 @@ private:
             id = mc_->submit_read(q.address, q.size, done);
         }
         if (!id) throw std::logic_error("cycle::Lpddr5Channel " + name() + ": the controller refused a request it could accept");
+        if (events_) events_->dram_accepted(channel_, domain().edge(now), *id, q.id, q.write, q.address);
     }
 
     static void write_bytes(Store& s, std::uint64_t address, const std::uint8_t* p, std::size_t n) {
@@ -319,6 +332,8 @@ private:
     std::deque<std::pair<std::uint64_t, std::uint64_t>> bus_windows_;   // bursts not yet past
     std::string bus_error_;
     bool trace_ = false;
+    MemoryEvents* events_ = nullptr;
+    std::uint32_t channel_ = 0;
 };
 
 }  // namespace sw::kpu::cycle

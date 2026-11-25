@@ -81,7 +81,10 @@ class ViewerSmokeTest(unittest.TestCase):
         self.assertGreater(m["ceiling_bytes_per_cycle"], 0)
         self.assertGreater(m["burst_bytes"], 0)
         kinds = {s["kind"] for s in m["stations"]}
-        self.assertEqual(kinds, {"dram_bank", "dram_bus", "dma", "dmabuf", "port"})
+        # Every memory side has banks, buses, engines and store buffers; port stubs only when the
+        # NoC is stubbed (kpu-memsim). A cycle-core bundle has none, and the page draws no port rows.
+        self.assertLessEqual({"dram_bank", "dram_bus", "dma", "dmabuf"}, kinds)
+        self.assertLessEqual(kinds, {"dram_bank", "dram_bus", "dma", "dmabuf", "port"})
 
     def test_the_viewer_reads_the_real_bundle(self):
         # Runs the page's own reader (col + parse) over the bundle under Node: every column the

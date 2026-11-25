@@ -104,6 +104,37 @@ set_target_properties(test_cycle_memory_subsystem PROPERTIES FOLDER "Tests/Cycle
 add_test(NAME test_cycle_memory_subsystem COMMAND test_cycle_memory_subsystem)
 set_tests_properties(test_cycle_memory_subsystem PROPERTIES LABELS "cycle;memory;noc;v0.10")
 
+# The memory-flow recorder (docs/plans/cycle-mflow-and-debug-server.md step 1): a cycle-core run as
+# a .mflow record. The test writes kpu_s1's and the T4's bundles; mflow_check.py checks them.
+add_executable(test_cycle_mflow_recorder test_cycle_mflow_recorder.cpp)
+target_link_libraries(test_cycle_mflow_recorder PRIVATE Catch2::Catch2WithMain kpu_simulator kpu_memory_components
+                      kpu_trace kpu_program)
+target_include_directories(test_cycle_mflow_recorder PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_cycle_mflow_recorder PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+                           KPU_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+kpu_set_target_options(test_cycle_mflow_recorder)
+if(MSVC)
+    target_compile_options(test_cycle_mflow_recorder PRIVATE /bigobj)   # as kpu-run (C1128)
+endif()
+set_target_properties(test_cycle_mflow_recorder PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_mflow_recorder COMMAND test_cycle_mflow_recorder)
+set_tests_properties(test_cycle_mflow_recorder PROPERTIES LABELS "cycle;memory;mflow;v0.10" FIXTURES_SETUP cycle_mflow)
+if(KPU_PYTHON3)
+    foreach(run s1 t4)
+        add_test(NAME cycle_mflow_check_${run}
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/mflow_check.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/cycle_mflow_${run}.mflow)
+        set_tests_properties(cycle_mflow_check_${run} PROPERTIES LABELS "cycle;memory;mflow;v0.10"
+                             FIXTURES_REQUIRED cycle_mflow)
+    endforeach()
+    # The memory-side debugger reads a cycle-core bundle (its reader runs under Node when on PATH).
+    add_test(NAME cycle_mflow_viewer_s1
+        COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/memflow/test_viewer.py
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_mflow_s1.mflow)
+    set_tests_properties(cycle_mflow_viewer_s1 PROPERTIES LABELS "cycle;memory;mflow;viewer;v0.10"
+                         FIXTURES_REQUIRED cycle_mflow)
+endif()
+
 # Step 0c (#535): the test structure's trace and counters files, validated against each other.
 # Open build/tests/cycle/cycle_trace_demo.json in https://ui.perfetto.dev
 add_executable(cycle_trace_demo cycle_trace_demo.cpp)
