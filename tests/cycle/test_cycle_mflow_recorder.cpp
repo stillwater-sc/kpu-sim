@@ -11,6 +11,7 @@
 // ============================================================================
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <sw/kpu/cycle/memory/csp_l3_program.hpp>
 #include <sw/kpu/cycle/memory/memory_subsystem.hpp>
@@ -26,6 +27,8 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
@@ -65,7 +68,7 @@ MflowSetup setup_for(const std::string& name, const MemoryRunOptions& o) {
 }
 
 struct Recorded {
-    std::size_t window = 0, write_window = 0;
+    std::size_t window = 0, write_window = 0, store_buffer_beats = 0;
     MemoryRun run;
     MFR record;
     std::vector<MflowRecorder::Wait> waits;
@@ -79,6 +82,7 @@ Recorded run_recorded(const CspL3Plan& plan, const platform::DeviceSpecification
     Recorded out;
     out.window = o.window;
     out.write_window = o.window;   // run_memory_subsystem gives the engine both windows the same
+    out.store_buffer_beats = o.store_buffer_beats;
     out.run = run_memory_subsystem(plan, dev, o);
     out.record = recorder.record(out.run.end);
     out.waits = recorder.waits();
@@ -125,19 +129,29 @@ void check_record(const Recorded& x, const CspL3Plan& plan) {
     CHECK(count(r, MFR::CommandKind::Read) == run.dram.reads);
     CHECK(count(r, MFR::CommandKind::Write) == run.dram.writes);
     CHECK(count(r, MFR::CommandKind::Refresh) == run.dram.refreshes);
-    // Requests: one per Load and Store, each with exactly the bursts its bytes span, in order.
-    CHECK(r.requests.size() == plan.loads + plan.stores);
+    // Requests: one per Load, Store and Fill, each with exactly the bursts its bytes span (a
+    // Fill: none), in order, naming its action and slot.
+    CHECK(r.requests.size() == plan.loads + plan.stores + plan.fills);
     std::vector<std::uint32_t> of(r.requests.size(), 0);
     for (const auto& b : r.bursts) ++of.at(b.request);
+    std::size_t fills = 0;
     for (std::size_t q = 0; q < r.requests.size(); ++q) {
         const auto& rq = r.requests[q];
-        CHECK(of[q] == rq.bytes / kL3BeatBytes);
+        const bool fill = rq.kind == MFR::RequestKind::Fill;
+        fills += fill ? 1 : 0;
+        CHECK(of[q] == (fill ? 0u : rq.bytes / kL3BeatBytes));
+        CHECK(rq.is_load == (rq.kind != MFR::RequestKind::Store));
+        REQUIRE(rq.ticket < plan.program.size());
+        CHECK(rq.slot == plan.program[rq.ticket].slot);
+        CHECK(static_cast<int>(plan.program[rq.ticket].kind) == static_cast<int>(rq.kind) +
+                  (fill ? 1 : 0));   // L3Action::Kind is Load, Store, Release, Fill
         CHECK(rq.offered <= rq.credit);
         CHECK(rq.credit <= rq.first_burst);
         CHECK(rq.first_burst <= rq.last_burst);
         CHECK(rq.last_burst <= rq.retired);
         CHECK(rq.retired <= r.makespan);
     }
+    CHECK(fills == plan.fills);
     // Every action, Fills too, started and completed.
     CHECK(x.actions.size() == plan.loads + plan.stores + plan.fills);
     CHECK(std::all_of(x.actions.begin(), x.actions.end(), [](const auto& a) { return a.completed.has_value(); }));
@@ -159,7 +173,10 @@ void check_record(const Recorded& x, const CspL3Plan& plan) {
     CHECK(peak(false) <= x.write_window);
     CHECK(peak(true) <= run.dma.max_reads_in_flight);
     // The store buffer within its depth.
-    for (const auto& s : r.buffers) CHECK(s.held <= r.stations.back().capacity);
+    const auto buf = std::find_if(r.stations.begin(), r.stations.end(), [](const auto& s) { return s.kind == "dmabuf"; });
+    REQUIRE(buf != r.stations.end());
+    CHECK(buf->capacity == x.store_buffer_beats);
+    for (const auto& s : r.buffers) CHECK(s.held <= buf->capacity);
     // The waits: one cause's intervals never overlap, and add up to the engine's counts.
     std::array<std::uint64_t, kDmaWaits> total{};
     std::array<Cycle, kDmaWaits> last_end{};
@@ -171,6 +188,17 @@ void check_record(const Recorded& x, const CspL3Plan& plan) {
         total[k] += w.to - w.from;
     }
     for (std::size_t k = 0; k < kDmaWaits; ++k) CHECK(total[k] == run.dma.waits[k]);
+    // The record's waits are the recorder's, reason for reason.
+    REQUIRE(r.waits.size() == x.waits.size());
+    for (std::size_t i = 0; i < r.waits.size(); ++i) {
+        CHECK(static_cast<std::size_t>(r.waits[i].reason) == static_cast<std::size_t>(x.waits[i].why));
+        CHECK(r.waits[i].from == x.waits[i].from);
+        CHECK(r.waits[i].to == x.waits[i].to);
+    }
+    // Both windows, and who recorded it.
+    CHECK(r.source == "cycle-core");
+    CHECK(r.window == x.window);
+    CHECK(r.write_window == x.write_window);
     // The manifest: the timing table M5 needs, and the clock ratio.
     CHECK(r.ticks_per_cycle == 3.2);
     CHECK(std::any_of(r.dram_timing.begin(), r.dram_timing.end(), [](const auto& t) { return t.first == "tFAW"; }));
@@ -208,13 +236,15 @@ TEST_CASE("A hand-built run's record: a Load, then a Store of its tile", "[cycle
     CHECK(!r.buffers.empty());
     CHECK(std::any_of(r.buffers.begin(), r.buffers.end(), [](const auto& s) { return s.held > 0; }));
     CHECK(r.buffers.back().held == 0);
-    // Stations: 16 banks, the bus, the engine (its window), its store buffer.
-    REQUIRE(r.stations.size() == 19);
+    // Stations: 16 banks, the bus, the engine (both windows), its store buffer, its waits.
+    REQUIRE(r.stations.size() == 20);
     CHECK(r.stations[0].name == "hand/mc[0]/ch[0]/bg[0]/ba[0]");
     CHECK(r.stations[16].kind == "dram_bus");
     CHECK(r.stations[17].kind == "dma");
     CHECK(r.stations[17].capacity == 32);   // 16 reads and 16 writes in flight
     CHECK(r.stations[18].kind == "dmabuf");
+    CHECK(r.stations[19].kind == "dmawait");
+    CHECK(r.stations[19].capacity == kDmaWaits);
     // A CAS's exact data window is one burst of the controller's ticks.
     for (const auto& c : r.commands)
         if (c.kind == MFR::CommandKind::Read || c.kind == MFR::CommandKind::Write) {
@@ -271,6 +301,71 @@ TEST_CASE("kpu_s1's record agrees with its counters, and is written and read bac
     CHECK(back.commands.size() == x.record.commands.size());
     CHECK(back.requests.size() == x.record.requests.size());
     CHECK(back.makespan == x.record.makespan);
+    CHECK(back.source == "cycle-core");
+    CHECK(back.write_window == x.record.write_window);
+    REQUIRE(back.waits.size() == x.record.waits.size());
+    CHECK(!back.waits.empty());
+    for (std::size_t i = 0; i < back.waits.size(); ++i) {
+        CHECK(back.waits[i].reason == x.record.waits[i].reason);
+        CHECK(back.waits[i].from == x.record.waits[i].from);
+        CHECK(back.waits[i].to == x.record.waits[i].to);
+    }
+    for (std::size_t q = 0; q < back.requests.size(); ++q) {
+        CHECK(back.requests[q].kind == x.record.requests[q].kind);
+        CHECK(back.requests[q].ticket == x.record.requests[q].ticket);
+        CHECK(back.requests[q].slot == x.record.requests[q].slot);
+    }
+}
+
+TEST_CASE("Version 4 reads version 3, and refuses a request whose kind and direction disagree", "[cycle][mflow]") {
+    CspL3Plan plan;
+    plan.slots = 2;
+    plan.slot_bytes = 256;
+    plan.program = {l3_load(0, 0x0, 256), l3_store(0, 0x10000, 256), l3_release(0)};
+    plan.loads = plan.stores = plan.releases = 1;
+    const Recorded x = run_recorded(plan, nullptr, {}, "hand");
+    REQUIRE(x.run.ok());
+    const std::string dir = std::string(KPU_BINARY_DIR) + "/cycle_mflow_v3.mflow";
+    std::filesystem::remove_all(dir);
+    rec::write_mflow(x.record, dir);
+    // The same bundle declared version 3: the reader ignores v4's columns and its waits table, and
+    // takes each request's kind from is_load.
+    const std::string manifest = dir + "/manifest.json";
+    std::string text;
+    {
+        std::ifstream in(manifest);
+        text.assign(std::istreambuf_iterator<char>(in), {});
+    }
+    const std::string v4 = "\"version\": 4";
+    REQUIRE(text.find(v4) != std::string::npos);
+    {
+        std::string v3 = text;
+        v3.replace(v3.find(v4), v4.size(), "\"version\": 3");
+        std::ofstream(manifest) << v3;
+    }
+    const MFR old = rec::read_mflow(dir);
+    CHECK(old.source == "memory-side-harness");
+    CHECK(old.write_window == 0);
+    CHECK(old.waits.empty());
+    REQUIRE(old.requests.size() == 2);
+    CHECK(old.requests[0].kind == MFR::RequestKind::Load);
+    CHECK(old.requests[1].kind == MFR::RequestKind::Store);
+    CHECK(old.requests[1].ticket == rec::kNone);
+    // Versions outside 3..4 are refused.
+    {
+        std::string v2 = text;
+        v2.replace(v2.find(v4), v4.size(), "\"version\": 2");
+        std::ofstream(manifest) << v2;
+    }
+    CHECK_THROWS_WITH(rec::read_mflow(dir), Catch::Matchers::ContainsSubstring("versions 3 to 4"));
+    // The writer refuses a Store that says it is a load, and a Fill that says it is not.
+    MFR bad = x.record;
+    bad.requests[1].is_load = true;
+    CHECK_THROWS_WITH(rec::write_mflow(bad, dir), Catch::Matchers::ContainsSubstring("of kind store"));
+    bad = x.record;
+    bad.requests[0].kind = MFR::RequestKind::Fill;
+    bad.requests[0].is_load = false;
+    CHECK_THROWS_WITH(rec::write_mflow(bad, dir), Catch::Matchers::ContainsSubstring("of kind fill"));
 }
 
 TEST_CASE("The T4's record, over the NoC, agrees with its counters", "[cycle][mflow][noc]") {
@@ -316,6 +411,27 @@ TEST_CASE("The recorder keeps its own clocks: the run's domains are gone when it
     const MFR x = after.record(run.end);
     CHECK(x.ticks_per_cycle == 3.2);
     CHECK(x.makespan == run.end / 1000);   // the KPU cycle the run ends in, at 1 GHz
+}
+
+TEST_CASE("A run with no bursts names its engine's stations after the engine", "[cycle][mflow]") {
+    // Engine 7 runs only a Fill, and waits: no burst ever names it. Its stations are still
+    // dma[7], dmabuf[7] and dmawait[7], the ones its request and its wait refer to.
+    MflowRecorder r(MflowSetup{"x", 8, 0, 4, lpddr5_one_channel()});
+    const Domain kpu = Domain::from_ghz("kpu", 1.0);
+    const Domain dram = Domain::from_ghz("dram", 3.2);
+    r.clocks(kpu, dram);
+    r.action_started(7, 0, 0, l3_fill(0, std::vector<std::uint8_t>(64, 1)));
+    r.dma_waits(7, 1000, 1u << static_cast<unsigned>(DmaWait::L3Credit));
+    r.action_completed(7, 3000, 0);
+    const MFR rec = r.record(4000);
+    REQUIRE(rec.requests.size() == 1);
+    CHECK(rec.requests[0].engine == 7);
+    REQUIRE(rec.waits.size() == 1);
+    CHECK(rec.waits[0].engine == 7);
+    CHECK(rec.station("x/dma[7]") != rec::kNone);
+    CHECK(rec.station("x/dmabuf[7]") != rec::kNone);
+    CHECK(rec.station("x/dmawait[7]") != rec::kNone);
+    CHECK(rec.station("x/dmawait[0]") == rec::kNone);
 }
 
 TEST_CASE("The recorder refuses events it cannot place", "[cycle][mflow]") {

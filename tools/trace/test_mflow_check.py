@@ -169,6 +169,21 @@ class MflowCheckSelfTest(unittest.TestCase):
         self.b.save_manifest()
         self.assertFails("M1", "over its window")
 
+    def test_m1_each_window_on_its_own(self):
+        # Version 4: an engine with a write window too. The station's capacity is both together;
+        # the reads and the writes are each checked against their own window.
+        reads = self.b.manifest["window"]
+        for s in self.b.manifest["stations"]:
+            if s["kind"] == "dma":
+                s["capacity"] = 2 * reads
+        self.b.manifest["write_window"] = 1
+        self.b.save_manifest()
+        self.assertFails("M1", "writes in flight")
+        self.b.manifest["write_window"] = reads
+        self.b.manifest["window"] = 1
+        self.b.save_manifest()
+        self.assertFails("M1", "reads in flight")
+
     def test_m2_store_buffer_over_capacity(self):
         for s in self.b.manifest["stations"]:
             if s["kind"] == "dmabuf":
@@ -196,6 +211,12 @@ class MflowCheckSelfTest(unittest.TestCase):
     def test_m4_request_missing_a_burst(self):
         self.b.set("bursts", "request", 0, self.b.get("bursts", "request", 0) + 1)
         self.assertFails("M4", "span")
+
+    def test_m4_a_fill_has_no_bursts(self):
+        # A Fill puts the program's bytes in L3 with no DRAM traffic: a Fill with bursts is wrong.
+        q = self.b.get("bursts", "request", self.b.find("bursts", lambda b: self.b.get("bursts", "is_load", b)))
+        self.b.set("requests", "kind", q, 2)
+        self.assertFails("M4", "span 0")
 
     def test_m4_burst_done_before_its_data(self):
         self.b.set("bursts", "t_done", 0, self.b.get("bursts", "t_data0", 0) - 1)
@@ -248,8 +269,38 @@ class MflowCheckSelfTest(unittest.TestCase):
         self.assertFails("M5", "tRCD")
 
     # -- unreadable ---------------------------------------------------------
+    def test_version_3_is_read(self):
+        # The same bundle declared version 3: its v4 columns and waits are ignored, each request's
+        # kind follows is_load, and it passes as a v3 bundle would.
+        self.b.manifest["version"] = 3
+        self.b.save_manifest()
+        code, report = run(self.b.dir)
+        self.assertEqual(code, 0, report and report["violations"][:5])
+
+    def test_a_request_kind_that_contradicts_is_load_is_refused(self):
+        q = self.b.find("requests", lambda q: not self.b.get("requests", "is_load", q))
+        self.b.set("requests", "kind", q, 0)   # a load that writes DRAM
+        self.assertUnreadable()
+
+    def test_a_missing_or_non_numeric_window_is_refused(self):
+        # With a write window, M1 checks the reads against `window`: a bundle without a usable
+        # one is unreadable (exit 2), not a run with violations (exit 1).
+        self.b.manifest["write_window"] = 4
+        for bad in (None, "16"):
+            with self.subTest(window=bad):
+                if bad is None:
+                    self.b.manifest.pop("window", None)
+                else:
+                    self.b.manifest["window"] = bad
+                self.b.save_manifest()
+                self.assertUnreadable()
+
+    def test_an_unknown_request_kind_is_refused(self):
+        self.b.set("requests", "kind", 0, 7)
+        self.assertUnreadable()
+
     def test_older_versions_are_refused(self):
-        for v in (1, 2):
+        for v in (1, 2, 5):
             with self.subTest(version=v):
                 self.b.manifest["version"] = v
                 self.b.save_manifest()

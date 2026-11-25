@@ -194,7 +194,8 @@ function col(buf, cols, name, n) {
 }
 function parse(files) {
   const m = JSON.parse(files["manifest.json"]);
-  if (m.format !== "kpu-mflow" || m.version !== 3) throw new Error("not a version-3 kpu-mflow bundle (record it with this build's kpu-memsim)");
+  const VERSIONS = [3, 4];   // the versions this page reads (version 4's additions are not drawn yet)
+  if (m.format !== "kpu-mflow" || !VERSIONS.includes(m.version)) throw new Error("not a version-3 or -4 kpu-mflow bundle (record it with this build's kpu-memsim)");
   if (m.arbitration !== "round_robin" && m.arbitration !== "fixed") throw new Error("unknown arbitration " + JSON.stringify(m.arbitration));
   const R = { m };
   const tb = name => {

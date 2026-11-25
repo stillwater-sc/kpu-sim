@@ -72,9 +72,9 @@ class ViewerSmokeTest(unittest.TestCase):
         # The page refuses any other manifest version, so a format bump that the viewer does not
         # follow would leave it refusing every new bundle -- invisible to a syntax check.
         written = json.loads((Path(BUNDLE) / "manifest.json").read_text(encoding="utf-8"))["version"]
-        accepted = re.search(r"m\.version !== (\d+)", self.page)
+        accepted = re.search(r"const VERSIONS = \[([\d, ]+)\]", self.page)
         self.assertIsNotNone(accepted)
-        self.assertEqual(int(accepted.group(1)), written)
+        self.assertIn(written, [int(v) for v in accepted.group(1).split(",")])
 
     def test_the_bundle_carries_what_the_viewer_draws_against(self):
         m = json.loads((Path(BUNDLE) / "manifest.json").read_text(encoding="utf-8"))
@@ -82,9 +82,10 @@ class ViewerSmokeTest(unittest.TestCase):
         self.assertGreater(m["burst_bytes"], 0)
         kinds = {s["kind"] for s in m["stations"]}
         # Every memory side has banks, buses, engines and store buffers; port stubs only when the
-        # NoC is stubbed (kpu-memsim). A cycle-core bundle has none, and the page draws no port rows.
+        # NoC is stubbed (kpu-memsim). A cycle-core bundle has none, and the page draws no port rows;
+        # it has a dmawait station per engine (version 4), which the page does not draw yet.
         self.assertLessEqual({"dram_bank", "dram_bus", "dma", "dmabuf"}, kinds)
-        self.assertLessEqual(kinds, {"dram_bank", "dram_bus", "dma", "dmabuf", "port"})
+        self.assertLessEqual(kinds, {"dram_bank", "dram_bus", "dma", "dmabuf", "port", "dmawait"})
 
     def test_the_viewer_reads_the_real_bundle(self):
         # Runs the page's own reader (col + parse) over the bundle under Node: every column the

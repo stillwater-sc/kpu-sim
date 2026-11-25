@@ -540,6 +540,7 @@ namespace sw::kpu::timing::memside {
 inline program::record::MemoryFlowRecord to_record(const MemorySideHarness& h, const std::string& device) {
     using MFR = program::record::MemoryFlowRecord;
     MFR rec;
+    rec.source = "memory-side-harness";
     rec.device = device;
     rec.makespan = h.now();
     rec.window = static_cast<std::uint32_t>(h.window());
@@ -585,6 +586,7 @@ inline program::record::MemoryFlowRecord to_record(const MemorySideHarness& h, c
         request_of[r.tile] = r.id;
         rec.requests.push_back({r.engine, r.port, r.is_load, r.address, r.bytes, r.offered, r.credit,
                                 r.first_burst, r.last_burst, r.retired});
+        rec.requests.back().kind = r.is_load ? MFR::RequestKind::Load : MFR::RequestKind::Store;
     }
 
     // Bursts, then commands naming them: a command's tag is its controller's burst id.
