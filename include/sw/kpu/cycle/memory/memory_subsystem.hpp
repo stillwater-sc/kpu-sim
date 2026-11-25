@@ -71,6 +71,8 @@ struct MemoryRunOptions {
     Tracer* tracer = nullptr;
     std::string dram_trace;                  // where to write the channel's own trace ("" = none)
     std::string counters;                    // where to write the counters (write_counters_json; "" = none)
+    MemoryEvents* events = nullptr;          // a sink for the engine's and the channel's events (an
+                                             // MflowRecorder, record/mflow_recorder.hpp); null = none
 };
 
 struct MemoryRun {
@@ -154,6 +156,11 @@ inline MemoryRun run_memory_subsystem(const CspL3Plan& plan, const program::plat
         l3.connect(loads, ejects, credits);
     }
     sim.add_invariant("slot credits", [&] { check_slot_credits(dma, l3); });
+    if (o.events) {
+        o.events->clocks(kpu, dram_d);
+        dma.set_events(o.events, 0);
+        ch.set_events(o.events, 0);
+    }
     for (const auto& t : plan.inputs) ch.preload(t.address, t.data);
     std::map<std::size_t, std::vector<std::uint8_t>> seen;
     sim.add_invariant("slots", [&] {

@@ -136,32 +136,28 @@ void DmaEngine::on_retire(...) { log_ << "retire " << ticket << '\n'; }
 ```cpp
 // CORRECT: a sink interface, null by default. A component calls it at the
 // moment the event happens. With no sink attached the cost is one null check.
-namespace sw::kpu::cycle::memory {
+// (As built in step 1: include/sw/kpu/cycle/memory/memory_events.hpp.)
 struct MemoryEvents {
-    virtual ~MemoryEvents() = default;
+    virtual void clocks(const Domain& kpu, const Domain& dram) {}
     // DMA engine: one L3 action's life (Load, Store, Fill), keyed by its ticket.
-    virtual void action_offered(Picoseconds t, std::uint32_t engine, std::size_t ticket,
-                                const L3Action& a) {}
-    virtual void action_credited(Picoseconds t, std::uint32_t engine, std::size_t ticket) {}
-    virtual void action_retired(Picoseconds t, std::uint32_t engine, std::size_t ticket) {}
-    // DMA engine: one burst, posted to DRAM, granted by the channel, then done.
-    virtual void burst_posted(Picoseconds t, std::uint32_t engine, std::size_t ticket,
-                              std::uint64_t address, bool write) {}
-    virtual void burst_done(Picoseconds t, std::uint32_t engine, std::size_t ticket,
-                            std::uint64_t address) {}
-    // DMA engine: why it did not advance. `from` and `to` bound one contiguous
-    // wait for one reason.
-    virtual void waited(std::uint32_t engine, DmaWait why, Picoseconds from, Picoseconds to) {}
-    virtual void store_buffer(Picoseconds t, std::uint32_t engine,
-                              std::uint32_t held, std::uint32_t staged) {}
-    // Channel: one DRAM command, from the controller's own observer, in its ticks.
-    virtual void dram_command(const Lpddr5Channel::CommandRecord& r,
-                              std::uint64_t request_id) {}
+    virtual void action_started(std::uint32_t engine, Picoseconds, std::size_t ticket, const L3Action&) {}
+    virtual void action_completed(std::uint32_t engine, Picoseconds, std::size_t ticket) {}
+    // DMA engine: one burst, posted to DRAM, then out of the engine's window.
+    virtual void burst_posted(std::uint32_t engine, Picoseconds, std::size_t ticket,
+                              std::uint64_t request, std::uint64_t address, bool write) {}
+    virtual void burst_retired(std::uint32_t engine, Picoseconds, std::uint64_t request) {}
+    // DMA engine: the causes that held something up this cycle, a bit per DmaWait.
+    virtual void dma_waits(std::uint32_t engine, Picoseconds, std::uint32_t mask) {}
+    virtual void store_buffer(std::uint32_t engine, Picoseconds, std::size_t beats) {}
+    // Channel: a request the controller accepted (and the id it gave it), and each
+    // command, as the controller's own record, in its ticks.
+    virtual void dram_accepted(std::uint32_t channel, Picoseconds, std::uint64_t controller_id,
+                               std::uint64_t request, bool write, std::uint64_t address) {}
+    virtual void dram_command(std::uint32_t channel, const DramCommand&) {}
 };
-}  // namespace sw::kpu::cycle::memory
 
 // Inside DmaEngine:
-if (events_) events_->burst_posted(now_ps, id_, cmd.ticket, address, write);
+if (events_) events_->burst_posted(engine_, domain().edge(now), c.ticket, r->id, r->address, r->write);
 ```
 
 - **One attach point.** The recorder attaches through `MemoryRunOptions::events`
@@ -170,29 +166,37 @@ if (events_) events_->burst_posted(now_ps, id_, cmd.ticket, address, write);
 - **The command tap.** `Lpddr5Channel` already installs the controller's `CommandObserver`
   (it checks the data bus there). It forwards each record to `events_` from that same lambda.
   It does not install a second observer, which would replace the first.
-- **Joining a command to its burst.** The channel keeps a table from controller `request_id` to
-  the DMA's (engine, ticket, address), filled when it accepts a `DramRequest`.
-  `dram_command` passes the ID, and the recorder joins on it.
+- **Joining a command to its burst.** The channel reports each accepted request with the id the
+  controller gave it (`dram_accepted`). The recorder joins the engine's request id to the
+  controller's, and each command's `request_id` to its burst. The channel keeps no table of its
+  own. A DramRequest's id is unique per requester only, so the recorder refuses a second engine
+  until requests name their requester.
+- **Waits are not exclusive.** In one cycle the engine can be held up for several causes, and
+  still send a burst for another command. The events carry a bitmask per cycle. The recorder
+  keeps one interval per run of consecutive cycles that a cause held. Intervals of different
+  causes may overlap; one cause's never do.
 - **Recording must not change the run.** A sink observes and never steers. A test runs the same
   program with and without the recorder. The end time, every counter and every L3 byte must be
   identical (§6, I2).
 
 ### 3.2 Time: the record's units, from the cycle core's picoseconds
 
-`.mflow` times are f64 executor cycles, and the commands also carry exact controller ticks. The
-cycle core runs in picoseconds across clock domains. The recorder converts at one place:
+`.mflow` times are whole executor cycles: `MemoryFlowRecord`'s `Cycle` is an integer, stored as
+f64. The commands also carry exact controller ticks. The cycle core runs in picoseconds across
+clock domains, and the recorder converts at one place:
 
 ```cpp
-// WRONG: rounding a time to whole KPU cycles. It merges two events one
-// controller tick apart, and makes a DRAM timing check (M5) fail or pass
-// by accident.
+// WRONG: checking DRAM timing on KPU cycles. At 3.2 ticks a cycle, two
+// commands a tick apart can land in one cycle, and M5 passes or fails by
+// accident. Rounding through floating GHz also drifts from the domains' edges.
 r.issue = static_cast<Cycle>(ps * kpu_ghz / 1000);
 
-// CORRECT: f64 KPU cycles for the swimlanes; the controller's own ticks,
-// untouched, for timing.
-r.issue      = ps_to_kpu_cycles(t_ps);          // double, exact to 2^53
+// CORRECT: the KPU cycle the event falls in, from the domain's exact edges
+// (monotone, so ordered events stay ordered), for the swimlanes; the
+// controller's own ticks, untouched, for timing.
+r.issue      = kpu.first_after(t_ps) - 1;       // edge(n) <= t < edge(n + 1)
 r.tick       = cmd.issue;                       // controller cycle, as observed
-rec.ticks_per_cycle = dram_ghz / kpu_ghz;       // the manifest states the ratio
+rec.ticks_per_cycle = kpu.period_ps() / dram.period_ps();   // the manifest states the ratio
 ```
 
 ### 3.3 Record version 4
@@ -208,9 +212,14 @@ column. `read_mflow` reads v3 and v4. `kpu-memsim` keeps writing v3 until it has
 | new table `waits`: engine, reason (`DmaWait`), t_from, t_to | Why the engine stood still: slot credit, L3 credit, request credit, window, store buffer, order. This is the debugging question the counters can total but cannot place in time |
 | new station kind `dmawait`, one per engine | A lane showing why the engine waited, in the pyramid like any other station |
 
-Waits are recorded as intervals, not one row per cycle. The engine already classifies each
-stalled cycle into one `DmaWait`. The recorder opens an interval when the reason changes and
-closes it when the engine advances. A long stall is then one row.
+Waits are recorded as intervals, not one row per cycle: one per run of consecutive cycles that a
+cause held, so a long stall is one row (§3.1).
+
+**Until version 4,** the recorder writes version 3:
+- **`window`** is the engine's bound on reads and writes in flight together, `window +
+  write_window`. That is true and weaker. The C++ test checks each window on its own.
+- **Fills** are not request rows, since v3 has no kind column.
+- **The waits** are kept by the recorder (`waits()`) and not written.
 
 ### 3.4 The checker
 
@@ -221,10 +230,10 @@ closes it when the engine advances. A long stall is then one row.
 | M1 | Loads against `window`, stores against `write_window` when it is not 0 |
 | M3 | Unchanged. A Fill has no first burst, so it is exempt |
 | M4 | A Fill has no bursts. A Load's or a Store's bursts are exactly the ones its bytes span (unchanged) |
-| **M6** (new) | One engine's waits never overlap, and the engine posts no burst inside a wait |
-| **M7** (new) | The record agrees with the counters: bursts, loads, stores and fills, and wait cycles per reason, equal `counters.json` when the run directory holds one |
+| **M7** (new) | One cause's waits on an engine never overlap; different causes' may. (M6 is taken: round-robin fairness) |
+| **M8** (new) | The record agrees with the counters: bursts, loads, stores and fills, and wait cycles per reason, equal `counters.json` when the run directory holds one |
 
-A C++ test enforces M7 as well (§5). The Python check exists so that a bundle passed around on
+A C++ test enforces M8 as well (§5). The Python check exists so that a bundle passed around on
 its own can still be trusted.
 
 ### 3.5 The views
@@ -373,7 +382,7 @@ Once the patterns and the cycle core write `.mflow`, the timing checks are dupli
 - **Turnaround:** neither checker enforces tWTR or tRTW, though INVARIANTS.md documents them.
 
 **Decided: port, then retire.**
-1. Port INV-001–004 and INV-006 to `mflow_check.py` as M8–M10, checks on each command's link
+1. Port INV-001–004 and INV-006 to `mflow_check.py` as M9–M11, checks on each command's link
    to its burst.
 2. Add tWTR and tRTW to M5.
 3. Port the summary to read `.mflow`.
@@ -406,8 +415,8 @@ Each step is one PR, one concern, with its own tests.
    - `include/sw/kpu/cycle/memory/memory_events.hpp`: the interface (§3.1).
    - `dma_engine.hpp`: call the sink at offer, credit, burst post and done, retire, wait
      intervals and store-buffer changes.
-   - `lpddr5_channel.hpp`: the `request_id` → (engine, ticket, address) table, and forwarding
-     from the existing observer.
+   - `lpddr5_channel.hpp`: report each accepted request with its controller id, and forward each
+     command from the existing observer.
    - `memory_subsystem.hpp`: `MemoryRunOptions::events`, passed to each component.
    - `include/sw/kpu/cycle/record/mflow_recorder.hpp`: the recorder, the time conversion (§3.2)
      and `to_record()`.
@@ -426,10 +435,10 @@ Each step is one PR, one concern, with its own tests.
    - `--run-dir <dir>`: every requested artifact under the fixed names, plus `run.json`.
    - CTests run `mflow_check.py` on a kpu_s1 matmul bundle and on a T4 NoC bundle, both passing.
 4. **The checker** (Python)
-   - `tools/trace/mflow_check.py`: the M1 split, the Fill exemptions, M6, M7.
-   - The ports from `trace_validator.py` (§3.7): M8–M10 for INV-001–004 and INV-006, and tWTR and
-     tRTW in M5. The manifest's timing table gains tWTR_L, tWTR_S and tRTW: the controller has
-     them, but `dram_bridge.cpp` does not export them yet.
+   - `tools/trace/mflow_check.py`: the M1 split, the Fill exemptions, M7, M8.
+   - The ports from `trace_validator.py` (§3.7): M9–M11 for INV-001–004 and INV-006, and tWTR and
+     tRTW in M5. The manifest's timing table already carries tWTR_L, tWTR_S and tRTW, from both
+     `dram_bridge.cpp` and the recorder.
    - `test_mflow_check.py`: a self-test that breaks each new check. Each LPDDR5 pattern bug that
      `lpddr5-trace-debug` records (wrong PRECHARGE owner, type defaulting to WRITE, the tRCD, tRP
      and tRRD violations) is rebuilt as a broken bundle that the new checks refuse.
@@ -511,7 +520,7 @@ python3 tools/debug-server/kpu_debug_server.py --root runs
 ```
 
 **Expected:**
-- **The kpu_s1 bundle passes** TF10, TF11 and M1–M7. Its burst count equals `counters.json`'s,
+- **The kpu_s1 bundle passes** TF10, TF11 and M1–M8. Its burst count equals `counters.json`'s,
   and its data-bus occupancy agrees with the summary's ~95%.
 - **The T4 bundle passes** too, and its waits show the store engine's order waits.
 - **The recorder is invisible:** the same run with and without it has identical end
@@ -533,7 +542,7 @@ python3 tools/debug-server/kpu_debug_server.py --root runs
 - **I2. Recording is invisible.** Attaching a sink changes no timing, counter or value. A sink
   observes and never decides.
 - **I3. The record and the counters agree.** Every total in the counters can be recomputed from
-  the record, and is equal (M7, and the C++ test).
+  the record, and is equal (M8, and the C++ test).
 - **I4. Exact DRAM time.** DRAM timing is checked on the controller's ticks, never on converted
   KPU cycles.
 - **I5. The record states, the views draw.** The views infer nothing the record states. A view
