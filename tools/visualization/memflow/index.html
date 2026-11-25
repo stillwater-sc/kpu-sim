@@ -8,10 +8,12 @@
   tools/visualization/memflow/index.html -- the memory-side debugger
   (docs/plans/memory-side-debugger.md §3.5, step 5).
 
-  Reads a .mflow bundle (kpu-memsim --out) of the memory side run on its own: DRAM, memory
-  controllers, DMA engines and their store buffers, with the NoC ports stubbed. Plain HTML, no
-  build step, no server: open this file and choose the bundle's folder, or drop its files on the
-  page. pack.py embeds a bundle into a copy of this file.
+  Reads a .mflow bundle (kpu-memsim --out, kpu-run --memory-mflow) of the memory side: DRAM,
+  memory controllers, DMA engines and their store buffers (with the NoC ports stubbed, from
+  kpu-memsim). Plain HTML, no build step, no server: open this file and choose the bundle's
+  folder, or drop its files on the page; or open it as index.html?bundle=<url of the bundle's
+  directory> from a server. pack.py embeds a bundle, and the reader, into a copy of this file.
+  The reader is ../common/mflow.js, shared with the DRAM views.
 
   WHAT IT SHOWS
     - Bandwidth over time against the DRAM ceiling, and each bank's page outcomes.
@@ -165,74 +167,33 @@ code { font: 12px var(--font-data); }
 <div class="tip" id="tip" hidden></div>
 
 <!--MFLOW_EMBED-->
+<script src="../common/mflow.js"></script>
 <script>
 (() => {
 "use strict";
 const $ = id => document.getElementById(id);
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = n => Number(n).toLocaleString("en-US");
-const NONE = 0xFFFFFFFF;
+const { NONE, CMD, OUTCOME, PORTK } = Mflow;   // the record's enums (../common/mflow.js)
 // Every string the page writes as HTML goes through esc: a bundle is input, and its names
 // (device, stations, arbitration) must never become markup.
 function esc(v) {
   return String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
-// The record's enums (memory_flow_record.hpp), in order.
-const CMD = ["ACT", "RD", "WR", "PRE", "REF"];
-const OUTCOME = ["unknown", "hit", "empty", "conflict"];
-const PORTK = ["offer", "accept", "refuse", "land", "eject_arrive", "eject_wait", "eject_deliver"];
 const CMD_COLOR = ["--act", "--rd", "--wr", "--pre", "--ref"];
 
 // ------------------------------------------------------------------ loading
-function col(buf, cols, name, n) {
-  const c = cols.find(x => x.name === name);
-  if (!c) throw new Error("no column " + name);
-  const T = { u8: Uint8Array, u32: Uint32Array, u64: BigUint64Array, f64: Float64Array }[c.dtype];
-  if (!T) throw new Error("column " + name + " has an unknown dtype " + c.dtype);
-  if (c.offset % T.BYTES_PER_ELEMENT) throw new Error("column " + name + " is misaligned");
-  return new T(buf, c.offset, n);
-}
-function parse(files) {
-  const m = JSON.parse(files["manifest.json"]);
-  const VERSIONS = [3, 4];   // the versions this page reads (version 4's additions are not drawn yet)
-  if (m.format !== "kpu-mflow" || !VERSIONS.includes(m.version)) throw new Error("not a version-3 or -4 kpu-mflow bundle (record it with this build's kpu-memsim)");
-  if (m.arbitration !== "round_robin" && m.arbitration !== "fixed") throw new Error("unknown arbitration " + JSON.stringify(m.arbitration));
-  const R = { m };
-  const tb = name => {
-    const t = m.tables[name], buf = files[t.file];
-    if (!buf) throw new Error("missing " + t.file);
-    const out = { rows: t.rows };
-    for (const c of t.columns) out[c.name] = col(buf, t.columns, c.name, t.rows);
-    return out;
-  };
-  R.B = tb("bursts"); R.C = tb("commands"); R.Q = tb("requests"); R.F = tb("buffers"); R.P = tb("ports");
-  // Every index the page follows is checked once, here.
-  for (let i = 0; i < R.C.rows; i++)
-    if (R.C.burst[i] !== NONE && R.C.burst[i] >= R.B.rows) throw new Error("command " + i + " names a burst past the table");
-  for (let i = 0; i < R.B.rows; i++)
-    if (R.B.request[i] !== NONE && R.B.request[i] >= R.Q.rows) throw new Error("burst " + i + " names a request past the table");
-  return R;
-}
-async function readPicked(list) {
-  const files = {};
-  for (const f of list) {
-    if (f.name.endsWith(".bin")) files[f.name] = await f.arrayBuffer();
-    else if (f.name === "manifest.json" || f.name === "lod.json") files[f.name] = await f.text();
-  }
-  return files;
-}
-function b64(s) { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
-
+// The reader is ../common/mflow.js: parse() checks every index and enum once.
 let R = null;
-async function loadFrom(files) {
-  try { R = parse(files); start(); }
+async function loadFrom(source) {
+  try { R = await Mflow.open(source); start(); }
   catch (e) { $("loadMsg").textContent = "Could not read the bundle: " + e.message; }
 }
-$("pick").addEventListener("change", async e => loadFrom(await readPicked(e.target.files)));
+$("pick").addEventListener("change", async e => loadFrom(e.target.files));
 const load = $("load");
 load.addEventListener("dragover", e => { e.preventDefault(); load.classList.add("drag"); });
 load.addEventListener("dragleave", () => load.classList.remove("drag"));
-load.addEventListener("drop", async e => { e.preventDefault(); load.classList.remove("drag"); loadFrom(await readPicked([...e.dataTransfer.files])); });
+load.addEventListener("drop", async e => { e.preventDefault(); load.classList.remove("drag"); loadFrom([...e.dataTransfer.files]); });
 
 // ------------------------------------------------------------------ derived data
 function stepSeries(intervals) {
@@ -813,12 +774,14 @@ function start() {
   setCursor(0);
 }
 
-// An embedded bundle (pack.py) loads at once.
-if (window.MFLOW_EMBED) {
-  const E = window.MFLOW_EMBED, files = { "manifest.json": E.manifest };
-  if (E.lod) files["lod.json"] = E.lod;
-  for (const [k, v] of Object.entries(E.bins)) files[k] = b64(v);
-  loadFrom(files);
+// An embedded bundle (pack.py) loads at once; so does one a server names (?bundle=<url>).
+const served = new URLSearchParams(location.search).get("bundle");
+if (window.MFLOW_EMBED) loadFrom(window.MFLOW_EMBED);
+else if (served) {
+  // Only a bundle on this page's own server: a link must not point the page at another site.
+  const url = new URL(served, location.href);
+  if (url.origin === location.origin) loadFrom(url.href);
+  else $("loadMsg").textContent = "Not reading " + url.origin + ": ?bundle= names a bundle on this page's server";
 }
 
 // For tests (test_viewer.py runs these under Node): the pure helpers.
