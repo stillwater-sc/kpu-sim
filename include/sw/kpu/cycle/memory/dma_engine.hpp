@@ -104,8 +104,9 @@ public:
         std::uint32_t slots = 2;               // the L3 tile's: the engine starts with every credit
         std::uint32_t slot_bytes = 4096;       // the L3 tile's, to check the program
         std::size_t window = 8;                // reads in flight
-        std::size_t write_window = 0;          // writes in flight; 0 = `window`
         std::size_t store_buffer_beats = 4;
+        std::size_t write_window = 0;          // writes in flight; 0 = `window` (last: older positional
+                                               // initializers keep their meaning)
     };
     // When each command started and completed, for the tests.
     struct Span {
