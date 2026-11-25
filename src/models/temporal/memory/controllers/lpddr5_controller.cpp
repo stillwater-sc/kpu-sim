@@ -577,6 +577,16 @@ bool LPDDR5MemoryController::open_row_hit_pending(uint8_t channel, uint8_t bank)
     return false;
 }
 
+bool LPDDR5MemoryController::older_open_row_hit_pending(uint8_t channel, uint8_t bank,
+                                                        const MemoryRequest& than) const {
+    const Bank& b = channels_[channel].banks[bank];
+    for (const MemoryRequest& r : pending_queue_) {
+        if (&r == &than) break;   // the queue is in arrival order: what follows is younger
+        if (r.channel == channel && r.bank == bank && r.row == b.open_row) return true;
+    }
+    return false;
+}
+
 // ============================================================================
 // Bank operations
 // ============================================================================
@@ -956,7 +966,8 @@ void LPDDR5MemoryController::schedule_requests() {
     //   1. first ready: the oldest request whose CAS can issue now (a hit on an open row);
     //   2. otherwise the oldest request whose bank needs an ACTIVATE or PRECHARGE that can issue
     //      now. A row with pending hits is not closed for a conflict -- unless the conflicting
-    //      request has waited longer than the starvation limit.
+    //      request has waited longer than the starvation limit, and every pending hit on the row
+    //      is younger than it.
     // It was FCFS on the head only: a request waiting on its bank blocked every other bank.
     if (pending_queue_.empty()) {
         return;
@@ -1003,6 +1014,11 @@ void LPDDR5MemoryController::schedule_requests() {
             } else if (bk.state == lpddr5::BankState::ACTIVE && bk.open_row != req.row) {
                 const bool starved = current_cycle_ >= req.submit_cycle + starvation;
                 if (open_row_hit_pending(ch, req.bank) && !starved) continue;
+                // Starvation lets a request close a row only from YOUNGER pending hits. An older
+                // hit is the more starved of the two, and the oldest request needing the bank wins
+                // its next ACTIVATE: closing its row reopens it at once, and starves this request
+                // again (an ACTIVATE/PRECHARGE loop until the older hit is served).
+                if (older_open_row_hit_pending(ch, req.bank, req)) continue;
                 if (!can_precharge(ch, req.bank, current_cycle_)) continue;
                 do_precharge(ch, req.bank);
                 stats_.page_conflicts++;

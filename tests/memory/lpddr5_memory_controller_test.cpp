@@ -957,3 +957,40 @@ TEST_CASE("A bank kept open by a stream is still refreshed", "[lpddr5][refresh]"
     CHECK(ctx.mc->cycles_until_deadline(0, 0) > 0);
     CHECK(ctx.mc->lpddr5_stats().refreshes > 0);
 }
+
+TEST_CASE("A starved request does not close a row an older request still waits on", "[lpddr5][scheduling]") {
+    // An older WRITE to bank 0 row 1 waits on its open row: a stream of READs to another bank group
+    // holds every write off (tRTW after each read's data). A younger READ to bank 0 row 2 starves
+    // behind it. Closing row 1 for the starved read helps neither: the older write is the oldest
+    // request needing bank 0, so it wins the next ACTIVATE and reopens row 1, and the read starves
+    // again. The controller did that until the write got through, 15 times in kpu-memsim's T4 run
+    // (found by mflow_check.py's M10 on #576's branch). A row with an older pending hit is not closed.
+    TestContext ctx;
+    ctx.mc->set_refresh_mode(sw::kpu::IMemoryController::RefreshMode::DISABLED);   // only the scheduler opens and closes rows
+    int row1_activates = 0, bank0_precharges = 0;
+    ctx.mc->set_command_observer([&](const LPDDR5MemoryController::CommandRecord& r) {
+        using K = LPDDR5MemoryController::CommandRecord::Kind;
+        if (r.bank == 0 && r.kind == K::Activate && r.row == 1) ++row1_activates;
+        if (r.bank == 0 && r.kind == K::Precharge) ++bank0_precharges;
+    });
+    const auto& t = ctx.config.timing;
+    int col = 0;
+    auto stream = [&] {   // keep the read stream to bank 4 full
+        while (ctx.mc->can_accept() && ctx.mc->pending_count() < 16)
+            ctx.mc->submit_read(ctx.make_address(4, 7, static_cast<uint32_t>(col++ % 1024)), 32);
+    };
+    stream();
+    ctx.run_cycles(t.tRCD + t.tCL);   // the stream's row open and its first reads issued
+    ctx.mc->submit_write(ctx.make_address(0, 1, 0), nullptr, 32);   // the older request
+    ctx.run_cycles(4);
+    ctx.mc->submit_read(ctx.make_address(0, 2, 0), 32);             // the younger one, which starves
+    for (uint64_t i = 0; i < 20ull * t.tRC; ++i) {
+        stream();
+        ctx.mc->tick();
+    }
+    REQUIRE(ctx.run_until_complete(200000));
+    ctx.check_violations();
+    INFO(row1_activates << " activates of row 1, " << bank0_precharges << " precharges of bank 0");
+    CHECK(row1_activates == 1);    // opened once for the write, never reopened
+    CHECK(bank0_precharges == 1);  // closed once, after the write, for the read
+}

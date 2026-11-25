@@ -563,6 +563,8 @@ private:
     bool refresh_due(uint8_t channel, uint8_t bank) const;
     // Some pending request hits the row open in this bank (FR-FCFS: hits before precharge).
     bool open_row_hit_pending(uint8_t channel, uint8_t bank) const;
+    // A pending hit on the bank's open row that arrived before `than` (a request in pending_queue_).
+    bool older_open_row_hit_pending(uint8_t channel, uint8_t bank, const MemoryRequest& than) const;
 
     void do_activate(uint8_t channel, uint8_t bank, uint32_t row, uint64_t request_id);
     void do_read(uint8_t channel, uint8_t bank, MemoryRequest& req);
