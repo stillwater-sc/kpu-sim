@@ -102,9 +102,12 @@ public:
     }
 
     // ---- MemoryEvents ----
+    // Copies of the clocks, not references: the domains belong to the run's Simulator, which is
+    // gone by the time record() is called after run_memory_subsystem returns. (Only the period
+    // and phase are used: edge() and first_after() do not depend on a domain's running state.)
     void clocks(const Domain& kpu, const Domain& dram) override {
-        kpu_ = &kpu;
-        dram_ = &dram;
+        kpu_.emplace(kpu);
+        dram_.emplace(dram);
     }
 
     void action_started(std::uint32_t engine, Picoseconds t, std::size_t ticket, const L3Action& a) override {
@@ -334,8 +337,7 @@ private:
     }
 
     MflowSetup setup_;
-    const Domain* kpu_ = nullptr;
-    const Domain* dram_ = nullptr;
+    std::optional<Domain> kpu_, dram_;
     std::optional<std::uint32_t> engine_;
     std::vector<Record::Burst> bursts_;
     std::vector<std::size_t> burst_ticket_;

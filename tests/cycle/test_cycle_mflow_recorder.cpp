@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -282,6 +283,39 @@ TEST_CASE("The T4's record, over the NoC, agrees with its counters", "[cycle][mf
     const std::string dir = std::string(KPU_BINARY_DIR) + "/cycle_mflow_t4.mflow";
     std::filesystem::remove_all(dir);
     rec::write_mflow(x.record, dir);
+}
+
+TEST_CASE("The recorder keeps its own clocks: the run's domains are gone when it records", "[cycle][mflow]") {
+    // run_memory_subsystem's domains belong to its Simulator, destroyed when it returns, before
+    // record() is called. The recorder must not refer to them: free them, put other domains in
+    // their place (the allocator reuses the blocks), and the record still has the run's clocks.
+    MflowRecorder r(MflowSetup{"x", 8, 0, 4, lpddr5_one_channel()});
+    auto kpu = std::make_unique<Domain>(Domain::from_ghz("kpu", 1.0));
+    auto dram = std::make_unique<Domain>(Domain::from_ghz("dram", 3.2));
+    r.clocks(*kpu, *dram);
+    kpu.reset();
+    dram.reset();
+    auto other_a = std::make_unique<Domain>("other a", 7);
+    auto other_b = std::make_unique<Domain>("other b", 11);
+    const MFR rec = r.record(5000);   // 5 ns at 1 GHz
+    CHECK(rec.ticks_per_cycle == 3.2);
+    CHECK(rec.makespan == 5);
+    // And so does a real run, recorded after run_memory_subsystem has returned.
+    CspL3Plan plan;
+    plan.slots = 1;
+    plan.slot_bytes = 64;
+    plan.program = {l3_load(0, 0x0, 64), l3_release(0)};
+    plan.loads = plan.releases = 1;
+    MemoryRunOptions o;
+    MflowRecorder after(setup_for("after", o));
+    o.events = &after;
+    const MemoryRun run = run_memory_subsystem(plan, nullptr, o);
+    auto reuse_a = std::make_unique<Domain>("reuse a", 13);
+    auto reuse_b = std::make_unique<Domain>("reuse b", 17);
+    REQUIRE(run.finished);
+    const MFR x = after.record(run.end);
+    CHECK(x.ticks_per_cycle == 3.2);
+    CHECK(x.makespan == run.end / 1000);   // the KPU cycle the run ends in, at 1 GHz
 }
 
 TEST_CASE("The recorder refuses events it cannot place", "[cycle][mflow]") {
