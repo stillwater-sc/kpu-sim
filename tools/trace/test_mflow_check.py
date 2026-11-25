@@ -109,7 +109,8 @@ class MflowCheckSelfTest(unittest.TestCase):
     def test_clean_bundle_passes(self):
         code, report = run(self.b.dir)
         self.assertEqual(code, 0, report and report["violations"][:5])
-        self.assertEqual(report["checked"], ["TF10", "TF11", "M1", "M2", "M3", "M4", "M6", "M5"])
+        # M8 needs the run's run.json, which a kpu-memsim bundle has none of (test_mflow_check_run.py).
+        self.assertEqual(report["checked"], ["TF10", "TF11", "M1", "M2", "M3", "M4", "M6", "M5", "M7", "M9", "M10", "M11"])
 
     def test_the_run_exercises_what_is_checked(self):
         # A check over nothing passes vacuously: the clean run must hold conflicts (PRE then
@@ -267,6 +268,109 @@ class MflowCheckSelfTest(unittest.TestCase):
         trcd = self.b.manifest["dram_timing"]["params"]["tRCD"]
         self.b.set("commands", "k_issue", cas, self.b.get("commands", "k_issue", act) + trcd - 1)
         self.assertFails("M5", "tRCD")
+
+    # -- M5: the bus turnarounds ----------------------------------------------
+    def channel_cas_pair(self, first, second):
+        """Consecutive CAS commands on one channel, `first` then `second`."""
+        chans = {}
+        for i in range(self.b.rows("commands")):
+            if self.b.get("commands", "kind", i) in (RD, WR):
+                key = (self.b.get("commands", "mc", i), self.b.get("commands", "channel", i))
+                chans.setdefault(key, []).append((self.b.get("commands", "k_issue", i), i))
+        for v in chans.values():
+            v.sort()
+            for (_, a), (_, b) in zip(v, v[1:]):
+                if self.b.get("commands", "kind", a) == first and self.b.get("commands", "kind", b) == second:
+                    return a, b
+        self.fail(f"the clean bundle has no {first} followed by {second} on one channel")
+
+    def test_m5_a_read_too_soon_after_a_write(self):
+        wr, rd = self.channel_cas_pair(WR, RD)
+        same = self.b.get("commands", "bank_group", wr) == self.b.get("commands", "bank_group", rd)
+        p = self.b.manifest["dram_timing"]["params"]["tWTR_L" if same else "tWTR_S"]
+        self.b.set("commands", "k_issue", rd, self.b.get("commands", "k_data1", wr) + p - 1)
+        self.assertFails("M5", "tWTR_L" if same else "tWTR_S")
+
+    def test_m5_a_write_too_soon_after_a_read(self):
+        rd, wr = self.channel_cas_pair(RD, WR)
+        p = self.b.manifest["dram_timing"]["params"]["tRTW"]
+        self.b.set("commands", "k_issue", wr, self.b.get("commands", "k_data1", rd) + p - 1)
+        self.assertFails("M5", "tRTW")
+
+    # -- M9, M10, M11 (trace_validator.py's INV-001..006, on the record) ------
+    def burst_with_act(self):
+        for i in range(self.b.rows("commands")):
+            if self.b.get("commands", "kind", i) == ACT and self.b.get("commands", "burst", i) != 0xFFFFFFFF:
+                return i, self.b.get("commands", "burst", i)
+        self.fail("the clean bundle has no ACT serving a burst")
+
+    def test_m9_an_activate_that_serves_no_burst(self):
+        # INV-002, orphaned page management: an ACT that belongs to no request.
+        act, _ = self.burst_with_act()
+        self.b.set("commands", "burst", act, 0xFFFFFFFF)
+        self.assertFails("M9", "serves no burst")
+
+    def test_m9_a_precharge_naming_another_banks_burst(self):
+        # lpddr5-trace-debug's "wrong PRECHARGE txn_id": the PRE names a request of another bank.
+        pre = self.b.find("commands", lambda i: self.b.get("commands", "kind", i) == PRE
+                          and self.b.get("commands", "burst", i) != 0xFFFFFFFF)
+        bank = tuple(self.b.get("commands", f, pre) for f in ("mc", "channel", "bank_group", "bank"))
+        other = self.b.find("bursts", lambda b: tuple(self.b.get("bursts", f, b) for f in
+                                                      ("mc", "channel", "bank_group", "bank")) != bank)
+        self.b.set("commands", "burst", pre, other)
+        self.assertFails("M9", "serves burst")
+
+    def test_m9_an_activate_of_another_row_than_its_bursts(self):
+        act, b = self.burst_with_act()
+        self.b.set("bursts", "row", b, self.b.get("bursts", "row", b) + 1)
+        self.assertFails("M9", "opens row")
+
+    def test_m9_a_read_serving_a_store(self):
+        # lpddr5-trace-debug's "request type defaulting to WRITE", seen from the other side: the
+        # direction of a CAS and of the burst it serves disagree.
+        rd = self.b.find("commands", lambda i: self.b.get("commands", "kind", i) == RD)
+        self.b.set("bursts", "is_load", self.b.get("commands", "burst", rd), 0)
+        self.assertFails("TF10", "a store")
+
+    def test_m10_an_activate_after_its_cas(self):
+        act, b = self.burst_with_act()
+        cas = self.b.find("commands", lambda i: self.b.get("commands", "kind", i) in (RD, WR)
+                          and self.b.get("commands", "burst", i) == b)
+        self.b.set("commands", "k_issue", act, self.b.get("commands", "k_issue", cas) + 1)
+        self.assertFails("M10", "does not precede")
+
+    def test_m10_a_page_hit_served_by_an_activate(self):
+        _, b = self.burst_with_act()
+        self.b.set("bursts", "outcome", b, 1)   # hit
+        self.assertFails("M10", "outcome hit, but 1 ACT")
+
+    def test_m10_a_page_closed_before_its_cas_not_for_a_refresh(self):
+        # The starvation override's loop (#576): the page a burst opened is closed, before the
+        # burst is served, by a PRE that no refresh follows -- and reopened by a second ACT.
+        act, b = self.burst_with_act()
+        cas = self.b.find("commands", lambda i: self.b.get("commands", "kind", i) in (RD, WR)
+                          and self.b.get("commands", "burst", i) == b)
+        pre = self.b.find("commands", lambda i: self.b.get("commands", "kind", i) == PRE and i not in (act, cas))
+        bank = {f: self.b.get("commands", f, act) for f in ("mc", "channel", "bank_group", "bank", "row")}
+        for f, v in bank.items():
+            self.b.set("commands", f, pre, v)
+        self.b.set("commands", "burst", pre, b)
+        self.b.set("commands", "k_issue", pre, self.b.get("commands", "k_issue", act) + 1)
+        self.assertFails("M10", "and not for a refresh")
+
+    def test_m10_more_activates_than_refresh_closes(self):
+        act, b = self.burst_with_act()
+        other = self.b.find("commands", lambda i: self.b.get("commands", "kind", i) == ACT and i != act)
+        for f in ("mc", "channel", "bank_group", "bank", "row"):
+            self.b.set("commands", f, other, self.b.get("commands", f, act))
+        self.b.set("commands", "burst", other, b)
+        self.b.set("commands", "k_issue", other, self.b.get("commands", "k_issue", act))
+        self.assertFails("M10", "ACTs serve it, but its page was closed for a refresh only 0 times")
+
+    def test_m11_a_refresh_that_serves_a_burst(self):
+        ref = self.b.find("commands", lambda i: self.b.get("commands", "kind", i) == REF)
+        self.b.set("commands", "burst", ref, 0)
+        self.assertFails("M11", "a refresh serves no request")
 
     # -- unreadable ---------------------------------------------------------
     def test_version_3_is_read(self):

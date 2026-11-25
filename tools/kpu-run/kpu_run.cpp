@@ -688,6 +688,19 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
                                      {"law_errors", r.law_errors.size()},
                                      {"slots_checked", r.slots_checked},
                                      {"tiles_checked", r.tiles_checked}};
+            // The engine's and the channel's own counts, which mflow_check.py's M8 recomputes from
+            // the record: a record that drops or adds an event disagrees with them.
+            nlohmann::json waits = nlohmann::json::object();
+            for (std::size_t k = 0; k < sw::kpu::cycle::kDmaWaits; ++k)
+                waits[sw::kpu::program::record::to_string(
+                    static_cast<sw::kpu::program::record::MemoryFlowRecord::WaitReason>(k))] = r.dma.waits[k];
+            manifest->j["result"]["dma"] = {{"loads", r.dma.loads},           {"stores", r.dma.stores},
+                                            {"fills", r.dma.fills},           {"read_bursts", r.dma.read_bursts},
+                                            {"write_bursts", r.dma.write_bursts}, {"waits", waits}};
+            manifest->j["result"]["dram"] = {{"reads", r.dram.reads},           {"writes", r.dram.writes},
+                                             {"page_hits", r.dram.page_hits},   {"page_empty", r.dram.page_empty},
+                                             {"page_conflicts", r.dram.page_conflicts},
+                                             {"refreshes", r.dram.refreshes}};
             if (!manifest->finish(r.ok() ? "ok" : "failed", code)) return 2;
         }
         return code;

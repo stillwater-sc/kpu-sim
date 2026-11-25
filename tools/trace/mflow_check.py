@@ -36,7 +36,26 @@ Invariants:
     M5   DRAM timing    against the DECLARED device's table (the manifest's dram_timing, the
                         table the controller ran -- not the LPDDR5-6400 table trace_validator.py
                         hard-codes): per bank tRCD, tRP, tRAS, tRC, tRFCpb; per bank group
-                        tRRD_L, tCCD_L; per channel tRRD_S, tCCD_S, tFAW
+                        tRRD_L, tCCD_L; per channel tRRD_S, tCCD_S, tFAW; and the bus turnarounds
+                        as the controller defines them: a RD after a WR waits for the WR's data to
+                        end plus tWTR_L (same bank group) or tWTR_S, a WR after a RD for the RD's
+                        data to end plus tRTW
+    M7   waits          (version 4) one cause's waits on an engine never overlap; each is a
+                        non-empty interval inside the run, of an engine with a dmawait station.
+                        Different causes may hold at once
+    M8   the run        (with the run's run.json, found beside the bundle or named by --run) the
+                        record recomputes the run's own counts: bursts by direction, requests by
+                        kind, wait cycles by cause, RD/WR/REF commands, page outcomes; and the
+                        counters' completions of the DMA engine (requests) and the channel (bursts)
+    M9   ownership      every ACT, RD, WR and PRE serves a burst, on that burst's bank; an ACT opens
+                        and a PRE closes its burst's row (trace_validator.py's INV-001, -002, -004)
+    M10  order          a burst's ACTs issue before its CAS; its page is closed before its CAS only
+                        for a refresh (the PRE is the bank's last command before a REF), and each
+                        such close is the only reason for another ACT; at most one PRE follows its
+                        CAS; a burst is a page hit exactly when no ACT serves it (INV-003). An
+                        ACT/PRE pair that serves nothing is wasted: the starvation override's loop
+                        (#576) was one
+    M11  refresh        a REF serves no burst: it is maintenance, not a request (INV-006)
 
 TF10, TF11 and M5 are checked on the controller's clock ticks (the k_* columns), not executor
 cycles: an executor cycle is several ticks (dram_timing.ticks_per_cycle), so a constraint a tick
@@ -85,7 +104,11 @@ SCHEMA_V4 = {
     "requests": {"kind": "u8", "ticket": "u32", "slot": "u32"},
     "waits": {"engine": "u32", "reason": "u8", "t_from": "f64", "t_to": "f64"},
 }
-TIMING = ["tRCD", "tRP", "tRAS", "tRC", "tRFCpb", "tRRD_L", "tRRD_S", "tCCD_L", "tCCD_S", "tFAW"]
+TIMING = ["tRCD", "tRP", "tRAS", "tRC", "tRFCpb", "tRRD_L", "tRRD_S", "tCCD_L", "tCCD_S", "tFAW",
+          "tWTR_L", "tWTR_S", "tRTW"]
+# The wait causes and page outcomes, by their names in run.json (memory_flow_record.cpp's to_string).
+WAIT_NAMES = ["slot_credit", "l3_credit", "request_credit", "window", "store_buffer", "order"]
+HIT, EMPTY, CONFLICT = 1, 2, 3
 
 
 class Unreadable(Exception):
@@ -144,7 +167,7 @@ def load(path):
             raise Unreadable("manifest stations need a string name and kind each")
         for s in st:
             _count(s.get("capacity"), f"the capacity of {s['name']}")
-            if s["kind"] in ("dma", "dmabuf"):
+            if s["kind"] in ("dma", "dmabuf", "dmawait"):
                 # check() keys these by the index in their name (dev/dma[3]): a name it cannot
                 # parse is unreadable input, not a crash that would exit 1 as a "violation".
                 _station_index(s["name"])
@@ -253,7 +276,43 @@ def _index(stations, kind):
     return {_station_index(s["name"]): s["capacity"] for s in stations if s["kind"] == kind}
 
 
-def check(rec):
+def load_run(path):
+    """The run's run.json (kpu-run --run-dir), and its counters if it names them; Unreadable if not
+    a kpu-run manifest. None for a run that has no result (still running, or an error)."""
+    p = Path(path)
+    try:
+        run = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        raise Unreadable(f"{p}: {e}") from e
+    if not isinstance(run, dict) or run.get("format") != "kpu-run":
+        raise Unreadable(f"{p} is not a kpu-run manifest")
+    res = run.get("result")
+    if not isinstance(res, dict) or not isinstance(res.get("dma"), dict) or not isinstance(res.get("dram"), dict):
+        return None
+    counters = None
+    name = run.get("artifacts", {}).get("counters")
+    if isinstance(name, str) and (p.parent / name).is_file():
+        try:
+            counters = json.loads((p.parent / name).read_text())
+        except ValueError as e:
+            raise Unreadable(f"{p.parent / name}: {e}") from e
+    return {"path": str(p), "result": res, "counters": counters}
+
+
+def find_run(bundle):
+    """The run.json of the run directory the bundle is in, when it names this bundle."""
+    d = Path(bundle).resolve()
+    p = d.parent / "run.json"
+    if not p.is_file():
+        return None
+    try:
+        run = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return p   # load_run says why
+    return p if isinstance(run, dict) and run.get("artifacts", {}).get("mflow") == d.name else None
+
+
+def check(rec, run=None):
     r = Report()
     m = rec["manifest"]
     makespan = m["makespan"]
@@ -511,12 +570,126 @@ def check(rec):
             gap("tCCD_S", a, b, what)
         for a, b in zip(acts, acts[4:]):            # at most four ACTs in any tFAW window
             gap("tFAW", a, b, what + " (five activates)")
+        # The bus turnarounds, as the controller defines them: from the previous CAS's data end.
+        for a, b in zip(cas, cas[1:]):
+            ka, kb = C["kind"][a], C["kind"][b]
+            if ka == kb:
+                continue
+            if ka == WR:
+                p = "tWTR_L" if C["bank_group"][a] == C["bank_group"][b] else "tWTR_S"
+            else:
+                p = "tRTW"
+            d = C["k_issue"][b] - C["k_data1"][a]
+            if d < T[p]:
+                r.fail("M5", f"{what}: {p} = {T[p]} ticks after {cmd(a)}'s data ends at tick "
+                             f"{C['k_data1'][a]}, but {cmd(b)} issues {d} after it")
+
+    # M7 --------------------------------------------------------------------
+    W, nw = rec["waits"], rec["waits_rows"]
+    if m["version"] >= 4:
+        r.ran("M7")
+        lanes = _index(m["stations"], "dmawait")
+        by = {}
+        for i in range(nw):
+            e, why, a, b = W["engine"][i], W["reason"][i], W["t_from"][i], W["t_to"][i]
+            if e not in lanes:
+                r.fail("M7", f"wait {i} names engine {e}, which has no dmawait station")
+            if not a < b or b > makespan:
+                r.fail("M7", f"wait {i} ({WAIT_NAMES[why]}, engine {e}): [{a:.0f}, {b:.0f}) is not a "
+                             f"non-empty interval inside the run")
+            by.setdefault((e, why), []).append((a, b, i))
+        for (e, why), iv in by.items():
+            iv.sort()
+            for (a0, b0, i0), (a1, b1, i1) in zip(iv, iv[1:]):
+                if a1 < b0:
+                    r.fail("M7", f"dma[{e}]: waits {i0} [{a0:.0f}, {b0:.0f}) and {i1} [{a1:.0f}, {b1:.0f}) "
+                                 f"for {WAIT_NAMES[why]} overlap")
+
+    # M8 --------------------------------------------------------------------
+    if run is not None:
+        r.ran("M8")
+        res, where_run = run["result"], run["path"]
+
+        def same(what, recorded, ran):
+            if recorded != ran:
+                r.fail("M8", f"{what}: the record has {recorded}, the run ({where_run}) says {ran}")
+
+        dma, dram = res["dma"], res["dram"]
+        same("read bursts", sum(1 for b in range(nb) if B["is_load"][b]), dma.get("read_bursts"))
+        same("write bursts", sum(1 for b in range(nb) if not B["is_load"][b]), dma.get("write_bursts"))
+        for kind, name in ((LOAD, "loads"), (STORE, "stores"), (FILL, "fills")):
+            same(name, sum(1 for q in range(nq) if Q["kind"][q] == kind), dma.get(name))
+        cycles = [0] * WAIT_REASONS
+        for i in range(nw):
+            cycles[W["reason"][i]] += W["t_to"][i] - W["t_from"][i]
+        for k, name in enumerate(WAIT_NAMES):
+            same(f"cycles waited for {name}", int(cycles[k]), dma.get("waits", {}).get(name))
+        for kind, name in ((RD, "reads"), (WR, "writes"), (REF, "refreshes")):
+            same(f"{CMD[kind]} commands", sum(1 for i in range(nc) if C["kind"][i] == kind), dram.get(name))
+        for oc, name in ((HIT, "page_hits"), (EMPTY, "page_empty"), (CONFLICT, "page_conflicts")):
+            same(name.replace("_", " "), sum(1 for b in range(nb) if B["outcome"][b] == oc), dram.get(name))
+        rows = {x.get("name"): x for x in (run["counters"] or {}).get("rows", []) if isinstance(x, dict)}
+        if "dma" in rows:
+            same("the DMA engine's completions (counters)", nq, rows["dma"].get("C"))
+        if "lpddr5" in rows:
+            same("the channel's completions (counters)", nb, rows["lpddr5"].get("C"))
+
+    # M9, M10, M11 ------------------------------------------------------------
+    r.ran("M9")
+    r.ran("M10")
+    r.ran("M11")
+    acts, pres, cas_of = {}, {}, {}
+    for i in range(nc):
+        k, b = C["kind"][i], C["burst"][i]
+        if k == REF:
+            if b != NONE:
+                r.fail("M11", f"{where(i)}: {cmd(i)} serves burst {b}; a refresh serves no request")
+            continue
+        if b == NONE:
+            r.fail("M9", f"{where(i)}: {cmd(i)} serves no burst")
+            continue
+        if any(B[f][b] != C[f][i] for f in ("mc", "channel", "bank_group", "bank")):
+            r.fail("M9", f"{where(i)}: {cmd(i)} serves burst {b}, on mc[{B['mc'][b]}]/ch[{B['channel'][b]}]"
+                         f"/bg[{B['bank_group'][b]}]/ba[{B['bank'][b]}]")
+        elif k in (ACT, PRE) and C["row"][i] != B["row"][b]:
+            r.fail("M9", f"{where(i)}: {cmd(i)} {'opens' if k == ACT else 'closes'} row {C['row'][i]}, "
+                         f"but its burst {b} is in row {B['row'][b]}")
+        (acts if k == ACT else pres if k == PRE else cas_of).setdefault(b, []).append(i)
+    after = {}   # the next command on each command's bank
+    for cmds in banks.values():
+        for i, j in zip(cmds, cmds[1:]):
+            after[i] = j
+    for b in range(nb):
+        a, p, c = acts.get(b, []), pres.get(b, []), cas_of.get(b, [])
+        if len(c) == 1:
+            k = C["k_issue"][c[0]]
+            for i in a:
+                if not C["k_issue"][i] < k:
+                    r.fail("M10", f"burst {b}: its {cmd(i)} does not precede its {cmd(c[0])}")
+            early = [i for i in p if C["k_issue"][i] < k]
+            for i in early:
+                j = after.get(i)
+                if j is None or C["kind"][j] != REF:
+                    r.fail("M10", f"burst {b}: its page is closed by {cmd(i)} before its {cmd(c[0])}, and not "
+                                  f"for a refresh (the bank's next command is "
+                                  f"{cmd(j) if j is not None else 'none'})")
+            if len(a) > 1 + len(early):
+                r.fail("M10", f"burst {b}: {len(a)} ACTs serve it, but its page was closed for a refresh "
+                              f"only {len(early)} time{'s' if len(early) != 1 else ''}")
+            late = [i for i in p if C["k_issue"][i] >= k]
+            if len(late) > 1:
+                r.fail("M10", f"burst {b}: {len(late)} PREs close its page after its CAS")
+        if (B["outcome"][b] == HIT) == bool(a):
+            r.fail("M10", f"burst {b}: outcome {['unknown', 'hit', 'empty', 'conflict'][B['outcome'][b]]}, "
+                          f"{'but' if a else 'and'} {len(a)} ACT{'s' if len(a) != 1 else ''} serve it")
     return r
 
 
 def main():
     ap = argparse.ArgumentParser(description="Check a .mflow bundle against the memory-side invariants.")
     ap.add_argument("bundle")
+    ap.add_argument("--run", help="the run's run.json, for M8 (default: the run directory's, when the "
+                                  "bundle is in one)")
     ap.add_argument("--json", "-j", action="store_true", help="machine-readable output")
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args()
@@ -525,7 +698,13 @@ def main():
     except Unreadable as e:
         print(f"mflow_check: cannot read {args.bundle}: {e}", file=sys.stderr)
         sys.exit(2)
-    rep = check(rec)
+    try:
+        path = args.run or find_run(args.bundle)
+        run = load_run(path) if path else None
+    except Unreadable as e:
+        print(f"mflow_check: cannot read the run: {e}", file=sys.stderr)
+        sys.exit(2)
+    rep = check(rec, run)
     ok = not rep.violations
     if args.json:
         print(json.dumps({"bundle": args.bundle, "passed": ok, "checked": rep.checked,
