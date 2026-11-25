@@ -964,7 +964,7 @@ TEST_CASE("A starved request does not close a row an older request still waits o
     // behind it. Closing row 1 for the starved read helps neither: the older write is the oldest
     // request needing bank 0, so it wins the next ACTIVATE and reopens row 1, and the read starves
     // again. The controller did that until the write got through, 15 times in kpu-memsim's T4 run
-    // (found by mflow_check.py's M10 on #576's branch). A row with an older pending hit is not closed.
+    // (found by mflow_check.py's M10, #565; #576). A row with an older pending hit is not closed.
     TestContext ctx;
     ctx.mc->set_refresh_mode(sw::kpu::IMemoryController::RefreshMode::DISABLED);   // only the scheduler opens and closes rows
     int row1_activates = 0, bank0_precharges = 0;
