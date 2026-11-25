@@ -110,6 +110,30 @@ For each bank B:
   - Cannot issue PRECHARGE if bank is already idle
 ```
 
+### INV-006: Refresh Belongs to No Transaction
+
+**Description:** A REFRESH is a maintenance command the controller issues on its own schedule. It
+serves no request, so it carries `txn_id` 0 (request ids start at 1), and the validator keeps it
+out of transaction grouping: INV-001 to INV-004 apply to requests only.
+
+**Rationale:** Without this, the first trace long enough to contain a refresh fails INV-001 with
+"txn_id=0 has no data operation (only REFRESH events)" -- a trace that is correct, rejected by a
+model that had no refresh in it. Found by #537 (`tests/cycle/cycle_dram_demo`); two committed traces
+had the same failure unnoticed (`traces/memory/lpddr5/bandwidth/page_burst_trace.json` with 8
+refreshes, `complex/random_trace.json` with 16), and pass with this rule.
+
+**Validation:**
+```
+For each REFRESH event E:
+  - E.txn_id == 0
+  - E is not grouped into any transaction
+```
+
+**Failure example:** a REFRESH traced with the id of the request whose bank it refreshed, which
+would make that request look like it had two owners for its page commands.
+
+**Fix hint:** trace a REFRESH with txn_id 0, never a request's id.
+
 ## Timing Constraint Invariants
 
 ### INV-100: tRCD Constraint
@@ -245,3 +269,4 @@ See `CLAUDE.md` in project root for detailed Claude Code integration guidelines.
 | Date | Version | Author | Changes |
 |------|---------|--------|---------|
 | 2026-01-05 | 1.0 | Claude Code | Initial invariant documentation |
+| 2026-11-24 | 1.1 | Claude Code | INV-006: a refresh belongs to no transaction (#537) |

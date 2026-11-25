@@ -46,6 +46,16 @@ set_target_properties(test_cycle_crossing PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_crossing COMMAND test_cycle_crossing)
 set_tests_properties(test_cycle_crossing PROPERTIES LABELS "cycle;crossing;v0.10")
 
+# Step 1a (#537): the LPDDR5 controller as a cycle-core component, against the bare controller
+add_executable(test_cycle_lpddr5 test_cycle_lpddr5.cpp)
+target_link_libraries(test_cycle_lpddr5 PRIVATE Catch2::Catch2WithMain kpu_memory_components kpu_trace)
+target_include_directories(test_cycle_lpddr5 PRIVATE ${CMAKE_SOURCE_DIR}/include
+                           ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common)
+kpu_set_target_options(test_cycle_lpddr5)
+set_target_properties(test_cycle_lpddr5 PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_lpddr5 COMMAND test_cycle_lpddr5)
+set_tests_properties(test_cycle_lpddr5 PROPERTIES LABELS "cycle;lpddr5;memory;v0.10")
+
 # Step 0c (#535): the test structure's trace and counters files, validated against each other.
 # Open build/tests/cycle/cycle_trace_demo.json in https://ui.perfetto.dev
 add_executable(cycle_trace_demo cycle_trace_demo.cpp)
@@ -69,4 +79,33 @@ if(KPU_PYTHON3)
                 ${CMAKE_CURRENT_BINARY_DIR}/cycle_trace_demo.json
                 ${CMAKE_CURRENT_BINARY_DIR}/cycle_trace_demo.counters.json)
     set_tests_properties(cycle_trace_check_selftest PROPERTIES LABELS "cycle;trace;v0.10" FIXTURES_REQUIRED cycle_trace)
+endif()
+
+# Step 1a (#537): one LPDDR5 channel on the core. Its controller trace answers to the LPDDR5 trace
+# validator; its core trace and counters to check_trace.py.
+add_executable(cycle_dram_demo cycle_dram_demo.cpp)
+target_link_libraries(cycle_dram_demo PRIVATE kpu_memory_components kpu_trace)
+target_include_directories(cycle_dram_demo PRIVATE ${CMAKE_SOURCE_DIR}/include
+                           ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common)
+kpu_set_target_options(cycle_dram_demo)
+set_target_properties(cycle_dram_demo PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME cycle_dram_demo
+    COMMAND cycle_dram_demo ${CMAKE_CURRENT_BINARY_DIR}/cycle_dram_demo.lpddr5.json
+                            ${CMAKE_CURRENT_BINARY_DIR}/cycle_dram_demo.json
+                            ${CMAKE_CURRENT_BINARY_DIR}/cycle_dram_demo.counters.json)
+set_tests_properties(cycle_dram_demo PROPERTIES LABELS "cycle;lpddr5;trace;v0.10" FIXTURES_SETUP cycle_dram)
+if(KPU_PYTHON3)
+    add_test(NAME cycle_dram_trace_validator
+        COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common/trace_validator.py
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_dram_demo.lpddr5.json)
+    set_tests_properties(cycle_dram_trace_validator PROPERTIES LABELS "cycle;lpddr5;trace;v0.10" FIXTURES_REQUIRED cycle_dram)
+    add_test(NAME cycle_dram_trace_check
+        COMMAND ${KPU_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/check_trace.py
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_dram_demo.json
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_dram_demo.counters.json)
+    set_tests_properties(cycle_dram_trace_check PROPERTIES LABELS "cycle;lpddr5;trace;v0.10" FIXTURES_REQUIRED cycle_dram)
+    # The validator's INV-006 on synthetic traces: a refresh with txn_id 0 passes, any other fails.
+    add_test(NAME lpddr5_trace_validator_selftest
+        COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common/test_trace_validator.py)
+    set_tests_properties(lpddr5_trace_validator_selftest PROPERTIES LABELS "cycle;lpddr5;trace;v0.10")
 endif()
