@@ -23,8 +23,8 @@
 // enters the ring, so it needs two credits.
 //
 // COUNTERS. Each flit through the port is an arrival and a completion; the port is busy in a
-// cycle it moves one, stalled (no credit) when a head waited, idle otherwise. port() adds the
-// flits of each kind and the cycles an injection waited.
+// cycle it moves one, stalled (no credit) when a head waited, idle otherwise. noc() adds the
+// flits of each kind, the cycles an injection waited, and of those the ones the bubble rule held.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -49,6 +49,7 @@ namespace sw::kpu::cycle {
 struct NocPortCounts {
     std::uint64_t ring_through = 0, injected = 0, ejected = 0;
     std::uint64_t injection_waits = 0;   // cycles an engine's head waited to enter
+    std::uint64_t bubble_waits = 0;      // of those, the ones with one credit, where the rule wanted two
 };
 
 class NocPort : public Component {
@@ -85,6 +86,9 @@ public:
             Dir& x = dir_[d];
             if (!x.in->can_pop(now)) continue;
             const NocFlit& f = x.in->peek(now);
+            if (f.fresh)
+                throw std::logic_error("cycle::NocPort " + name() + " at cycle " + std::to_string(now) + ": flit " +
+                                       std::to_string(f.id) + " reached it unrouted: a hub forwards every flit routed");
             if (f.dest == NocFlit::Dest::Engine && f.dst_port == port_ && f.dst_hub == x.from_hub) {
                 if (f.dst_engine >= engines_.size())
                     throw std::logic_error("cycle::NocPort " + name() + " at cycle " + std::to_string(now) + ": flit " +
@@ -123,6 +127,7 @@ public:
             if (!g.head_since) g.head_since = now;
         }
         std::vector<std::size_t> order;
+        bool bubble_flag = false;
         for (std::size_t e = 0; e < engines_.size(); ++e)
             if (engines_[e].head_since) order.push_back(e);
         std::stable_sort(order.begin(), order.end(),
@@ -131,7 +136,12 @@ public:
             Engine& g = engines_[e];
             const NocDim to = topo_->injection_hub(port_, g.l3_hub);
             const int d = to == hub_b_ ? 0 : 1;
-            if (used[d] || dir_[d].out->credits(now) < (bubble_ ? 2u : 1u)) continue;
+            if (used[d]) continue;
+            const std::size_t have = dir_[d].out->credits(now);
+            if (have < (bubble_ ? 2u : 1u)) {
+                if (bubble_ && have == 1) bubble_flag = true;
+                continue;
+            }
             NocFlit f;
             f.id = ((++uid_count_) << 16) | 0x8000u | port_;
             f.born = now;
@@ -151,6 +161,7 @@ public:
         if (!best && !order.empty()) {
             waited = true;
             ++noc_.injection_waits;
+            if (bubble_flag) ++noc_.bubble_waits;
         }
         if (moved) counters().busy();
         else if (waited) counters().stall(Stall::NoCredit);

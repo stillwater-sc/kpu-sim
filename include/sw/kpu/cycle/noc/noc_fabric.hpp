@@ -16,8 +16,8 @@
 //                  the L3 tile, not over the NoC.
 //
 // THE BUBBLE RULE, CHECKED (noc_hub.hpp): every unidirectional ring -- the links of one loop in one
-// direction, through its hubs and ports -- holds fewer flits than its slots, every cycle. A
-// violation stops the run naming the ring. With the rule off (Config::bubble = false, only to show
+// direction, through its hubs and ports -- holds fewer flits than its slots, every cycle, and
+// every ring link takes at most one flit a cycle. A violation stops the run naming the ring or link. With the rule off (Config::bubble = false, only to show
 // what it prevents), the check is what fails, or the deadlock detector.
 //
 // SPDX-License-Identifier: MIT
@@ -113,6 +113,7 @@ public:
             auto& b = fold[k].at(p.hub_b);
             ports_[k]->connect_ring(*a.first, *a.second, *b.first, *b.second);
         }
+        for (auto& [key, r] : rings_) r.arrivals.assign(r.links.size(), 0);
         sim.add_invariant("noc bubble: every ring keeps a free slot", [this] { check_rings(); });
     }
     NocFabric(const NocFabric&) = delete;
@@ -158,13 +159,24 @@ private:
     struct Ring {
         std::string label;
         std::vector<Link<NocFlit>*> links;
+        std::vector<std::uint64_t> arrivals;   // each link's, at the last check
         std::size_t peak = 0;
     };
 
     void check_rings() {
         if (domain_->cycle() == 0) return;          // the NoC's domain has not ticked yet
         const Cycle now = domain_->cycle() - 1;   // its cycle just closed
+        if (now == checked_) return;                // a step of another domain only
+        checked_ = now;
         for (auto& [key, r] : rings_) {
+            // One flit a cycle on each link: a channel carries one, whoever drives it.
+            for (std::size_t i = 0; i < r.links.size(); ++i) {
+                const std::uint64_t a = r.links[i]->counts().arrivals;
+                if (a > r.arrivals[i] + 1)
+                    throw std::logic_error("link " + r.links[i]->name() + " took " + std::to_string(a - r.arrivals[i]) +
+                                           " flits in cycle " + std::to_string(now));
+                r.arrivals[i] = a;
+            }
             std::size_t held = 0;
             for (Link<NocFlit>* l : r.links) held += l->in_flight(now) + l->buffered(now);
             r.peak = std::max(r.peak, held);
@@ -182,6 +194,7 @@ private:
     std::vector<NocHub*> hubs_;
     std::vector<NocPort*> ports_;
     std::map<std::pair<NocDim, bool>, Ring> rings_;
+    Cycle checked_ = ~Cycle{0};
 };
 
 }  // namespace sw::kpu::cycle

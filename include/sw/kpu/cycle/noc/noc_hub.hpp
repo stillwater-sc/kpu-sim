@@ -13,7 +13,10 @@
 // (l3_program.hpp), so a packet is one flit and nothing is wormholed.
 //
 // ROUTING is the topology's: dimension-ordered, the row loop to the turn and the column loop to
-// the destination, shorter way round. A flit bound for an L3 tile leaves at its hub to the L3; a
+// the destination, shorter way round. A flit that would leave a column loop for a row loop is a
+// fault: that turn is what could close a cycle of waits. The one exception is the last hop of a
+// flit bound for an engine, from its exit hub into its port, which ejects it: that hop ends at a
+// sink, as in timing/noc_hub_process.hpp. A flit bound for an L3 tile leaves at its hub to the L3; a
 // flit bound for a DMA engine leaves at its exit hub onto the fold channel of the engine's port.
 //
 // THE BUBBLE RULE (timing/noc_hub_process.hpp, §3.5). A flit that ENTERS a ring -- from the L3, from
@@ -30,9 +33,9 @@
 //
 // COUNTERS. Every flit forwarded is an arrival and a completion (the hub holds nothing: its
 // queues are its input links, counted there). The hub is busy in a cycle it forwards, stalled (no
-// credit) when a flit at an input head waited for its output's credits, idle otherwise. hub()
-// (noc()) adds: flits forwarded on the rings, delivered to the L3, taken from the L3, and the cycles a
-// flit waited because the bubble rule wanted a second credit.
+// credit) when a flit at an input head waited for its output's credits, idle otherwise. noc()
+// adds: flits forwarded on the rings, delivered to the L3, taken from the L3, and the times a flit
+// waited because the bubble rule wanted a second credit.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -76,7 +79,8 @@ struct NocHubCounts {
     std::uint64_t forwarded = 0;      // onto a ring channel
     std::uint64_t delivered = 0;      // to the L3
     std::uint64_t from_l3 = 0;        // taken from the L3, bound for an engine
-    std::uint64_t bubble_waits = 0;   // cycles a flit had one credit but needed two
+    std::uint64_t bubble_waits = 0;   // times a flit had one credit but needed two
+    std::uint64_t turn_bubble_waits = 0;   // of those, a flit turning from one loop onto another
 };
 
 class NocHub : public Component {
@@ -128,9 +132,17 @@ public:
                 const std::size_t have = out == kL3 ? (to_l3_ ? to_l3_->credits(now) : 0) : out_[out].link->credits(now);
                 if (have < need) {
                     waited = true;
-                    if (have + 1 == need) ++noc_.bubble_waits;
+                    if (need == 2 && have == 1) {
+                        ++noc_.bubble_waits;
+                        if (heads[h].in != kL3 && !heads[h].flit->fresh) ++noc_.turn_bubble_waits;
+                    }
                     continue;
                 }
+                if (out != kL3 && heads[h].in != kL3 && !heads[h].flit->fresh && !ejects(*heads[h].flit) &&
+                    topo_->channel(in_[heads[h].in].channel).column && !topo_->channel(out_[out].channel).column)
+                    throw std::logic_error("cycle::NocHub " + name() + " at cycle " + std::to_string(now) + ": flit " +
+                                           std::to_string(heads[h].flit->id) + " would turn from a column loop back onto a "
+                                           "row loop, against dimension order");
                 NocFlit f = pop(now, heads[h].in, local);
                 f.fresh = false;
                 if (out == kL3) {
@@ -204,6 +216,9 @@ private:
         throw std::logic_error("cycle::NocHub " + name() + ": routed flit " + std::to_string(f.id) + " to channel " +
                                std::to_string(c) + ", which does not leave hub " + std::to_string(hub_));
     }
+
+    // Bound for an engine, at its exit hub: its next hop is into its port, which ejects it.
+    [[nodiscard]] bool ejects(const NocFlit& f) const { return f.dest == NocFlit::Dest::Engine && f.dst_hub == hub_; }
 
     // Entering the ring of `out`: from the L3, from a port's injection, or from another ring.
     [[nodiscard]] bool enters(const Head& h, NocDim out) const {
