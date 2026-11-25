@@ -20,7 +20,7 @@
 // Every other action (Move, Feed, Call, Drain, L2Release) is the compute subsystem's.
 //
 // DRAM. The walker places no tile in DRAM, so the plan does: each operand in its own region from
-// `base`, 64 KiB aligned, its tiles in row-major tile order, each tile packed row-major at its
+// `base`, 64 KiB aligned (a layout that runs past the end of the address space is refused), its tiles in row-major tile order, each tile packed row-major at its
 // number system's width (an int8 element is a byte, int32 four, little-endian) and padded to whole
 // 64-byte beats. An L3 slot holds the largest padded tile.
 //
@@ -114,8 +114,14 @@ inline CspL3Plan plan_l3(const sw::kpu::program::csp::CspProgram& p, const sw::k
     // DRAM: each operand's region, its tiles in row-major tile order.
     std::map<std::tuple<std::string, Dim, Dim>, CspL3Plan::Tile> dram;
     std::uint64_t at = base;
+    constexpr std::uint64_t kMax = ~std::uint64_t{0};
+    auto overflow = [&](const std::string& what) {
+        return std::invalid_argument("plan_l3: " + what + " does not fit in the address space from base " +
+                                     std::to_string(base));
+    };
     for (const std::string& name : inputs.operand_order()) {
         const TensorOperand& op = inputs.operand(name);
+        if (at > kMax - 0xFFFF) throw overflow("operand " + name + "'s region");
         at = (at + 0xFFFF) & ~std::uint64_t{0xFFFF};
         for (Dim ti = 0; ti < op.n_tile_rows(); ++ti)
             for (Dim tj = 0; tj < op.n_tile_cols(); ++tj) {
@@ -124,6 +130,7 @@ inline CspL3Plan plan_l3(const sw::kpu::program::csp::CspProgram& p, const sw::k
                 t.address = at;
                 t.data = pack(op, ti, tj);
                 t.bytes = static_cast<std::uint32_t>(t.data.size());
+                if (at > kMax - t.bytes) throw overflow("tile " + t.tile.to_string());
                 at += t.bytes;
                 plan.slot_bytes = std::max(plan.slot_bytes, t.bytes);
                 plan.inputs.push_back(t);
