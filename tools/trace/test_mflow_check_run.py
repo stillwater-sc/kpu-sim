@@ -92,6 +92,10 @@ class MflowCheckRunSelfTest(unittest.TestCase):
         self.b.set("waits", "t_to", 0, self.b.get("waits", "t_from", 0))
         self.assertFails("M7", "not a non-empty interval")
 
+    def test_m7_a_wait_that_starts_before_the_run(self):
+        self.b.set("waits", "t_from", 0, -1.0)
+        self.assertFails("M7", "not a non-empty interval")
+
     def test_m7_a_wait_of_an_engine_without_a_station(self):
         self.b.set("waits", "engine", 0, 9)
         self.assertFails("M7", "no dmawait station")
@@ -144,6 +148,21 @@ class MflowCheckRunSelfTest(unittest.TestCase):
         code, report = run(self.b.dir)
         self.assertEqual(code, 0)
         self.assertNotIn("M8", report["checked"])
+
+    def test_unreadable_counters_are_refused(self):
+        # Counters that exist but cannot be read are unreadable input (exit 2), not a crash.
+        c = self.b.root / "counters.json"
+        c.chmod(0)
+        try:
+            try:
+                c.read_text()
+                self.skipTest("this user reads files without permission (root, or no POSIX modes)")
+            except OSError:
+                pass
+            code, _ = run(self.b.dir)
+            self.assertEqual(code, 2)
+        finally:
+            c.chmod(0o644)
 
     def test_an_unreadable_run_is_refused(self):
         (self.b.root / "run.json").write_text("{not json")

@@ -36,10 +36,10 @@ Invariants:
     M5   DRAM timing    against the DECLARED device's table (the manifest's dram_timing, the
                         table the controller ran -- not the LPDDR5-6400 table trace_validator.py
                         hard-codes): per bank tRCD, tRP, tRAS, tRC, tRFCpb; per bank group
-                        tRRD_L, tCCD_L; per channel tRRD_S, tCCD_S, tFAW; and the bus turnarounds
-                        as the controller defines them: a RD after a WR waits for the WR's data to
-                        end plus tWTR_L (same bank group) or tWTR_S, a WR after a RD for the RD's
-                        data to end plus tRTW
+                        tRRD_L, tCCD_L; per channel tRRD_S, tCCD_S, tFAW; and the bus turnarounds:
+                        a RD waits tWTR_S after the data of the channel's last WR ends, and tWTR_L
+                        after the data of its bank group's last WR -- reads between them do not
+                        clear it -- and a WR after a RD waits tRTW after the RD's data ends
     M7   waits          (version 4) one cause's waits on an engine never overlap; each is a
                         non-empty interval inside the run, of an engine with a dmawait station.
                         Different causes may hold at once
@@ -294,7 +294,7 @@ def load_run(path):
     if isinstance(name, str) and (p.parent / name).is_file():
         try:
             counters = json.loads((p.parent / name).read_text())
-        except ValueError as e:
+        except (OSError, ValueError) as e:
             raise Unreadable(f"{p.parent / name}: {e}") from e
     return {"path": str(p), "result": res, "counters": counters}
 
@@ -570,19 +570,30 @@ def check(rec, run=None):
             gap("tCCD_S", a, b, what)
         for a, b in zip(acts, acts[4:]):            # at most four ACTs in any tFAW window
             gap("tFAW", a, b, what + " (five activates)")
-        # The bus turnarounds, as the controller defines them: from the previous CAS's data end.
-        for a, b in zip(cas, cas[1:]):
-            ka, kb = C["kind"][a], C["kind"][b]
-            if ka == kb:
-                continue
-            if ka == WR:
-                p = "tWTR_L" if C["bank_group"][a] == C["bank_group"][b] else "tWTR_S"
-            else:
-                p = "tRTW"
-            d = C["k_issue"][b] - C["k_data1"][a]
-            if d < T[p]:
-                r.fail("M5", f"{what}: {p} = {T[p]} ticks after {cmd(a)}'s data ends at tick "
-                             f"{C['k_data1'][a]}, but {cmd(b)} issues {d} after it")
+        # The bus turnarounds. A RD waits tWTR_S after the data of the channel's last WR ends, and
+        # tWTR_L after the data of the last WR in its own bank group -- however many reads came
+        # between (a read to another bank group does not clear a write's tWTR_L). A WR after a RD
+        # waits tRTW after the RD's data ends (a later WR follows that one, so the adjacent pair is
+        # the binding one).
+        last_wr, last_wr_bg = None, {}
+        for a, b in zip([None] + cas, cas):
+            kb = C["kind"][b]
+            if kb == RD:
+                for w, p in ((last_wr, "tWTR_S"), (last_wr_bg.get(C["bank_group"][b]), "tWTR_L")):
+                    if w is None:
+                        continue
+                    d = C["k_issue"][b] - C["k_data1"][w]
+                    if d < T[p]:
+                        r.fail("M5", f"{what}: {p} = {T[p]} ticks after {cmd(w)}'s data ends at tick "
+                                     f"{C['k_data1'][w]}, but {cmd(b)} issues {d} after it")
+            elif a is not None and C["kind"][a] == RD:
+                d = C["k_issue"][b] - C["k_data1"][a]
+                if d < T["tRTW"]:
+                    r.fail("M5", f"{what}: tRTW = {T['tRTW']} ticks after {cmd(a)}'s data ends at tick "
+                                 f"{C['k_data1'][a]}, but {cmd(b)} issues {d} after it")
+            if kb == WR:
+                last_wr = b
+                last_wr_bg[C["bank_group"][b]] = b
 
     # M7 --------------------------------------------------------------------
     W, nw = rec["waits"], rec["waits_rows"]
@@ -594,7 +605,7 @@ def check(rec, run=None):
             e, why, a, b = W["engine"][i], W["reason"][i], W["t_from"][i], W["t_to"][i]
             if e not in lanes:
                 r.fail("M7", f"wait {i} names engine {e}, which has no dmawait station")
-            if not a < b or b > makespan:
+            if not 0 <= a < b <= makespan:
                 r.fail("M7", f"wait {i} ({WAIT_NAMES[why]}, engine {e}): [{a:.0f}, {b:.0f}) is not a "
                              f"non-empty interval inside the run")
             by.setdefault((e, why), []).append((a, b, i))

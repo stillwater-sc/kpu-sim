@@ -297,6 +297,32 @@ class MflowCheckSelfTest(unittest.TestCase):
         self.b.set("commands", "k_issue", wr, self.b.get("commands", "k_data1", rd) + p - 1)
         self.assertFails("M5", "tRTW")
 
+    def test_m5_a_read_too_soon_after_its_bank_groups_write_across_another_read(self):
+        # A read to another bank group between them does not clear a write's tWTR_L: a RD of the
+        # write's bank group still waits tWTR_L after the write's data ends.
+        chans = {}
+        for i in range(self.b.rows("commands")):
+            if self.b.get("commands", "kind", i) in (RD, WR):
+                key = (self.b.get("commands", "mc", i), self.b.get("commands", "channel", i))
+                chans.setdefault(key, []).append((self.b.get("commands", "k_issue", i), i))
+        P = self.b.manifest["dram_timing"]["params"]
+        for v in chans.values():
+            v.sort()
+            for (_, w), (_, r1), (_, r2) in zip(v, v[1:], v[2:]):
+                if [self.b.get("commands", "kind", x) for x in (w, r1, r2)] != [WR, RD, RD]:
+                    continue
+                if P["tWTR_L"] - 1 <= P["tWTR_S"]:
+                    self.skipTest("tWTR_L - 1 <= tWTR_S: no gap between them to test")
+                g = self.b.get("commands", "bank_group", w)
+                end = self.b.get("commands", "k_data1", w)
+                self.b.set("commands", "bank_group", r1, (g + 1) % 4)
+                self.b.set("commands", "bank_group", r2, g)
+                self.b.set("commands", "k_issue", r1, end + P["tWTR_S"])
+                self.b.set("commands", "k_issue", r2, end + P["tWTR_L"] - 1)
+                self.assertFails("M5", "tWTR_L")
+                return
+        self.fail("the clean bundle has no WR, RD, RD on one channel")
+
     # -- M9, M10, M11 (trace_validator.py's INV-001..006, on the record) ------
     def burst_with_act(self):
         for i in range(self.b.rows("commands")):
