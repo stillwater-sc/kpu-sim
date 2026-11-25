@@ -28,6 +28,10 @@
 #include <sw/kpu/program/csp/bubbles.hpp>
 #include <sw/kpu/program/csp/tile_commands.hpp>
 #include <sw/kpu/program/csp/lang/compile.hpp>
+#include <sw/kpu/program/csp/lang/context.hpp>
+#include <sw/kpu/cycle/memory/csp_l3_program.hpp>
+#include <sw/kpu/cycle/memory/memory_subsystem.hpp>
+#include <sw/kpu/cycle/trace.hpp>
 #include <sw/kpu/version.hpp>
 #include <sw/trace/trace_exporter.hpp>
 
@@ -108,6 +112,19 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
                             the transfers in flight per process)
   --step-limit <n>          stop after n steps, 0 = all      (default 40)
   --no-compare              run the levels, do not diff values
+  --memory-subsystem        run the program's L3 traffic on the cycle core's MEMORY SUBSYSTEM
+                            (docs/plans/cycle-based-kpu-prototype.md §4): the walker's Loads,
+                            Stores and Releases through one LPDDR5 channel, a DMA engine and an
+                            L3 tile (over the NoC when the deployment has one), the results
+                            filled from L-B. It checks every slot's and every stored tile's
+                            bytes, the invariants every cycle and the operational laws, and
+                            prints the counters summary; a deadlock prints the detector's
+                            report. Needs --deploy; takes only the --memory-* options below
+  --memory-trace <file.json>     its Perfetto trace: a track per component and link, each
+                            domain's clock, and a lane per L3 slot
+  --memory-counters <file.json>  its counters, for tests/cycle/check_trace.py
+  --memory-dram-trace <file.json>  the LPDDR5 channel's own trace, a track per bank, for
+                            patterns/memory/lpddr5/common/trace_validator.py
 
   --program <file.l0>       execute an L0 trace FROM A FILE (#265). An L0 program is the
                             oracle CSP runs answer to: it runs at L-B only. With it:
@@ -450,6 +467,50 @@ int run_csp_sweep(const std::vector<std::string>& a, const std::string& path, co
     return 0;
 }
 
+// --memory-subsystem: the program's L3 traffic on the cycle core (#541).
+int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast, const platform::DeviceSpecification* device) {
+    static const std::set<std::string> kMemory = {"--program", "--deploy", "--memory-subsystem", "--memory-trace",
+                                                  "--memory-counters", "--memory-dram-trace"};
+    for (const std::string& t : a)
+        if (t.rfind("--", 0) == 0 && !kMemory.count(t)) {
+            std::cerr << "kpu-run: " << t << " does not apply to a --memory-subsystem run\n";
+            return 2;
+        }
+    if (!device) {
+        std::cerr << "kpu-run: --memory-subsystem needs --deploy: the machine it runs on\n";
+        return 2;
+    }
+    std::string err, trace_path, counters_path, dram_path;
+    if (!arg_required(a, "--memory-trace", trace_path, err) || !arg_required(a, "--memory-counters", counters_path, err) ||
+        !arg_required(a, "--memory-dram-trace", dram_path, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    try {
+        const auto target = csp::lang::target_from(*device);
+        const csp::CspProgram p = csp::lang::compile(ast, &target);
+        const TileProgram in = csp_inputs(ast);
+        const CspLevelOutcome lb = csp_run_level(ExecutionLevel::Behavioral, ast, device, in);
+        if (lb.skipped) {
+            std::cerr << "kpu-run: L-B, the data oracle, did not run: " << *lb.skipped << "\n";
+            return 1;
+        }
+        const sw::kpu::cycle::CspL3Plan plan = sw::kpu::cycle::plan_l3(p, in, lb.values);
+        sw::kpu::cycle::Tracer tracer;
+        sw::kpu::cycle::MemoryRunOptions o;
+        o.tracer = trace_path.empty() ? nullptr : &tracer;
+        o.counters = counters_path;
+        o.dram_trace = dram_path;
+        const sw::kpu::cycle::MemoryRun r = sw::kpu::cycle::run_memory_subsystem(plan, device, o);
+        std::cout << sw::kpu::cycle::format_memory_summary(plan, r);
+        if (o.tracer) tracer.write(trace_path);
+        return r.ok() ? 0 : 1;
+    } catch (const std::exception& e) {
+        std::cerr << "kpu-run: --memory-subsystem: " << e.what() << "\n";
+        return 1;
+    }
+}
+
 int run_csp_program(const std::vector<std::string>& a, const std::string& path) {
     // What a CSP program run accepts. Everything else is the L0 path's (or the generator's:
     // --algo and friends are kpu-csp-gen's), and is refused by name rather than ignored.
@@ -459,7 +520,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                                                    "--tflow", "--step", "--step-limit", "--timeline",
                                                    "--dflow", "--dflow-limit", "--dflow-values", "--dflow-values-cap",
                                                    "--dflow-lt1", "--dflow-lca",
-                                                   "--tile-commands", "--bubbles"};
+                                                   "--tile-commands", "--bubbles", "--memory-subsystem",
+                                                   "--memory-trace", "--memory-counters", "--memory-dram-trace"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -546,6 +608,12 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         }
     }
     const platform::DeviceSpecification* device = deployment ? &deployment->devices.front() : nullptr;
+    if (has_flag(a, "--memory-subsystem")) return run_memory(a, *ast, device);
+    for (const char* k : {"--memory-trace", "--memory-counters", "--memory-dram-trace"})
+        if (arg_present(a, k)) {
+            std::cerr << "kpu-run: " << k << " records a --memory-subsystem run\n";
+            return 2;
+        }
 
     // Levels: "all" is every level that can run this program here; a named one that cannot is
     // a usage error with its reason.
