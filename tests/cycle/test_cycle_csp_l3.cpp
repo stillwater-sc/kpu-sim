@@ -167,3 +167,17 @@ TEST_CASE("Rung 4: an int8 64^3 matmul's L3 traffic on kpu_s1, C hypothesized, b
         if (t.tile.operand == "A" || t.tile.operand == "B") CHECK(t.bytes == 256);   // 16x16 int8: a byte each
     run_and_check(plan, 16);
 }
+
+TEST_CASE("The plan refuses a DRAM layout past the end of the address space", "[cycle][csp][l3]") {
+    // #557's review: a base near the top would wrap its alignment, and the tiles, to address 0.
+    const auto dev = device("kpu_soc_2x2.json");
+    const lang::Program ast = lang::parse(rtl_8x8x16());
+    const auto target = lang::target_from(dev);
+    const csp::CspProgram p = lang::compile(ast, &target);
+    const program::TileProgram in = driver::csp_inputs(ast);
+    const auto lb = driver::csp_run_level(driver::ExecutionLevel::Behavioral, ast, &dev, in);
+    CHECK_THROWS_WITH(plan_l3(p, in, lb.values, ~std::uint64_t{0}), ContainsSubstring("does not fit in the address space"));
+    CHECK_THROWS_WITH(plan_l3(p, in, lb.values, ~std::uint64_t{0} - 0x1FFFF), ContainsSubstring("does not fit"));
+    const CspL3Plan ok = plan_l3(p, in, lb.values, 0x100000);   // an ordinary layout is unchanged
+    CHECK(ok.inputs.front().address == 0x100000);
+}
