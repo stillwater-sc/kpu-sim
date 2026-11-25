@@ -75,12 +75,42 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_memory_subsystem_t4
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_t4.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json$<SEMICOLON>--memory-subsystem
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_t4.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-mflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_t4.mflow
             -DEXPECT_CODE=0
             -DMUST_MATCH=over.the.NoC.*bit.for.bit.*laws:.hold.on.every.row
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
     set_tests_properties(kpu_run_memory_subsystem_t4 PROPERTIES LABELS "program;driver;cycle;memory;noc"
-                         FIXTURES_REQUIRED memory_t4_program)
+                         FIXTURES_REQUIRED memory_t4_program FIXTURES_SETUP memory_t4_run)
+    # --run-dir (docs/plans/cycle-mflow-and-debug-server.md step 3): kpu_s1's run, every artifact
+    # under its fixed name and run.json; checked below by check_run_dir.py, mflow_check.py and
+    # check_trace.py.
+    add_test(NAME kpu_run_memory_run_dir_s1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--run-dir$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/memory_s1
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=on.a.direct.link.*bit.for.bit.*laws:.hold.on.every.row
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_memory_run_dir_s1 PROPERTIES LABELS "program;driver;cycle;memory;mflow"
+                         FIXTURES_REQUIRED memory_s1_program FIXTURES_SETUP memory_s1_run_dir)
+    add_test(NAME kpu_run_run_dir_takes_no_other_path
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--run-dir$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/refused$<SEMICOLON>--memory-mflow$<SEMICOLON>x.mflow
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--run-dir.names.every.artifact.itself..drop.--memory-mflow
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_run_dir_takes_no_other_path PROPERTIES LABELS "program;driver;cycle;memory")
+    foreach(_flag memory-mflow run-dir)
+        add_test(NAME kpu_run_${_flag}_needs_the_run
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--${_flag}$<SEMICOLON>x
+                -DEXPECT_CODE=2
+                -DMUST_MATCH=--${_flag}.records.a.--memory-subsystem.run
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+        set_tests_properties(kpu_run_${_flag}_needs_the_run PROPERTIES LABELS "program;driver;cycle;memory")
+    endforeach()
     add_test(NAME kpu_run_memory_subsystem_needs_a_deployment
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
@@ -109,6 +139,26 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.lpddr5.json)
         set_tests_properties(kpu_run_memory_dram_trace_validator PROPERTIES LABELS "program;driver;cycle;memory"
                              FIXTURES_REQUIRED memory_s1_run)
+        # The run directory, and the two bundles: what run.json says is there, and each record
+        # passes mflow_check.py (direct link and NoC).
+        set(_run_dir ${CMAKE_CURRENT_BINARY_DIR}/runs/memory_s1)
+        add_test(NAME kpu_run_run_dir_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/check_run_dir.py ${_run_dir} --status ok)
+        add_test(NAME kpu_run_run_dir_mflow_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/mflow_check.py ${_run_dir}/mem.mflow)
+        add_test(NAME kpu_run_run_dir_trace_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tests/cycle/check_trace.py
+                    ${_run_dir}/trace.json ${_run_dir}/counters.json)
+        add_test(NAME kpu_run_run_dir_check_selftest
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir})
+        set_tests_properties(kpu_run_run_dir_check kpu_run_run_dir_mflow_check kpu_run_run_dir_trace_check
+                             kpu_run_run_dir_check_selftest
+                             PROPERTIES LABELS "program;driver;cycle;memory;mflow" FIXTURES_REQUIRED memory_s1_run_dir)
+        add_test(NAME kpu_run_memory_mflow_check_t4
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/mflow_check.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/memory_t4.mflow)
+        set_tests_properties(kpu_run_memory_mflow_check_t4 PROPERTIES LABELS "program;driver;cycle;memory;mflow;noc"
+                             FIXTURES_REQUIRED memory_t4_run)
     endif()
 
     # A level with no interpreter must be refused, NOT silently substituted -- and the
