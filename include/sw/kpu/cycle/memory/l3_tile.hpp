@@ -77,7 +77,8 @@ public:
         // order: it waits until the slot holds that Load's tile, whatever else has filled it.
         std::vector<std::optional<std::size_t>> last_load(cfg.slots);
         for (std::size_t i = 0; i < program.size(); ++i) {
-            if (program[i].kind == L3Action::Kind::Load) last_load[program[i].slot] = i;
+            const auto k = program[i].kind;
+            if (k == L3Action::Kind::Load || k == L3Action::Kind::Fill) last_load[program[i].slot] = i;
             else commands_.push_back({i, program[i], last_load[program[i].slot]});
         }
         clear();
@@ -229,7 +230,7 @@ private:
     struct Command {
         std::size_t ticket;
         L3Action action;
-        std::optional<std::size_t> load;   // the Load before it into its slot
+        std::optional<std::size_t> load;   // the Load (or Fill) before it into its slot
     };
     // The slot holds the tile the command is bound to, all of it.
     [[nodiscard]] bool holds_its_tile(const Command& c) const {

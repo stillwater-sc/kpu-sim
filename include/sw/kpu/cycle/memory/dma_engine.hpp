@@ -9,6 +9,8 @@
 //          it. Its tile is split into 64-byte bursts, each a DRAM read; each read's bytes are
 //          pushed to the L3 tile as one beat, when the L3 link has a credit. It completes when its
 //          last beat is pushed. The slot's credit comes back only when the tile's Release frees it.
+//   Fill   as a Load, but its beats come from the program, not DRAM: no burst, no window, only
+//          the slot's credit and the L3 link's (l3_program.hpp).
 //   Store  starts in the program's order, with no wait. The L3 tile ejects the slot's beats into
 //          the engine's STORE BUFFER (`store_buffer_beats` of them, popped only with room); each
 //          staged beat becomes a DRAM write, which leaves the buffer as it is sent. It completes
@@ -90,7 +92,7 @@ inline const char* to_string(DmaWait w) {
 }
 
 struct DmaCounts {
-    std::uint64_t loads = 0, stores = 0;            // completed
+    std::uint64_t loads = 0, stores = 0, fills = 0; // completed
     std::uint64_t read_bursts = 0, write_bursts = 0; // sent
     std::uint64_t max_in_flight = 0;                 // reads and writes together
     std::uint64_t max_reads_in_flight = 0, max_writes_in_flight = 0;
@@ -172,8 +174,26 @@ public:
             }
             moved = true;
         }
-        // 3. The oldest landed read's beat, to L3.
-        if (!landed_.empty()) {
+        // 3. The oldest landed read's beat, to L3; with none, the oldest Fill's next beat.
+        const std::optional<std::size_t> fill = landed_.empty() ? next_fill() : std::nullopt;
+        if (fill) {
+            if (to_l3_->can_push(now)) {
+                Command& c = commands_[*fill];
+                L3Beat b;
+                b.id = ++beat_id_;
+                b.ticket = c.ticket;
+                b.slot = c.action.slot;
+                b.offset = c.sent * kL3BeatBytes;
+                b.tile_bytes = c.action.bytes;
+                b.bytes.assign(c.action.data.begin() + b.offset, c.action.data.begin() + b.offset + kL3BeatBytes);
+                to_l3_->push(now, std::move(b));
+                ++c.sent;
+                if (++c.done == c.bursts()) complete(now, *fill);
+                moved = true;
+            } else {
+                wait(DmaWait::L3Credit);
+            }
+        } else if (!landed_.empty()) {
             if (to_l3_->can_push(now)) {
                 const auto it = in_flight_.find(landed_.front().id);
                 const Command& c = commands_[it->second.command];
@@ -214,7 +234,7 @@ public:
         // 6. The next command, in the program's order.
         if (next_ < commands_.size()) {
             Command& c = commands_[next_];
-            const bool load = c.action.kind == L3Action::Kind::Load;
+            const bool load = c.action.kind == L3Action::Kind::Load || c.action.kind == L3Action::Kind::Fill;
             if (!load || held_[c.action.slot]) {
                 if (load) held_[c.action.slot] = false;
                 active_.push_back(next_);
@@ -260,7 +280,7 @@ public:
             const Command& c = commands_[next_];
             d = "next command " + std::to_string(next_ + 1) + " of " + std::to_string(commands_.size()) + " (" +
                 to_string(c.action.kind) + " slot " + std::to_string(c.action.slot) +
-                (c.action.kind == L3Action::Kind::Load && !held_[c.action.slot] ? ": waiting for its credit)" : ")");
+                (c.action.kind != L3Action::Kind::Store && !held_[c.action.slot] ? ": waiting for its credit)" : ")");
         } else {
             d = "every command started";
         }
@@ -303,6 +323,7 @@ private:
     [[nodiscard]] bool ordered_after(std::size_t position, std::uint64_t address, bool write) const {
         for (std::size_t j = 0; j < position; ++j) {
             const Command& e = commands_[active_[j]];
+            if (e.action.kind == L3Action::Kind::Fill) continue;   // no DRAM
             const bool e_write = e.action.kind == L3Action::Kind::Store;
             if (!write && !e_write) continue;
             if (address < e.action.dram_address || address >= e.action.dram_address + e.action.bytes) continue;
@@ -319,6 +340,7 @@ private:
             Command& c = commands_[ci];
             std::optional<DramRequest> r;
             std::deque<L3Beat>::iterator staged = staged_.end();
+            if (c.action.kind == L3Action::Kind::Fill) continue;   // its beats go in step 3
             if (c.action.kind == L3Action::Kind::Load) {
                 if (c.sent == c.bursts()) continue;
                 r.emplace();
@@ -368,15 +390,26 @@ private:
     }
 
     void finish_burst(Cycle now, std::unordered_map<std::uint64_t, Burst>::iterator it) {
-        Command& c = commands_[it->second.command];
         const std::size_t ci = it->second.command;
         in_flight_.erase(it);
-        if (++c.done < c.bursts()) return;
+        if (++commands_[ci].done == commands_[ci].bursts()) complete(now, ci);
+    }
+
+    void complete(Cycle now, std::size_t ci) {
+        Command& c = commands_[ci];
         active_.erase(std::find(active_.begin(), active_.end(), ci));
         spans_[c.span].completed = now;
         counters().complete();
         if (c.action.kind == L3Action::Kind::Load) ++dma_.loads;
+        else if (c.action.kind == L3Action::Kind::Fill) ++dma_.fills;
         else ++dma_.stores;
+    }
+
+    // The oldest started Fill with a beat still to push.
+    [[nodiscard]] std::optional<std::size_t> next_fill() const {
+        for (const std::size_t ci : active_)
+            if (commands_[ci].action.kind == L3Action::Kind::Fill && commands_[ci].sent < commands_[ci].bursts()) return ci;
+        return std::nullopt;
     }
 
     void clear() {
