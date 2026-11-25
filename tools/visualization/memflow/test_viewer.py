@@ -255,15 +255,22 @@ process.stdout.write(JSON.stringify([g, [0, 4, 5, 10, 12, 19, 20, 29, 30, 45].ma
                               [[0, 12, 30], [3, 10, 20]], [[0, 12, 30]], [[0, 12, 30]], [], [[3, 40, 50]]])
 
     def test_the_real_bundles_fills_move_no_dram_bytes(self):
-        # A Fill is a request with no bursts: none names it, and the DRAM bytes the page counts (every
-        # request's bytes but a Fill's) are exactly the bursts' bytes. A cycle-core bundle has Fills.
+        # A Fill is a request with no bursts; every other request has exactly the bursts its bytes
+        # span (mflow_check.py's M4: a request smaller than a burst still takes a whole one).
         got = self.read(BUNDLE, """
-let fills = 0, fillBursts = 0, dram = 0;
-for (let q = 0; q < R.Q.rows; q++) { if (R.Q.kind[q] === 2) fills++; else dram += R.Q.bytes[q]; }
-for (let b = 0; b < R.B.rows; b++) if (R.B.request[b] !== Mflow.NONE && R.Q.kind[R.B.request[b]] === 2) fillBursts++;
-process.stdout.write(JSON.stringify({ source: R.m.source || null, fills, fillBursts, dram, burstBytes: R.B.rows * R.m.burst_bytes }));""")
+const of = new Array(R.Q.rows).fill(0);
+for (let b = 0; b < R.B.rows; b++) if (R.B.request[b] !== Mflow.NONE) of[R.B.request[b]]++;
+const bb = BigInt(R.m.burst_bytes);
+let fills = 0, fillBursts = 0, wrongSpans = 0;
+for (let q = 0; q < R.Q.rows; q++) {
+  if (R.Q.kind[q] === 2) { fills++; fillBursts += of[q]; continue; }
+  const a = BigInt(R.Q.address[q]), n = BigInt(R.Q.bytes[q]);
+  const want = n === 0n ? 0n : (a + n + bb - 1n) / bb - a / bb;
+  if (BigInt(of[q]) !== want) wrongSpans++;
+}
+process.stdout.write(JSON.stringify({ fills, fillBursts, wrongSpans }));""")
         self.assertEqual(got["fillBursts"], 0)
-        self.assertEqual(got["dram"], got["burstBytes"])
+        self.assertEqual(got["wrongSpans"], 0)
         if EXPECT_FILLS:   # a fixture that promises Fills (--expect-fills): a load-only run has none
             self.assertGreater(got["fills"], 0)
 
