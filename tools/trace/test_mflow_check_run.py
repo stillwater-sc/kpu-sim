@@ -165,17 +165,27 @@ class MflowCheckRunSelfTest(unittest.TestCase):
             c.chmod(0o644)
 
     def test_counters_of_the_wrong_shape_are_refused(self):
-        for bad in ([1], {"rows": 3}, {"rows": [1]}):
+        for bad in ([1], {"rows": 3}, {"rows": [1]}, {"rows": [{"name": []}]}, {"rows": [{"name": "dma", "C": "7"}]}):
             with self.subTest(counters=bad):
                 (self.b.root / "counters.json").write_text(json.dumps(bad))
                 code, _ = run(self.b.dir)
                 self.assertEqual(code, 2)
 
-    def test_waits_of_the_wrong_shape_are_refused(self):
-        self.b.run["result"]["dma"]["waits"] = [1, 2]
-        self.b.save_run()
-        code, _ = run(self.b.dir)
-        self.assertEqual(code, 2)
+    def test_a_run_of_the_wrong_shape_is_refused(self):
+        # Anything M8 reads that is not of its type is unreadable input (exit 2), never a crash.
+        for path, bad in ((("result", "dma", "waits"), [1, 2]), (("result", "dma", "waits", "window"), "3"),
+                          (("result", "dma", "read_bursts"), 1.5), (("result", "dram", "page_hits"), True),
+                          (("artifacts",), ["counters.json"])):
+            with self.subTest(field=".".join(path), value=bad):
+                saved = json.loads(json.dumps(self.b.run))
+                d = self.b.run
+                for k in path[:-1]:
+                    d = d[k]
+                d[path[-1]] = bad
+                self.b.save_run()
+                code, _ = run(self.b.dir, "--run", str(self.b.root / "run.json"))
+                self.assertEqual(code, 2)
+                self.b.run = saved
 
     def test_an_unreadable_run_is_refused(self):
         (self.b.root / "run.json").write_text("{not json")

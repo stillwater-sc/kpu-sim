@@ -276,9 +276,15 @@ def _index(stations, kind):
     return {_station_index(s["name"]): s["capacity"] for s in stations if s["kind"] == kind}
 
 
+def _int(v):
+    """A count from a JSON file: an int, and not a bool."""
+    return type(v) is int
+
+
 def load_run(path):
     """The run's run.json (kpu-run --run-dir), and its counters if it names them; Unreadable if not
-    a kpu-run manifest. None for a run that has no result (still running, or an error)."""
+    a kpu-run manifest, or if anything M8 reads is not of the type it expects. None for a run that
+    has no result (still running, or an error)."""
     p = Path(path)
     try:
         run = json.loads(p.read_text())
@@ -286,22 +292,37 @@ def load_run(path):
         raise Unreadable(f"{p}: {e}") from e
     if not isinstance(run, dict) or run.get("format") != "kpu-run":
         raise Unreadable(f"{p} is not a kpu-run manifest")
+    arts = run.get("artifacts", {})
+    if not isinstance(arts, dict):
+        raise Unreadable(f"{p}: artifacts is not an object")
     res = run.get("result")
     if not isinstance(res, dict) or not isinstance(res.get("dma"), dict) or not isinstance(res.get("dram"), dict):
         return None
-    if not isinstance(res["dma"].get("waits", {}), dict):
-        raise Unreadable(f"{p}: result.dma.waits is not an object")
+    dma, dram = res["dma"], res["dram"]
+    waits = dma.get("waits", {})
+    # Every count M8 compares is an integer (absent: compared as missing, and so a mismatch).
+    if not isinstance(waits, dict) or not all(_int(v) for v in waits.values()):
+        raise Unreadable(f"{p}: result.dma.waits is not an object of counts")
+    for section, d, keys in (("dma", dma, ("loads", "stores", "fills", "read_bursts", "write_bursts")),
+                             ("dram", dram, ("reads", "writes", "page_hits", "page_empty",
+                                             "page_conflicts", "refreshes"))):
+        for k in keys:
+            if k in d and not _int(d[k]):
+                raise Unreadable(f"{p}: result.{section}.{k} is {d[k]!r}, not a count")
     counters = None
-    name = run.get("artifacts", {}).get("counters")
+    name = arts.get("counters")
     if isinstance(name, str) and (p.parent / name).is_file():
         try:
             counters = json.loads((p.parent / name).read_text())
         except (OSError, ValueError) as e:
             raise Unreadable(f"{p.parent / name}: {e}") from e
-        # The shape M8 reads: an object whose rows, if any, are a list of objects.
-        if not isinstance(counters, dict) or not isinstance(counters.get("rows", []), list) or \
-                not all(isinstance(x, dict) for x in counters.get("rows", [])):
-            raise Unreadable(f"{p.parent / name} is not a counters object with a list of rows")
+        # The shape M8 reads: an object whose rows, if any, are objects with a string name and, where
+        # present, an integer count of completions.
+        rows = counters.get("rows", []) if isinstance(counters, dict) else None
+        if not isinstance(rows, list) or not all(
+                isinstance(x, dict) and isinstance(x.get("name"), str) and ("C" not in x or _int(x["C"]))
+                for x in rows):
+            raise Unreadable(f"{p.parent / name} is not a counters object with a list of named rows")
     return {"path": str(p), "result": res, "counters": counters}
 
 
@@ -315,7 +336,12 @@ def find_run(bundle):
         run = json.loads(p.read_text())
     except (OSError, ValueError):
         return p   # load_run says why
-    return p if isinstance(run, dict) and run.get("artifacts", {}).get("mflow") == d.name else None
+    if not isinstance(run, dict):
+        return p
+    arts = run.get("artifacts")
+    if not isinstance(arts, dict):
+        return p if "artifacts" in run else None   # load_run refuses a malformed one
+    return p if arts.get("mflow") == d.name else None
 
 
 def check(rec, run=None):
