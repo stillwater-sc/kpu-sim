@@ -564,12 +564,16 @@ bool mflow_destination_ok(const std::string& dir) {
 bool inside(const std::string& dir, const std::string& path) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    const fs::path d = fs::weakly_canonical(fs::absolute(dir), ec).lexically_normal();
-    const fs::path p = fs::weakly_canonical(fs::absolute(path), ec).lexically_normal();
-    auto di = d.begin(), pi = p.begin();
-    for (; di != d.end(); ++di, ++pi) {
-        if (di->empty()) continue;   // a trailing separator
-        if (pi == p.end() || *di != *pi) return false;
+    fs::path d = fs::weakly_canonical(fs::absolute(dir), ec).lexically_normal();
+    fs::path p = fs::weakly_canonical(fs::absolute(path), ec).lexically_normal();
+    // A trailing separator is an empty last component: drop it from both, so neither iterator is
+    // stepped past its end ("x.mflow/" and "x.mflow" name the same directory).
+    if (d.has_relative_path() && d.filename().empty()) d = d.parent_path();
+    if (p.has_relative_path() && p.filename().empty()) p = p.parent_path();
+    auto pi = p.begin();
+    for (const fs::path& c : d) {
+        if (pi == p.end() || c != *pi) return false;
+        ++pi;
     }
     return true;
 }

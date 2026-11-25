@@ -134,6 +134,26 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=--memory-trace.*is.inside.the.--memory-mflow.bundle
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
     set_tests_properties(kpu_run_mflow_refuses_an_artifact_inside_the_bundle PROPERTIES LABELS "program;driver;cycle;memory")
+    # The same, with the bundle named with a trailing separator and the artifact naming the bundle
+    # itself: refused, not walked past the end of a path.
+    add_test(NAME kpu_run_mflow_refuses_the_bundle_itself_with_a_trailing_separator
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-mflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/trailing.mflow/$<SEMICOLON>--memory-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/trailing.mflow
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--memory-trace.*is.inside.the.--memory-mflow.bundle
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_mflow_refuses_the_bundle_itself_with_a_trailing_separator PROPERTIES
+                         LABELS "program;driver;cycle;memory")
+    # A sibling whose name only begins like the bundle's is outside it: the run goes ahead.
+    add_test(NAME kpu_run_mflow_accepts_a_sibling_of_the_bundle
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-mflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/sib.mflow$<SEMICOLON>--memory-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/sib.mflowX.json
+            -DEXPECT_CODE=0
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_mflow_accepts_a_sibling_of_the_bundle PROPERTIES LABELS "program;driver;cycle;memory"
+                         FIXTURES_REQUIRED memory_s1_program)
     # A run directory whose summary cannot be written does not claim success: exit 2, status error.
     set(_blocked ${CMAKE_CURRENT_BINARY_DIR}/runs/summary_blocked)
     add_test(NAME kpu_run_summary_blocked_setup
