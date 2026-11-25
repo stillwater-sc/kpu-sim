@@ -282,6 +282,19 @@ class MflowCheckSelfTest(unittest.TestCase):
         self.b.set("requests", "kind", q, 0)   # a load that writes DRAM
         self.assertUnreadable()
 
+    def test_a_missing_or_non_numeric_window_is_refused(self):
+        # With a write window, M1 checks the reads against `window`: a bundle without a usable
+        # one is unreadable (exit 2), not a run with violations (exit 1).
+        self.b.manifest["write_window"] = 4
+        for bad in (None, "16"):
+            with self.subTest(window=bad):
+                if bad is None:
+                    self.b.manifest.pop("window", None)
+                else:
+                    self.b.manifest["window"] = bad
+                self.b.save_manifest()
+                self.assertUnreadable()
+
     def test_an_unknown_request_kind_is_refused(self):
         self.b.set("requests", "kind", 0, 7)
         self.assertUnreadable()

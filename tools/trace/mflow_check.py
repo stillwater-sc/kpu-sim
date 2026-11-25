@@ -164,6 +164,7 @@ def load(path):
             if not isinstance(m.get("source"), str):
                 raise Unreadable("a version-4 manifest names its source")
             _count(m.get("write_window"), "write_window")
+        _count(m.get("window"), "window")   # M1 reads it against the reads of an engine with two windows
         schemas = {n: dict(c) for n, c in SCHEMA.items()}
         if v4:
             for n, c in SCHEMA_V4.items():

@@ -68,7 +68,7 @@ MflowSetup setup_for(const std::string& name, const MemoryRunOptions& o) {
 }
 
 struct Recorded {
-    std::size_t window = 0, write_window = 0;
+    std::size_t window = 0, write_window = 0, store_buffer_beats = 0;
     MemoryRun run;
     MFR record;
     std::vector<MflowRecorder::Wait> waits;
@@ -82,6 +82,7 @@ Recorded run_recorded(const CspL3Plan& plan, const platform::DeviceSpecification
     Recorded out;
     out.window = o.window;
     out.write_window = o.window;   // run_memory_subsystem gives the engine both windows the same
+    out.store_buffer_beats = o.store_buffer_beats;
     out.run = run_memory_subsystem(plan, dev, o);
     out.record = recorder.record(out.run.end);
     out.waits = recorder.waits();
@@ -172,7 +173,10 @@ void check_record(const Recorded& x, const CspL3Plan& plan) {
     CHECK(peak(false) <= x.write_window);
     CHECK(peak(true) <= run.dma.max_reads_in_flight);
     // The store buffer within its depth.
-    for (const auto& s : r.buffers) CHECK(s.held <= r.stations.back().capacity);
+    const auto buf = std::find_if(r.stations.begin(), r.stations.end(), [](const auto& s) { return s.kind == "dmabuf"; });
+    REQUIRE(buf != r.stations.end());
+    CHECK(buf->capacity == x.store_buffer_beats);
+    for (const auto& s : r.buffers) CHECK(s.held <= buf->capacity);
     // The waits: one cause's intervals never overlap, and add up to the engine's counts.
     std::array<std::uint64_t, kDmaWaits> total{};
     std::array<Cycle, kDmaWaits> last_end{};
@@ -407,6 +411,27 @@ TEST_CASE("The recorder keeps its own clocks: the run's domains are gone when it
     const MFR x = after.record(run.end);
     CHECK(x.ticks_per_cycle == 3.2);
     CHECK(x.makespan == run.end / 1000);   // the KPU cycle the run ends in, at 1 GHz
+}
+
+TEST_CASE("A run with no bursts names its engine's stations after the engine", "[cycle][mflow]") {
+    // Engine 7 runs only a Fill, and waits: no burst ever names it. Its stations are still
+    // dma[7], dmabuf[7] and dmawait[7], the ones its request and its wait refer to.
+    MflowRecorder r(MflowSetup{"x", 8, 0, 4, lpddr5_one_channel()});
+    const Domain kpu = Domain::from_ghz("kpu", 1.0);
+    const Domain dram = Domain::from_ghz("dram", 3.2);
+    r.clocks(kpu, dram);
+    r.action_started(7, 0, 0, l3_fill(0, std::vector<std::uint8_t>(64, 1)));
+    r.dma_waits(7, 1000, 1u << static_cast<unsigned>(DmaWait::L3Credit));
+    r.action_completed(7, 3000, 0);
+    const MFR rec = r.record(4000);
+    REQUIRE(rec.requests.size() == 1);
+    CHECK(rec.requests[0].engine == 7);
+    REQUIRE(rec.waits.size() == 1);
+    CHECK(rec.waits[0].engine == 7);
+    CHECK(rec.station("x/dma[7]") != rec::kNone);
+    CHECK(rec.station("x/dmabuf[7]") != rec::kNone);
+    CHECK(rec.station("x/dmawait[7]") != rec::kNone);
+    CHECK(rec.station("x/dmawait[0]") == rec::kNone);
 }
 
 TEST_CASE("The recorder refuses events it cannot place", "[cycle][mflow]") {

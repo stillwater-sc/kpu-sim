@@ -72,9 +72,18 @@ struct MflowSetup {
 };
 
 // The record's wait reasons are the engine's DmaWait, in its order.
-static_assert(static_cast<int>(program::record::MemoryFlowRecord::WaitReason::Order) == static_cast<int>(DmaWait::Order) &&
+namespace detail {
+template <class A, class B> constexpr bool same_cause(A a, B b) { return static_cast<int>(a) == static_cast<int>(b); }
+using WaitReason = program::record::MemoryFlowRecord::WaitReason;
+}  // namespace detail
+static_assert(detail::same_cause(detail::WaitReason::SlotCredit, DmaWait::SlotCredit) &&
+                  detail::same_cause(detail::WaitReason::L3Credit, DmaWait::L3Credit) &&
+                  detail::same_cause(detail::WaitReason::RequestCredit, DmaWait::RequestCredit) &&
+                  detail::same_cause(detail::WaitReason::Window, DmaWait::Window) &&
+                  detail::same_cause(detail::WaitReason::StoreBuffer, DmaWait::StoreBuffer) &&
+                  detail::same_cause(detail::WaitReason::Order, DmaWait::Order) &&
                   program::record::MemoryFlowRecord::kWaitReasons == kDmaWaits,
-              "MemoryFlowRecord::WaitReason must list DmaWait's causes in its order");
+              "MemoryFlowRecord::WaitReason must list DmaWait's causes, every one, in its order");
 
 class MflowRecorder : public MemoryEvents {
 public:
@@ -264,7 +273,12 @@ public:
             for (std::uint32_t b = 0; b < per_group; ++b)
                 rec.stations.push_back({mc + "/bg[" + std::to_string(g) + "]/ba[" + std::to_string(b) + "]", "dram_bank", 1});
         rec.stations.push_back({mc + "/bus", "dram_bus", 1});
-        const std::uint32_t engine = engine_.value_or(0);
+        // The engine: the one that sent bursts, or, in a run with none (only Fills), the one its
+        // actions or waits name, so that its stations are the ones its rows refer to.
+        const std::uint32_t engine = engine_                ? *engine_
+                                   : !actions_.empty()      ? actions_.front().engine
+                                   : !waits_.empty()        ? waits_.front().engine
+                                                            : 0;
         rec.stations.push_back({setup_.device + "/dma[" + std::to_string(engine) + "]", "dma", setup_.window + setup_.write_window});
         rec.stations.push_back({setup_.device + "/dmabuf[" + std::to_string(engine) + "]", "dmabuf", setup_.store_buffer_beats});
         rec.stations.push_back({setup_.device + "/dmawait[" + std::to_string(engine) + "]", "dmawait", Record::kWaitReasons});
