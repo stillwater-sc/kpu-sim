@@ -289,6 +289,8 @@ def load_run(path):
     res = run.get("result")
     if not isinstance(res, dict) or not isinstance(res.get("dma"), dict) or not isinstance(res.get("dram"), dict):
         return None
+    if not isinstance(res["dma"].get("waits", {}), dict):
+        raise Unreadable(f"{p}: result.dma.waits is not an object")
     counters = None
     name = run.get("artifacts", {}).get("counters")
     if isinstance(name, str) and (p.parent / name).is_file():
@@ -296,6 +298,10 @@ def load_run(path):
             counters = json.loads((p.parent / name).read_text())
         except (OSError, ValueError) as e:
             raise Unreadable(f"{p.parent / name}: {e}") from e
+        # The shape M8 reads: an object whose rows, if any, are a list of objects.
+        if not isinstance(counters, dict) or not isinstance(counters.get("rows", []), list) or \
+                not all(isinstance(x, dict) for x in counters.get("rows", [])):
+            raise Unreadable(f"{p.parent / name} is not a counters object with a list of rows")
     return {"path": str(p), "result": res, "counters": counters}
 
 
@@ -639,7 +645,7 @@ def check(rec, run=None):
             same(f"{CMD[kind]} commands", sum(1 for i in range(nc) if C["kind"][i] == kind), dram.get(name))
         for oc, name in ((HIT, "page_hits"), (EMPTY, "page_empty"), (CONFLICT, "page_conflicts")):
             same(name.replace("_", " "), sum(1 for b in range(nb) if B["outcome"][b] == oc), dram.get(name))
-        rows = {x.get("name"): x for x in (run["counters"] or {}).get("rows", []) if isinstance(x, dict)}
+        rows = {x.get("name"): x for x in (run["counters"] or {}).get("rows", [])}
         if "dma" in rows:
             same("the DMA engine's completions (counters)", nq, rows["dma"].get("C"))
         if "lpddr5" in rows:

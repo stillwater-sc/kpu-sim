@@ -164,6 +164,19 @@ class MflowCheckRunSelfTest(unittest.TestCase):
         finally:
             c.chmod(0o644)
 
+    def test_counters_of_the_wrong_shape_are_refused(self):
+        for bad in ([1], {"rows": 3}, {"rows": [1]}):
+            with self.subTest(counters=bad):
+                (self.b.root / "counters.json").write_text(json.dumps(bad))
+                code, _ = run(self.b.dir)
+                self.assertEqual(code, 2)
+
+    def test_waits_of_the_wrong_shape_are_refused(self):
+        self.b.run["result"]["dma"]["waits"] = [1, 2]
+        self.b.save_run()
+        code, _ = run(self.b.dir)
+        self.assertEqual(code, 2)
+
     def test_an_unreadable_run_is_refused(self):
         (self.b.root / "run.json").write_text("{not json")
         code, _ = run(self.b.dir, "--run", str(self.b.root / "run.json"))
