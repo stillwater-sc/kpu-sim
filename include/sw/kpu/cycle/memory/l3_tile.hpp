@@ -59,10 +59,12 @@ public:
     };
     enum class SlotState : std::uint8_t { Free, Filling, Ready };
     // A tile's life in a slot, for the tests and the trace: the Load (ticket) it came from, when
-    // it became READY, and when its Release freed the slot (unset while it is live).
+    // its first beat landed, when it became READY, and when its Release freed the slot (unset
+    // while it is live).
     struct Residency {
         std::uint64_t ticket = 0;
         std::uint32_t slot = 0;
+        Cycle filling_from = 0;
         Cycle ready_at = 0;
         std::optional<Cycle> released_at;
     };
@@ -244,6 +246,7 @@ private:
         std::vector<bool> landed_beats;
         std::size_t landed = 0;
         std::size_t residency = 0;
+        Cycle filling_from = 0;
         std::vector<std::uint8_t> bytes;
     };
 
@@ -269,6 +272,7 @@ private:
             s.ticket = b.ticket;
             s.tile_bytes = b.tile_bytes;
             s.landed_beats.assign(b.tile_bytes / kL3BeatBytes, false);
+            s.filling_from = now;
             s.landed = 0;
             counters().accept();
         } else if (b.tile_bytes != s.tile_bytes) {
@@ -282,7 +286,7 @@ private:
         if (++s.landed == s.landed_beats.size()) {
             s.state = SlotState::Ready;
             s.residency = residencies_.size();
-            residencies_.push_back({s.ticket, b.slot, now, std::nullopt});
+            residencies_.push_back({s.ticket, b.slot, s.filling_from, now, std::nullopt});
         }
     }
 

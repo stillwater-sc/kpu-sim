@@ -8,7 +8,15 @@ kpu_add_tool(run
     DESCRIPTION "Execute a Domain Flow Program at one or more levels and compare them"
     SOURCES
         kpu_run.cpp
+    LIBS
+        kpu_memory_components
+        kpu_trace
 )
+# kpu_run.cpp carries every level and, with --memory-subsystem, the cycle core's memory subsystem:
+# past MSVC's default object-file section limit (C1128).
+if(MSVC)
+    target_compile_options(run PRIVATE /bigobj)
+endif()
 
 # NOTE: the guard is KPU_BUILD_TESTS, not BUILD_TESTING. BUILD_TESTING is empty in this
 # project (it never includes CTest), so a `if(BUILD_TESTING)` block silently registers
@@ -38,6 +46,70 @@ if(KPU_BUILD_TESTS)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake
     )
     set_tests_properties(kpu_run_needs_a_program PROPERTIES LABELS "program;driver")
+
+    # --memory-subsystem (#541): a program's L3 traffic on the cycle core's memory subsystem.
+    # kpu_s1 on a direct link: the core trace and counters answer to check_trace.py, the
+    # channel's trace to the LPDDR5 trace validator; the T4 over its NoC.
+    add_test(NAME csp_gen_memory_s1
+        COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 64 --tile 16 --dtype int8
+                --target ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json
+                -o ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp)
+    set_tests_properties(csp_gen_memory_s1 PROPERTIES LABELS "program;driver;cycle;memory"
+                         FIXTURES_SETUP memory_s1_program)
+    # Exit 0 AND the summary's line: a run that prints the laws holding but fails its data exits 1.
+    add_test(NAME kpu_run_memory_subsystem_s1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.json$<SEMICOLON>--memory-counters$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.counters.json$<SEMICOLON>--memory-dram-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.lpddr5.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=on.a.direct.link.*bit.for.bit.*laws:.hold.on.every.row
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_memory_subsystem_s1 PROPERTIES LABELS "program;driver;cycle;memory"
+                         FIXTURES_REQUIRED memory_s1_program FIXTURES_SETUP memory_s1_run)
+    add_test(NAME csp_gen_memory_t4
+        COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 128 --tile 32 --dtype int8
+                --target ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json
+                -o ${CMAKE_CURRENT_BINARY_DIR}/memory_t4.csp)
+    set_tests_properties(csp_gen_memory_t4 PROPERTIES LABELS "program;driver;cycle;memory"
+                         FIXTURES_SETUP memory_t4_program)
+    add_test(NAME kpu_run_memory_subsystem_t4
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_t4.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json$<SEMICOLON>--memory-subsystem
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=over.the.NoC.*bit.for.bit.*laws:.hold.on.every.row
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_memory_subsystem_t4 PROPERTIES LABELS "program;driver;cycle;memory;noc"
+                         FIXTURES_REQUIRED memory_t4_program)
+    add_test(NAME kpu_run_memory_subsystem_needs_a_deployment
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--memory-subsystem
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--memory-subsystem.needs.--deploy
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_memory_subsystem_needs_a_deployment PROPERTIES LABELS "program;driver;cycle;memory")
+    add_test(NAME kpu_run_memory_trace_needs_the_run
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--memory-trace$<SEMICOLON>x.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--memory-trace.records.a.--memory-subsystem.run
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_memory_trace_needs_the_run PROPERTIES LABELS "program;driver;cycle;memory")
+    find_program(KPU_RUN_PYTHON3 NAMES python3 python)
+    if(KPU_RUN_PYTHON3)
+        add_test(NAME kpu_run_memory_trace_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tests/cycle/check_trace.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.json ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.counters.json)
+        set_tests_properties(kpu_run_memory_trace_check PROPERTIES LABELS "program;driver;cycle;memory"
+                             FIXTURES_REQUIRED memory_s1_run)
+        add_test(NAME kpu_run_memory_dram_trace_validator
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common/trace_validator.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.lpddr5.json)
+        set_tests_properties(kpu_run_memory_dram_trace_validator PROPERTIES LABELS "program;driver;cycle;memory"
+                             FIXTURES_REQUIRED memory_s1_run)
+    endif()
 
     # A level with no interpreter must be refused, NOT silently substituted -- and the
     # assertion has to be able to tell those apart. PASS_REGULAR_EXPRESSION cannot: it

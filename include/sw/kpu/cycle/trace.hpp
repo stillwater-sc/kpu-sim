@@ -13,6 +13,8 @@
 //                   slices' ids are process-local ("id2": {"local": ...}), so Perfetto files the link
 //                   tracks under the process, beside its components, not among its global events.
 //                   A clock-domain crossing is a link, named for both its domains
+//   a lane          a row of named spans of a component's own state (an L3 slot's tile: filling,
+//                   then resident), added by the component's owner, at any time (add_lane, span)
 //   a domain        its CYCLE NUMBER as a counter track (Perfetto names it "<domain> cycle": a counter
 //                   event's name and its argument's), one event per cycle, so
 //                   hovering anywhere reads each domain's cycle; on by default (cycle_tracks(false)
@@ -73,6 +75,18 @@ public:
         tracks_.push_back({std::move(name), std::move(domain), link ? Kind::Link : Kind::Component});
         runs_.push_back({});
         return static_cast<std::uint32_t>(tracks_.size() - 1);
+    }
+    // A lane: a thread of named spans, laid down by whoever owns what it shows.
+    std::uint32_t add_lane(std::string name, std::string domain) {
+        tracks_.push_back({std::move(name), std::move(domain), Kind::Lane});
+        runs_.push_back({});
+        return static_cast<std::uint32_t>(tracks_.size() - 1);
+    }
+    // A span on a lane, [from, to); spans on one lane must not overlap.
+    void span(std::uint32_t lane, std::string name, Picoseconds from, Picoseconds to) {
+        if (lane >= tracks_.size() || tracks_[lane].kind != Kind::Lane)
+            throw std::logic_error("cycle::Tracer: span on track " + std::to_string(lane) + ", which is not a lane");
+        add({Event::Kind::Complete, lane, std::move(name), from, to - from, 0, 0});
     }
     // A domain's clock track: its cycle numbers and its square wave.
     std::uint32_t add_clock(std::string domain) {
@@ -181,7 +195,7 @@ public:
     }
 
 private:
-    enum class Kind : std::uint8_t { Component, Link, Clock };
+    enum class Kind : std::uint8_t { Component, Link, Clock, Lane };
     struct Track {
         std::string name, domain;
         Kind kind = Kind::Component;

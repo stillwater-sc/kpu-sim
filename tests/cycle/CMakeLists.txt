@@ -89,6 +89,21 @@ set_target_properties(test_cycle_csp_l3 PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_csp_l3 COMMAND test_cycle_csp_l3)
 set_tests_properties(test_cycle_csp_l3 PROPERTIES LABELS "cycle;csp;l3;dma;memory;v0.10")
 
+# Step 1e (#541): the memory subsystem as kpu-run --memory-subsystem runs it.
+add_executable(test_cycle_memory_subsystem test_cycle_memory_subsystem.cpp)
+target_link_libraries(test_cycle_memory_subsystem PRIVATE Catch2::Catch2WithMain kpu_simulator kpu_memory_components
+                      kpu_trace kpu_program)
+target_include_directories(test_cycle_memory_subsystem PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_cycle_memory_subsystem PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+                           KPU_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+kpu_set_target_options(test_cycle_memory_subsystem)
+if(MSVC)
+    target_compile_options(test_cycle_memory_subsystem PRIVATE /bigobj)   # as kpu-run (C1128)
+endif()
+set_target_properties(test_cycle_memory_subsystem PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_memory_subsystem COMMAND test_cycle_memory_subsystem)
+set_tests_properties(test_cycle_memory_subsystem PROPERTIES LABELS "cycle;memory;noc;v0.10")
+
 # Step 0c (#535): the test structure's trace and counters files, validated against each other.
 # Open build/tests/cycle/cycle_trace_demo.json in https://ui.perfetto.dev
 add_executable(cycle_trace_demo cycle_trace_demo.cpp)
