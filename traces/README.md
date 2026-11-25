@@ -102,8 +102,8 @@ traces/
 # View summary (CLI)
 ./build/tools/trace/kpu-trace-summary traces/memory/lpddr5/complex/stream_trace.json
 
-# Launch web viewer
-./tools/trace/serve-trace.py traces/memory/gddr6/complex/multi_dma_trace.json
+# Serve the traces to a browser (from a laptop: ssh -L 8080:localhost:8080 <server>)
+python3 tools/debug-server/kpu_debug_server.py --root traces/memory
 ```
 
 ## Pattern Categories
@@ -177,8 +177,8 @@ Located in `traces/memory/{lpddr5,gddr6}/tools/`:
 # Validate timing constraints
 ./build/tools/trace/kpu-trace-summary trace.json --validate
 
-# Launch local web server
-./tools/trace/serve-trace.py trace.json
+# Serve the traces to a browser (tools/debug-server/README.md)
+python3 tools/debug-server/kpu_debug_server.py --root traces
 ```
 
 ### Perfetto (Advanced)
