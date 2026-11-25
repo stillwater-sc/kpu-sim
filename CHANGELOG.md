@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The memory subsystem on the cycle core, Phase 1 steps 1b–1e** (#538–#541; epic #532,
+  `docs/plans/cycle-based-kpu-prototype.md` §4). DRAM, the DMA engine, the NoC and the L3 tile, built
+  bottom-up on the cycle core and checked bit for bit against L-B's data.
+  - **1b, the L3 tile and the DMA engine** (#538, #555): `cycle/memory/l3_tile.hpp`, `dma_engine.hpp` and
+    `l3_program.hpp`.
+    - The L3 tile is slots × bytes over banks. A slot is FREE, FILLING or READY. A Load into a live slot is a
+      fault. A Store waits for its slot's tile, and it is bound to the Load before it in program order.
+    - The engine executes the program's Loads and Stores in 64-byte bursts within a read window and a write
+      window. It pushes a Load's beats to L3 under the link's credit, and a Store's beats go through its store
+      buffer: the store is two pushes, never a read of L3.
+    - DRAM sees the program's order: a burst waits for an earlier command's burst to the same bytes when either
+      writes.
+    - `check_slot_credits` runs every cycle.
+  - **1c, the NoC** (#539, #556): `cycle/noc/`, the timing NoC's hubs and ports re-expressed on links and
+    built from a deployment's layout.
+    - Per-input queues are links, with dimension-ordered routing, ring traffic first at the ports, and the
+      bubble rule: a flit entering a ring needs two credits.
+    - The fabric checks every cycle that each ring keeps a free slot and each link takes one flit a cycle. A
+      hub refuses a turn from a column loop back onto a row loop.
+    - The DMA engine's read and write windows are split, so the store path always drains.
+  - **1d, rung 4** (#540, #557): `cycle/memory/csp_l3_program.hpp` turns the walker's L3 actions into the
+    engine's and the tile's program, in the walker's own slots.
+    - C is hypothesized: L-B's tiles are filled into their slots at the program's Writebacks, under the slot's
+      credit, with a new `Fill` action.
+    - On the RTL's 8×8×16 int8 matmul (`kpu_soc_2x2`) and an int8 64³ (`kpu_s1`), every slot and every C tile
+      is bit for bit.
+  - **1e, `kpu-run --memory-subsystem`** (#541, #558): the memory subsystem runs on a program's L3 traffic,
+    on a direct link or over the deployment's NoC.
+    - It checks the data, the invariants and the operational laws on every counter row, and prints the
+      summary: X, U and the stalls of the DMA engine, DRAM, the NoC and L3.
+    - It writes the Perfetto trace, with a lane per L3 slot, and the channel's own trace for the LPDDR5
+      validator. A deadlock prints the detector's report.
+- **The LPDDR5 controller on the cycle core, step 1a** (#537, #554): `cycle/memory/lpddr5_channel.hpp`
+  hosts the bank-level controller unchanged, one channel per component at 3.2 GHz.
+  - Every pattern-suite workload completes at the same cycles as on the bare controller.
+  - New invariant INV-006: a REFRESH belongs to no transaction. It fixes two committed traces that the old
+    validator rejected.
+- **Clock-domain crossings, step 0d** (#536, #553): a link between domains is an async FIFO with
+  synchronizer delays each way, and the trace carries each domain's clock track.
+
 - **The cycle core's trace, state dump, invariant hooks and deadlock detector, step 0c** (#535; epic #532).
   - **Trace** (`include/sw/kpu/cycle/trace.hpp`). Chrome trace-event JSON for Perfetto, opt-in with
     `Simulator::attach(Tracer&)`:
