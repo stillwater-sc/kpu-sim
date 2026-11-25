@@ -168,6 +168,9 @@ public:
                 throw std::logic_error(where(now) + ": a DRAM response to request " + std::to_string(r.id) +
                                        ", which it never sent");
             if (commands_[it->second.command].action.kind == L3Action::Kind::Load) {
+                if (it->second.answered)
+                    throw std::logic_error(where(now) + ": a second DRAM response to read " + std::to_string(r.id));
+                it->second.answered = true;
                 landed_.push_back({r.id, std::move(r.bytes)});
             } else {
                 --writes_;
@@ -314,6 +317,7 @@ private:
     struct Burst {
         std::size_t command;
         std::uint32_t offset;
+        bool answered = false;   // a read's response has landed; it stays in the window until L3 takes it
     };
 
     [[nodiscard]] std::string where(Cycle now) const {
@@ -379,7 +383,7 @@ private:
                 ++dma_.read_bursts;
                 ++reads_;
             }
-            in_flight_.emplace(r->id, Burst{ci, offset});
+            in_flight_.emplace(r->id, Burst{ci, offset, false});
             to_dram_->push(now, std::move(*r));
             ++c.sent;
             dma_.max_in_flight = std::max<std::uint64_t>(dma_.max_in_flight, in_flight_.size());
