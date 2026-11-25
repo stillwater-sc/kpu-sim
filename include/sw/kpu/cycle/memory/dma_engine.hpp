@@ -18,7 +18,13 @@
 //
 // THE BURST WINDOW. At most `window` bursts, reads and writes, are in flight (sent, not yet
 // answered). Each cycle the engine sends at most one burst: the oldest started command's next
-// one (a Load's next read, or a Store's first staged beat).
+// one (a Load's next read, or a Store's first staged beat) that may go.
+//
+// THE PROGRAM'S ORDER ON DRAM. A burst waits while an earlier command, in the program's order,
+// has not yet sent its own burst to the same 64 bytes, when either of the two is a write: a Load
+// reads what the Stores before it wrote, a Store never overwrites bytes a Load before it has yet
+// to read, and two Stores land in order. The request link is a FIFO and the channel takes each
+// request's bytes as it accepts it (lpddr5_channel.hpp), so sending in order is enough.
 //
 // Each cycle, in this order: (1) every landed slot credit is taken; (2) the oldest DRAM response:
 // a read's beat is pushed to L3 (or waits for the L3 link's credit, holding the responses behind
@@ -60,8 +66,8 @@
 
 namespace sw::kpu::cycle {
 
-enum class DmaWait : std::uint8_t { SlotCredit, L3Credit, RequestCredit, Window, StoreBuffer };
-inline constexpr std::size_t kDmaWaits = 5;
+enum class DmaWait : std::uint8_t { SlotCredit, L3Credit, RequestCredit, Window, StoreBuffer, Order };
+inline constexpr std::size_t kDmaWaits = 6;
 
 inline const char* to_string(DmaWait w) {
     switch (w) {
@@ -70,6 +76,7 @@ inline const char* to_string(DmaWait w) {
         case DmaWait::RequestCredit: return "no DRAM request credit";
         case DmaWait::Window: return "burst window full";
         case DmaWait::StoreBuffer: return "store buffer full";
+        case DmaWait::Order: return "an earlier command's burst to the same address";
     }
     return "?";
 }
@@ -106,7 +113,10 @@ public:
         for (std::size_t i = 0; i < program.size(); ++i)
             if (program[i].kind != L3Action::Kind::Release) {
                 by_ticket_[i] = commands_.size();
-                commands_.push_back({i, program[i]});
+                Command c;
+                c.ticket = i;
+                c.action = program[i];
+                commands_.push_back(std::move(c));
             }
         clear();
     }
@@ -256,6 +266,7 @@ private:
         std::size_t ticket;
         L3Action action;
         std::uint32_t sent = 0, done = 0;   // bursts
+        std::vector<bool> sent_beats;       // a Store's: which of its beats have been written
         std::size_t span = 0;
         [[nodiscard]] std::uint32_t bursts() const { return action.bytes / kL3BeatBytes; }
     };
@@ -268,9 +279,23 @@ private:
         return "cycle::DmaEngine " + name() + " at cycle " + std::to_string(now);
     }
 
+    // An earlier active command has yet to send its burst to `address`, and one of the two writes.
+    [[nodiscard]] bool ordered_after(std::size_t position, std::uint64_t address, bool write) const {
+        for (std::size_t j = 0; j < position; ++j) {
+            const Command& e = commands_[active_[j]];
+            const bool e_write = e.action.kind == L3Action::Kind::Store;
+            if (!write && !e_write) continue;
+            if (address < e.action.dram_address || address >= e.action.dram_address + e.action.bytes) continue;
+            const std::uint32_t beat = static_cast<std::uint32_t>((address - e.action.dram_address) / kL3BeatBytes);
+            if (e_write ? !e.sent_beats[beat] : beat >= e.sent) return true;
+        }
+        return false;
+    }
+
     template <class Wait>
     bool send_burst(Cycle now, Wait&& wait) {
-        for (const std::size_t ci : active_) {
+        for (std::size_t position = 0; position < active_.size(); ++position) {
+            const std::size_t ci = active_[position];
             Command& c = commands_[ci];
             std::optional<DramRequest> r;
             std::deque<L3Beat>::iterator staged = staged_.end();
@@ -285,6 +310,10 @@ private:
                 r->write = true;
                 r->address = c.action.dram_address + staged->offset;
             }
+            if (ordered_after(position, r->address, r->write)) {
+                wait(DmaWait::Order);
+                continue;   // a younger command's burst, elsewhere, may go
+            }
             if (in_flight_.size() >= config_.window) {
                 wait(DmaWait::Window);
                 return false;
@@ -298,6 +327,7 @@ private:
             r->tag = c.ticket;
             const std::uint32_t offset = static_cast<std::uint32_t>(r->address - c.action.dram_address);
             if (r->write) {
+                c.sent_beats[offset / kL3BeatBytes] = true;
                 r->bytes = std::move(staged->bytes);
                 staged_.erase(staged);
                 ++dma_.write_bursts;
@@ -328,6 +358,7 @@ private:
     void clear() {
         for (Command& c : commands_) {
             c.sent = c.done = 0;
+            c.sent_beats.assign(c.action.kind == L3Action::Kind::Store ? c.bursts() : 0, false);
             c.span = 0;
         }
         held_.assign(config_.slots, true);

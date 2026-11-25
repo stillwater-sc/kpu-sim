@@ -63,7 +63,8 @@ inline const char* to_string(L3Action::Kind k) {
 }
 
 // The program's shape, checked once by each component that executes it: every slot exists, and
-// every tile is whole beats, fits its slot, and starts on a burst boundary.
+// every tile is whole beats, fits its slot, starts on a burst boundary and ends inside the address
+// space.
 inline void validate_l3_program(const L3Program& p, std::uint32_t slots, std::uint32_t slot_bytes,
                                 const std::string& who) {
     for (std::size_t i = 0; i < p.size(); ++i) {
@@ -81,6 +82,9 @@ inline void validate_l3_program(const L3Program& p, std::uint32_t slots, std::ui
         if (a.dram_address % kL3BeatBytes != 0)
             throw std::invalid_argument(at + ": DRAM address " + std::to_string(a.dram_address) +
                                         " is not on a " + std::to_string(kL3BeatBytes) + "-byte burst boundary");
+        if (a.dram_address > ~std::uint64_t{0} - (a.bytes - 1))
+            throw std::invalid_argument(at + ": DRAM [" + std::to_string(a.dram_address) + ", +" +
+                                        std::to_string(a.bytes) + ") runs past the end of the address space");
     }
 }
 
