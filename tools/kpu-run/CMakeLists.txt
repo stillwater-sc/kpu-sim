@@ -124,6 +124,16 @@ if(KPU_BUILD_TESTS)
         COMMAND ${CMAKE_COMMAND} -DFILE=${_guard}/keep.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_file.cmake)
     set_tests_properties(kpu_run_mflow_guard_left_the_directory PROPERTIES LABELS "program;driver;cycle;memory"
                          FIXTURES_REQUIRED mflow_guarded)
+    # An artifact inside the bundle would be deleted when the bundle is rewritten: refused, however
+    # the path is spelled (#575).
+    add_test(NAME kpu_run_mflow_refuses_an_artifact_inside_the_bundle
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-mflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/inner.mflow$<SEMICOLON>--memory-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/./inner.mflow/sub/../trace.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--memory-trace.*is.inside.the.--memory-mflow.bundle
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_mflow_refuses_an_artifact_inside_the_bundle PROPERTIES LABELS "program;driver;cycle;memory")
     # A run directory whose summary cannot be written does not claim success: exit 2, status error.
     set(_blocked ${CMAKE_CURRENT_BINARY_DIR}/runs/summary_blocked)
     add_test(NAME kpu_run_summary_blocked_setup

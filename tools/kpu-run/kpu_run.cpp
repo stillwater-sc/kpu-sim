@@ -559,6 +559,21 @@ bool mflow_destination_ok(const std::string& dir) {
     return false;
 }
 
+// Whether `path` is `dir` or lies inside it, compared as normalized absolute paths (so "x.mflow/./t"
+// and "./x.mflow/t" are both inside x.mflow; symlinks resolved where they exist).
+bool inside(const std::string& dir, const std::string& path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path d = fs::weakly_canonical(fs::absolute(dir), ec).lexically_normal();
+    const fs::path p = fs::weakly_canonical(fs::absolute(path), ec).lexically_normal();
+    auto di = d.begin(), pi = p.begin();
+    for (; di != d.end(); ++di, ++pi) {
+        if (di->empty()) continue;   // a trailing separator
+        if (pi == p.end() || *di != *pi) return false;
+    }
+    return true;
+}
+
 // --memory-subsystem: the program's L3 traffic on the cycle core (#541).
 int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast, const platform::DeviceSpecification* device) {
     static const std::set<std::string> kMemory = {"--program", "--deploy", "--memory-subsystem", "--memory-trace",
@@ -600,6 +615,16 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
     }
     // Before anything is written: a refused run leaves no run.json saying it is running.
     if (!mflow_path.empty() && !mflow_destination_ok(mflow_path)) return 2;
+    // The bundle is removed and rewritten after the run: an artifact written inside it would go too.
+    if (!mflow_path.empty())
+        for (const auto& [flag, path] : {std::pair<const char*, const std::string*>{"--memory-trace", &trace_path},
+                                         {"--memory-counters", &counters_path},
+                                         {"--memory-dram-trace", &dram_path}})
+            if (!path->empty() && inside(mflow_path, *path)) {
+                std::cerr << "kpu-run: " << flag << " " << *path << " is inside the --memory-mflow bundle " << mflow_path
+                          << ", which is rewritten whole after the run; put it elsewhere\n";
+                return 2;
+            }
     if (!run_dir.empty()) {
         manifest.emplace(run_dir, a, device->name);
         if (!manifest->write()) return 2;
