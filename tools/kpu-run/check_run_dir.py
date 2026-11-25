@@ -17,6 +17,7 @@ Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -36,10 +37,12 @@ def check(d, want_status):
     if not isinstance(m, dict) or m.get("format") != "kpu-run" or m.get("version") != 1:
         print(f"check_run_dir: {d}/run.json is not a version-1 kpu-run manifest")
         return 2
-    for key, kind in (("command", list), ("build", str), ("device", str), ("started", str),
+    for key, kind in (("command", list), ("build", str), ("git", str), ("device", str), ("started", str),
                       ("status", str), ("artifacts", dict), ("kind", str)):
         if not isinstance(m.get(key), kind):
             bad.append(f"{key} is {m.get(key)!r}, not a {kind.__name__}")
+    if isinstance(m.get("git"), str) and not (m["git"] == "unavailable" or re.fullmatch(r"[0-9a-f]{40}", m["git"])):
+        bad.append(f"git is {m['git']!r}, not a full commit or 'unavailable'")
     if m.get("status") not in STATUSES:
         bad.append(f"status {m.get('status')!r} is not one of {', '.join(STATUSES)}")
     if want_status and m.get("status") != want_status:
@@ -51,22 +54,24 @@ def check(d, want_status):
             bad.append("a finished run states its exit_code")
         if not isinstance(m.get("seconds"), (int, float)) or m.get("seconds", -1) < 0:
             bad.append("a finished run states its seconds")
-        expect = {"ok": 0, "failed": 1, "error": 1}.get(m.get("status"))
-        if expect is not None and m.get("exit_code") != expect:
+        expect = {"ok": (0,), "failed": (1,), "error": (1, 2)}.get(m.get("status"))
+        if expect is not None and m.get("exit_code") not in expect:
             bad.append(f"status {m.get('status')} with exit_code {m.get('exit_code')}")
     if m.get("status") in ("ok", "failed"):
         arts = m.get("artifacts", {})
         if arts != ARTIFACTS:
             bad.append(f"artifacts are {arts}, expected {ARTIFACTS}")
-        for name in ARTIFACTS.values():
-            if not (d / name).exists():
-                bad.append(f"{name} is named but not there")
+        for key, name in ARTIFACTS.items():
+            there = (d / name).is_dir() if key == "mflow" else (d / name).is_file()
+            if not there:
+                bad.append(f"{name} is named but is not there as a {'directory' if key == 'mflow' else 'file'}")
         if not (d / "mem.mflow" / "manifest.json").is_file():
             bad.append("mem.mflow has no manifest.json")
         res = m.get("result")
         if not isinstance(res, dict) or not isinstance(res.get("finished"), bool):
             bad.append("a run that ran states its result")
-        elif m["status"] == "ok" and (not res["finished"] or res.get("data_errors") or res.get("law_errors")):
+        elif m["status"] == "ok" and (not res["finished"] or res.get("data_errors") or res.get("law_errors")
+                                      or res.get("deadlock") or res.get("violation")):
             bad.append(f"status ok, but the result says {res}")
     if (d / "run.json.tmp").exists():
         bad.append("run.json.tmp was left behind")

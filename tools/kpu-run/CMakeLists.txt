@@ -101,6 +101,71 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=--run-dir.names.every.artifact.itself..drop.--memory-mflow
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
     set_tests_properties(kpu_run_run_dir_takes_no_other_path PROPERTIES LABELS "program;driver;cycle;memory")
+    # A bundle is rewritten whole: a destination holding anything else is refused before the run,
+    # and left as it was (#575: `--memory-mflow .` would have emptied the working directory).
+    set(_guard ${CMAKE_CURRENT_BINARY_DIR}/runs/not_a_bundle)
+    add_test(NAME kpu_run_mflow_guard_setup
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_guard})
+    add_test(NAME kpu_run_mflow_guard_setup_file
+        COMMAND ${CMAKE_COMMAND} -E touch ${_guard}/keep.txt)
+    set_tests_properties(kpu_run_mflow_guard_setup_file PROPERTIES DEPENDS kpu_run_mflow_guard_setup)
+    set_tests_properties(kpu_run_mflow_guard_setup kpu_run_mflow_guard_setup_file PROPERTIES
+                         LABELS "program;driver;cycle;memory" FIXTURES_SETUP mflow_guard)
+    add_test(NAME kpu_run_mflow_refuses_a_directory_that_is_not_a_bundle
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-mflow$<SEMICOLON>${_guard}
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=holds.files.that.are.not.an..mflow.bundle
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_mflow_refuses_a_directory_that_is_not_a_bundle PROPERTIES
+                         LABELS "program;driver;cycle;memory" FIXTURES_REQUIRED mflow_guard FIXTURES_SETUP mflow_guarded)
+    add_test(NAME kpu_run_mflow_guard_left_the_directory
+        COMMAND ${CMAKE_COMMAND} -DFILE=${_guard}/keep.txt -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_file.cmake)
+    set_tests_properties(kpu_run_mflow_guard_left_the_directory PROPERTIES LABELS "program;driver;cycle;memory"
+                         FIXTURES_REQUIRED mflow_guarded)
+    # A run directory whose summary cannot be written does not claim success: exit 2, status error.
+    set(_blocked ${CMAKE_CURRENT_BINARY_DIR}/runs/summary_blocked)
+    add_test(NAME kpu_run_summary_blocked_setup
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_blocked}/summary.txt)
+    set_tests_properties(kpu_run_summary_blocked_setup PROPERTIES LABELS "program;driver;cycle;memory"
+                         FIXTURES_SETUP summary_blocked)
+    add_test(NAME kpu_run_run_dir_fails_when_its_summary_cannot_be_written
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--run-dir$<SEMICOLON>${_blocked}
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=cannot.write.*summary.txt
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_run_dir_fails_when_its_summary_cannot_be_written PROPERTIES
+                         LABELS "program;driver;cycle;memory" FIXTURES_REQUIRED "memory_s1_program;summary_blocked"
+                         FIXTURES_SETUP summary_blocked_run)
+    if(UNIX AND EXISTS /dev/full)
+        # A manifest write that fails only when the stream flushes (the device is full) publishes
+        # nothing: the run is refused, and no run.json appears.
+        set(_full ${CMAKE_CURRENT_BINARY_DIR}/runs/manifest_full)
+        add_test(NAME kpu_run_manifest_full_setup
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${_full})
+        add_test(NAME kpu_run_manifest_full_setup_link
+            COMMAND ${CMAKE_COMMAND} -E create_symlink /dev/full ${_full}/run.json.tmp)
+        set_tests_properties(kpu_run_manifest_full_setup_link PROPERTIES DEPENDS kpu_run_manifest_full_setup)
+        set_tests_properties(kpu_run_manifest_full_setup kpu_run_manifest_full_setup_link PROPERTIES
+                             LABELS "program;driver;cycle;memory" FIXTURES_SETUP manifest_full)
+        add_test(NAME kpu_run_run_dir_refuses_when_its_manifest_cannot_be_written
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--run-dir$<SEMICOLON>${_full}
+                -DEXPECT_CODE=2
+                -DMUST_MATCH=cannot.write.*run.json.tmp
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+        set_tests_properties(kpu_run_run_dir_refuses_when_its_manifest_cannot_be_written PROPERTIES
+                             LABELS "program;driver;cycle;memory" FIXTURES_REQUIRED "memory_s1_program;manifest_full"
+                             FIXTURES_SETUP manifest_full_run)
+        add_test(NAME kpu_run_manifest_full_published_nothing
+            COMMAND ${CMAKE_COMMAND} -DFILE=${_full}/run.json -DABSENT=1 -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_file.cmake)
+        set_tests_properties(kpu_run_manifest_full_published_nothing PROPERTIES LABELS "program;driver;cycle;memory"
+                             FIXTURES_REQUIRED manifest_full_run)
+    endif()
     foreach(_flag memory-mflow run-dir)
         add_test(NAME kpu_run_${_flag}_needs_the_run
             COMMAND ${CMAKE_COMMAND}
@@ -149,6 +214,10 @@ if(KPU_BUILD_TESTS)
         add_test(NAME kpu_run_run_dir_trace_check
             COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tests/cycle/check_trace.py
                     ${_run_dir}/trace.json ${_run_dir}/counters.json)
+        add_test(NAME kpu_run_summary_blocked_says_error
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/check_run_dir.py ${_blocked} --status error)
+        set_tests_properties(kpu_run_summary_blocked_says_error PROPERTIES LABELS "program;driver;cycle;memory"
+                             FIXTURES_REQUIRED summary_blocked_run)
         add_test(NAME kpu_run_run_dir_check_selftest
             COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir})
         set_tests_properties(kpu_run_run_dir_check kpu_run_run_dir_mflow_check kpu_run_run_dir_trace_check

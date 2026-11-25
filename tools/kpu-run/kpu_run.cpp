@@ -504,17 +504,23 @@ struct RunManifest {
         char started[32];
         std::strftime(started, sizeof started, "%Y-%m-%dT%H:%M:%SZ", &utc);
         j = {{"format", "kpu-run"}, {"version", 1}, {"kind", "memory-subsystem"}, {"command", command},
-             {"build", std::string(sw::kpu::VERSION_FULL)}, {"device", device}, {"started", started},
+             {"build", std::string(sw::kpu::VERSION_FULL)}, {"git", std::string(sw::kpu::GIT_COMMIT)},
+             {"device", device}, {"started", started},
              {"status", "running"}, {"artifacts", nlohmann::json::object()}};
     }
     // Write it: false (with the reason on stderr) if the file could not be written.
     bool write() const {
         const std::string path = dir + "/run.json", tmp = path + ".tmp";
         {
+            // Closed and checked before the rename: a write that fails only as the stream flushes
+            // must not publish a short run.json, and leaves the previous one in place.
             std::ofstream out(tmp);
             out << j.dump(1) << "\n";
+            out.close();
             if (!out) {
                 std::cerr << "kpu-run: cannot write " << tmp << "\n";
+                std::error_code ignored;
+                std::filesystem::remove(tmp, ignored);
                 return false;
             }
         }
@@ -531,6 +537,27 @@ struct RunManifest {
         return write();
     }
 };
+
+// A bundle is rewritten whole, so its directory is removed first: refuse a destination that holds
+// anything but an .mflow bundle (`--memory-mflow .` must not empty the working directory).
+bool mflow_destination_ok(const std::string& dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::exists(dir, ec)) return true;
+    if (!fs::is_directory(dir, ec)) {
+        std::cerr << "kpu-run: --memory-mflow " << dir << " is a file, not a bundle directory\n";
+        return false;
+    }
+    if (fs::is_empty(dir, ec)) return true;
+    std::ifstream in(dir + "/manifest.json");
+    std::stringstream text;
+    text << in.rdbuf();
+    const nlohmann::json m = nlohmann::json::parse(text.str(), nullptr, false);
+    if (m.is_object() && m.value("format", "") == "kpu-mflow") return true;
+    std::cerr << "kpu-run: --memory-mflow " << dir << " holds files that are not an .mflow bundle; "
+                 "name a new directory or an existing bundle\n";
+    return false;
+}
 
 // --memory-subsystem: the program's L3 traffic on the cycle core (#541).
 int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast, const platform::DeviceSpecification* device) {
@@ -570,6 +597,10 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
         trace_path = run_dir + "/trace.json";
         counters_path = run_dir + "/counters.json";
         mflow_path = run_dir + "/mem.mflow";
+    }
+    // Before anything is written: a refused run leaves no run.json saying it is running.
+    if (!mflow_path.empty() && !mflow_destination_ok(mflow_path)) return 2;
+    if (!run_dir.empty()) {
         manifest.emplace(run_dir, a, device->name);
         if (!manifest->write()) return 2;
     }
@@ -609,6 +640,13 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
             {
                 std::ofstream out(run_dir + "/summary.txt");
                 out << summary;
+                out.close();
+                if (!out) {
+                    std::cerr << "kpu-run: cannot write " << run_dir << "/summary.txt\n";
+                    manifest->j["error"] = "cannot write summary.txt";
+                    manifest->finish("error", 2);
+                    return 2;
+                }
             }
             manifest->j["artifacts"] = {{"summary", "summary.txt"}, {"counters", "counters.json"},
                                         {"perfetto", "trace.json"}, {"mflow", "mem.mflow"}};

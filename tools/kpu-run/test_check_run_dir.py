@@ -55,7 +55,34 @@ class CheckRunDirSelfTest(unittest.TestCase):
 
     def test_a_missing_artifact_fails(self):
         (self.d / "summary.txt").unlink()
-        self.assertFails("summary.txt is named but not there")
+        self.assertFails("summary.txt is named but is not there as a file")
+
+    def test_a_file_artifact_that_is_a_directory_fails(self):
+        for name in ("summary.txt", "counters.json", "trace.json"):
+            with self.subTest(artifact=name):
+                (self.d / name).unlink()
+                (self.d / name).mkdir()
+                self.assertFails(f"{name} is named but is not there as a file")
+                (self.d / name).rmdir()
+                (self.d / name).write_text("{}")
+
+    def test_ok_after_a_deadlock_or_a_violation_fails(self):
+        for flag in ("deadlock", "violation"):
+            with self.subTest(flag=flag):
+                self.m["result"][flag] = True
+                self.save()
+                self.assertFails("status ok, but the result says")
+                self.m["result"][flag] = False
+
+    def test_a_manifest_without_its_commit_fails(self):
+        for bad in (None, "4dfebf4"):
+            with self.subTest(git=bad):
+                if bad is None:
+                    self.m.pop("git", None)
+                else:
+                    self.m["git"] = bad
+                self.save()
+                self.assertFails("git is")
 
     def test_a_bundle_without_its_manifest_fails(self):
         (self.d / "mem.mflow" / "manifest.json").unlink()
