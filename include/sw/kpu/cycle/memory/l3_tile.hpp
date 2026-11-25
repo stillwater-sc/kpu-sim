@@ -12,10 +12,11 @@
 //     A beat of another Load into a FILLING or READY slot -- a Load into a live slot -- is a fault,
 //     and so are a beat outside its tile and a beat written twice;
 //   - a Store ejects a READY slot's tile, one beat a cycle, into the DMA engine's store buffer,
-//     while the eject link has a credit. It waits, with no fault, until the slot is READY: a Store
-//     never reads a slot whose tile has not arrived;
-//   - a Release frees a READY slot (after any Store before it in the program) and pushes the slot's
-//     credit back to the engine.
+//     while the eject link has a credit. It is bound to the Load before it into its slot, in the
+//     program's order, and waits, with no fault, until the slot is READY with that Load's tile: a
+//     Store never reads a slot whose tile has not arrived, nor another Load's tile;
+//   - a Release, bound the same way, frees the slot (after any Store before it in the program) and
+//     pushes the slot's credit back to the engine.
 // The tile executes its part of the program (Stores and Releases, l3_program.hpp) in the program's
 // order, one at a time.
 //
@@ -72,8 +73,13 @@ public:
             throw std::invalid_argument("cycle::L3Tile " + this->name() +
                                         ": slots, banks and slot bytes must be positive, the bytes whole beats");
         validate_l3_program(program, cfg.slots, cfg.slot_bytes, "cycle::L3Tile " + this->name());
-        for (std::size_t i = 0; i < program.size(); ++i)
-            if (program[i].kind != L3Action::Kind::Load) commands_.push_back({i, program[i]});
+        // Each Store and Release is bound to the Load before it into its slot, in the program's
+        // order: it waits until the slot holds that Load's tile, whatever else has filled it.
+        std::vector<std::optional<std::size_t>> last_load(cfg.slots);
+        for (std::size_t i = 0; i < program.size(); ++i) {
+            if (program[i].kind == L3Action::Kind::Load) last_load[program[i].slot] = i;
+            else commands_.push_back({i, program[i], last_load[program[i].slot]});
+        }
         clear();
     }
 
@@ -93,8 +99,8 @@ public:
         if (head_ < commands_.size()) {
             const Command& c = commands_[head_];
             Slot& s = slots_[c.action.slot];
-            if (s.state != SlotState::Ready) {
-                wait = Stall::NoData;   // the slot's tile-ready token
+            if (!holds_its_tile(c)) {
+                wait = Stall::NoData;   // the tile-ready token of the slot's Load
             } else if (c.action.kind == L3Action::Kind::Store) {
                 if (c.action.bytes != s.tile_bytes)
                     throw std::logic_error(where(now) + ": action " + std::to_string(c.ticket) + " stores " +
@@ -172,7 +178,8 @@ public:
             const Command& c = commands_[head_];
             d = "command " + std::to_string(head_ + 1) + " of " + std::to_string(commands_.size()) + " (" +
                 cycle::to_string(c.action.kind) + " slot " + std::to_string(c.action.slot);
-            if (slots_[c.action.slot].state != SlotState::Ready) d += ": waiting for its tile";
+            if (!holds_its_tile(c))
+                d += ": waiting for its tile" + (c.load ? " (Load " + std::to_string(*c.load) + ")" : std::string(", which no Load places"));
             else if (c.action.kind == L3Action::Kind::Store)
                 d += ": ejected " + std::to_string(offset_) + " of " + std::to_string(c.action.bytes) + " bytes";
             d += ")";
@@ -222,7 +229,13 @@ private:
     struct Command {
         std::size_t ticket;
         L3Action action;
+        std::optional<std::size_t> load;   // the Load before it into its slot
     };
+    // The slot holds the tile the command is bound to, all of it.
+    [[nodiscard]] bool holds_its_tile(const Command& c) const {
+        const Slot& s = slots_[c.action.slot];
+        return c.load && s.state == SlotState::Ready && s.ticket == *c.load;
+    }
     struct Slot {
         SlotState state = SlotState::Free;
         std::uint64_t ticket = 0;

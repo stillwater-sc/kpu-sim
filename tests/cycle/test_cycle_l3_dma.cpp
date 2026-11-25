@@ -332,6 +332,62 @@ TEST_CASE("A Store waits for its slot's tile: one never loaded is a deadlock, no
     CHECK(r.l3.counts().stalled(Stall::NoData) > 0);
 }
 
+TEST_CASE("DRAM sees the program's order: a Load reads what an earlier Store wrote", "[cycle][l3][dma]") {
+    // #555's review. Load A into slot 0, Store it to B, Load B into slot 1: slot 1 must hold A's
+    // bytes, not what B held before the Store. The engine sends the Load's read only after the
+    // Store's write to the same bytes.
+    constexpr std::uint64_t A = kIn, B = kIn + 0x8000;
+    const L3Program p = {l3_load(0, A, 256), l3_store(0, B, 256), l3_load(1, B, 256)};
+    L3DmaRig r(p, {});
+    r.channel.preload(A, tile_bytes(1, 256));
+    r.channel.preload(B, tile_bytes(2, 256));
+    REQUIRE(r.sim.run_until_idle(kLimit));
+    CHECK(r.l3.peek(0) == tile_bytes(1, 256));
+    CHECK(r.l3.peek(1) == tile_bytes(1, 256));
+    CHECK(r.channel.peek(B, 256) == tile_bytes(1, 256));
+    CHECK(r.dma.dma().waited(DmaWait::Order) > 0);
+}
+
+TEST_CASE("DRAM sees the program's order: a Store waits for an earlier Load's read of its bytes",
+          "[cycle][l3][dma]") {
+    // Load A into slot 1; Load 4 KiB from B into slot 0, one read in flight at a time; Store slot 1
+    // over B's last 64 bytes. The big Load must read B as it was, its last beat included. The
+    // write has a window of its own, so only the rule holds it behind the reads.
+    constexpr std::uint64_t A = kIn, B = kIn + 0x8000;
+    const L3Program p = {l3_load(1, A, 64), l3_load(0, B, 4096), l3_store(1, B + 4032, 64)};
+    L3DmaRig::Options o;
+    o.window = 1;
+    L3DmaRig r(p, o);
+    r.channel.preload(A, tile_bytes(1, 64));
+    r.channel.preload(B, tile_bytes(2, 4096));
+    REQUIRE(r.sim.run_until_idle(kLimit));
+    CHECK(r.l3.peek(0) == tile_bytes(2, 4096));
+    CHECK(r.channel.peek(B + 4032, 64) == tile_bytes(1, 64));
+    CHECK(r.dma.dma().waited(DmaWait::Order) > 0);
+}
+
+TEST_CASE("A Store is bound to the Load before it into its slot", "[cycle][l3][dma]") {
+    // #555's review. Load A, then Load B, into slot 0, then Store slot 0 to C: the Store is B's,
+    // and B can only land once the slot is released, which comes after the Store. So the Store
+    // waits -- the deadlock detector names it -- and never writes A's bytes to C.
+    constexpr std::uint64_t A = kIn, B = kIn + 0x1000, C = kOut;
+    const L3Program p = {l3_load(0, A, 64), l3_load(0, B, 64), l3_store(0, C, 64), l3_release(0)};
+    L3DmaRig::Options o;
+    o.slots = 1;
+    L3DmaRig r(p, o);
+    r.channel.preload(A, tile_bytes(1, 64));
+    r.channel.preload(B, tile_bytes(2, 64));
+    r.sim.set_deadlock_window(500);
+    try {
+        r.sim.run_until_idle(kLimit);
+        FAIL("the Store should wait for Load 1's tile");
+    } catch (const Deadlock& e) {
+        CHECK_THAT(e.dump(), ContainsSubstring("Store slot 0: waiting for its tile (Load 1)"));
+    }
+    CHECK(r.dma.dma().write_bursts == 0);
+    CHECK(r.channel.peek(C, 64) == std::vector<std::uint8_t>(64, 0));
+}
+
 TEST_CASE("The L3 tile faults a beat it must never receive", "[cycle][l3]") {
     SECTION("a Load into a READY slot") {
         auto beats = beats_of(1, 0, 256);
@@ -371,8 +427,8 @@ TEST_CASE("The L3 tile faults a beat it must never receive", "[cycle][l3]") {
         expect_fault(a, "says its tile is 512 bytes, its first beat 256");
     }
     SECTION("but a Release frees the slot for the next Load") {
-        // Tile 1's four beats from cycle 0, tile 2's from cycle 20, after tile 1's Release.
-        auto beats = beats_of(1, 0, 256);
+        // Load 0's four beats from cycle 0, Load 2's from cycle 20, after Load 0's Release.
+        auto beats = beats_of(0, 0, 256);
         const auto second = beats_of(2, 0, 256);
         beats.insert(beats.end(), second.begin(), second.end());
         L3Alone a(beats, {l3_load(0, 0, 256), l3_release(0), l3_load(0, 0, 256)}, {0, 0, 0, 0, 20});
@@ -385,7 +441,7 @@ TEST_CASE("The L3 tile faults a beat it must never receive", "[cycle][l3]") {
 }
 
 TEST_CASE("A Store of a different size than the tile in its slot is a fault", "[cycle][l3]") {
-    L3Alone a(beats_of(1, 0, 256), {l3_load(0, 0, 256), l3_store(0, 0, 128)});
+    L3Alone a(beats_of(0, 0, 256), {l3_load(0, 0, 256), l3_store(0, 0, 128)});
     expect_fault(a, "action 1 stores 128 bytes from slot 0, which holds a tile of 256");
 }
 
@@ -426,6 +482,9 @@ TEST_CASE("The engine and the tile refuse a program or a configuration they cann
     refuse({l3_load(0, 0, 0)}, "0 bytes, not a positive multiple of 64");
     refuse({l3_load(0, 0, 8192)}, "8192 bytes, past the slot's 4096");
     refuse({l3_load(0, 32, 64)}, "DRAM address 32 is not on a 64-byte burst boundary");
+    refuse({l3_load(0, ~std::uint64_t{0} - 63, 128)}, "runs past the end of the address space");
+    // The last 64 bytes of the address space are a valid tile.
+    CHECK_NOTHROW(validate_l3_program({l3_load(0, ~std::uint64_t{0} - 63, 64)}, 2, 4096, "test"));
     CHECK_THROWS_WITH(sim.add<DmaEngine>("dma", d, DmaEngine::Config{2, 4096, 0, 4}, L3Program{}),
                       ContainsSubstring("the window and the store buffer must be positive"));
     CHECK_THROWS_WITH(sim.add<L3Tile>("l3", d, L3Tile::Config{2, 100, 4}, L3Program{}),
