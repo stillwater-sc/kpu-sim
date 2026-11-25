@@ -148,7 +148,7 @@ process.stdout.write(JSON.stringify({ version: R.m.version, kinds, waits: R.W.ro
         m["version"] = 5
         (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
         self.assertIn("not a version-3 or -4", self.read(d)["error"])
-        # A store whose is_load says load: the reader refuses it by name.
+        # A request whose kind contradicts its is_load: the reader refuses it by name.
         d = self.tmp / "bad.mflow"
         shutil.copytree(BUNDLE, d)
         m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
@@ -156,8 +156,8 @@ process.stdout.write(JSON.stringify({ version: R.m.version, kinds, waits: R.W.ro
         kind = next(c for c in t["columns"] if c["name"] == "kind")
         blob = bytearray((d / t["file"]).read_bytes())
         is_load = next(c for c in t["columns"] if c["name"] == "is_load")
-        q = next(i for i in range(t["rows"]) if blob[is_load["offset"] + i] == 0)
-        blob[kind["offset"] + q] = 0
+        q = 0
+        blob[kind["offset"] + q] = 1 if blob[is_load["offset"] + q] else 0   # a store that loads, or a load that stores
         (d / t["file"]).write_bytes(bytes(blob))
         self.assertIn("is_load says otherwise", self.read(d)["error"])
 
@@ -175,13 +175,22 @@ const stub = async url => {
   const b = fs.readFileSync(f);
   return { ok: true, text: async () => b.toString('utf8'), arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) };
 };
-Mflow.open('http://server/runs/x/mem.mflow', stub).then(R => {
-  process.stdout.write(JSON.stringify({ bursts: R.B.rows, asked: asked.map(u => u.split('/').pop()) }));
-});""",
+(async () => {
+  const out = {};
+  // The bundle's directory, with and without its trailing slash, and with a query string.
+  for (const base of ['http://server/runs/x/mem.mflow', 'http://server/runs/x/mem.mflow/', 'http://server/runs/x/mem.mflow/?v=1']) {
+    asked.length = 0;
+    const R = await Mflow.open(base, stub);
+    out[base] = { bursts: R.B.rows, asked: asked.map(u => u.split('/').pop()) };
+  }
+  process.stdout.write(JSON.stringify(out));
+})();""",
         ]))
-        self.assertGreater(got["bursts"], 0)
-        self.assertEqual(got["asked"][0], "manifest.json")
-        self.assertIn("bursts.bin", got["asked"])
+        self.assertEqual(len(got), 3)
+        for base, g in got.items():
+            self.assertGreater(g["bursts"], 0, base)
+            self.assertEqual(g["asked"][0], "manifest.json", base)
+            self.assertIn("bursts.bin", g["asked"], base)
 
     def test_a_served_bundle_cannot_name_a_file_outside_it(self):
         got = self.node("\n".join([

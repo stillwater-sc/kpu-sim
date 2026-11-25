@@ -124,10 +124,14 @@ function fromEmbed(E) {
 async function fetchFiles(base, fetchFn) {
   const get = fetchFn || (typeof fetch !== "undefined" ? fetch : null);
   if (!get) throw new Error("no fetch to read " + base + " with");
-  const dir = base.endsWith("/") ? base : base + "/";
+  // File names resolve against the directory's PATH: "<dir>/?v=1" must give "<dir>/manifest.json",
+  // not "<dir>/?v=1/manifest.json". A relative base resolves against the page.
+  const dir = new URL(base, typeof location !== "undefined" ? location.href : undefined);
+  if (!dir.pathname.endsWith("/")) dir.pathname += "/";
+  const at = f => new URL(f, dir).href;
   const plain = f => typeof f === "string" && /^[A-Za-z0-9_.-]+$/.test(f) && f !== "." && f !== "..";
-  const text = async f => { const r = await get(dir + f); if (!r.ok) throw new Error(dir + f + ": " + r.status); return r.text(); };
-  const bytes = async f => { const r = await get(dir + f); if (!r.ok) throw new Error(dir + f + ": " + r.status); return r.arrayBuffer(); };
+  const text = async f => { const r = await get(at(f)); if (!r.ok) throw new Error(at(f) + ": " + r.status); return r.text(); };
+  const bytes = async f => { const r = await get(at(f)); if (!r.ok) throw new Error(at(f) + ": " + r.status); return r.arrayBuffer(); };
   const files = { "manifest.json": await text("manifest.json") };
   const m = JSON.parse(files["manifest.json"]);
   for (const t of Object.values(m.tables || {})) {
