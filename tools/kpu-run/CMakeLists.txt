@@ -56,15 +56,16 @@ if(KPU_BUILD_TESTS)
                 -o ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp)
     set_tests_properties(csp_gen_memory_s1 PROPERTIES LABELS "program;driver;cycle;memory"
                          FIXTURES_SETUP memory_s1_program)
+    # Exit 0 AND the summary's line: a run that prints the laws holding but fails its data exits 1.
     add_test(NAME kpu_run_memory_subsystem_s1
-        COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp
-                --deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json --memory-subsystem
-                --memory-trace ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.json
-                --memory-counters ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.counters.json
-                --memory-dram-trace ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.lpddr5.json)
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.json$<SEMICOLON>--memory-counters$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.counters.json$<SEMICOLON>--memory-dram-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.lpddr5.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=on.a.direct.link.*bit.for.bit.*laws:.hold.on.every.row
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
     set_tests_properties(kpu_run_memory_subsystem_s1 PROPERTIES LABELS "program;driver;cycle;memory"
-                         FIXTURES_REQUIRED memory_s1_program FIXTURES_SETUP memory_s1_run
-                         PASS_REGULAR_EXPRESSION "laws: hold on every row")
+                         FIXTURES_REQUIRED memory_s1_program FIXTURES_SETUP memory_s1_run)
     add_test(NAME csp_gen_memory_t4
         COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 128 --tile 32 --dtype int8
                 --target ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json
@@ -72,11 +73,14 @@ if(KPU_BUILD_TESTS)
     set_tests_properties(csp_gen_memory_t4 PROPERTIES LABELS "program;driver;cycle;memory"
                          FIXTURES_SETUP memory_t4_program)
     add_test(NAME kpu_run_memory_subsystem_t4
-        COMMAND run --program ${CMAKE_CURRENT_BINARY_DIR}/memory_t4.csp
-                --deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json --memory-subsystem)
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_t4.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_t4.json$<SEMICOLON>--memory-subsystem
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=over.the.NoC.*bit.for.bit.*laws:.hold.on.every.row
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
     set_tests_properties(kpu_run_memory_subsystem_t4 PROPERTIES LABELS "program;driver;cycle;memory;noc"
-                         FIXTURES_REQUIRED memory_t4_program
-                         PASS_REGULAR_EXPRESSION "over the NoC.*laws: hold on every row")
+                         FIXTURES_REQUIRED memory_t4_program)
     add_test(NAME kpu_run_memory_subsystem_needs_a_deployment
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
