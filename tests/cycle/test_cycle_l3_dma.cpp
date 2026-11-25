@@ -266,7 +266,9 @@ TEST_CASE("The burst window and the store buffer bound what is in flight", "[cyc
         preload_and_watch(*r, p, seen);
         REQUIRE(r->sim.run_until_idle(kLimit));
         check_data(*r, p, seen);
-        CHECK(r->dma.dma().max_in_flight == window);   // reached, never passed (the engine's check)
+        // Each window reached, never passed (the engine's check).
+        CHECK(r->dma.dma().max_reads_in_flight == window);
+        CHECK(r->dma.dma().max_writes_in_flight <= window);
         return r;
     };
     const auto one = run(1, 1, 1);
@@ -349,9 +351,8 @@ TEST_CASE("DRAM sees the program's order: a Load reads what an earlier Store wro
 TEST_CASE("DRAM sees the program's order: a Store waits for an earlier Load's read of its bytes",
           "[cycle][l3][dma]") {
     // Load A into slot 1; Load 4 KiB from B into slot 0, one read in flight at a time; Store slot 1
-    // over B's last 64 bytes. The big Load must read B as it was, its last beat included. (Here
-    // the window, shared and oldest first, already keeps the write behind the reads; the rule
-    // holds it there whatever the window does.)
+    // over B's last 64 bytes. The big Load must read B as it was, its last beat included. The
+    // write has a window of its own, so only the rule holds it behind the reads.
     constexpr std::uint64_t A = kIn, B = kIn + 0x8000;
     const L3Program p = {l3_load(1, A, 64), l3_load(0, B, 4096), l3_store(1, B + 4032, 64)};
     L3DmaRig::Options o;
@@ -362,6 +363,7 @@ TEST_CASE("DRAM sees the program's order: a Store waits for an earlier Load's re
     REQUIRE(r.sim.run_until_idle(kLimit));
     CHECK(r.l3.peek(0) == tile_bytes(2, 4096));
     CHECK(r.channel.peek(B + 4032, 64) == tile_bytes(1, 64));
+    CHECK(r.dma.dma().waited(DmaWait::Order) > 0);
 }
 
 TEST_CASE("A Store is bound to the Load before it into its slot", "[cycle][l3][dma]") {
@@ -466,6 +468,75 @@ TEST_CASE("Two runs, and a run after reset, are identical", "[cycle][l3][dma]") 
     CHECK(a.sim.now() == end);
     CHECK(spans_of(a) == first);
     check_data(a, p, sa);
+}
+
+// A DRAM that answers every request at once, and its second read twice.
+class EchoDram : public Component {
+public:
+    EchoDram(std::string name, Domain& d) : Component(std::move(name), d) {}
+    void connect(Link<DramRequest>& in, Link<DramResponse>& out) {
+        in_ = &in;
+        out_ = &out;
+    }
+    void evaluate(Cycle now) override {
+        if (in_->can_pop(now)) {
+            const DramRequest q = in_->pop(now);
+            DramResponse r;
+            r.id = q.id;
+            r.write = q.write;
+            r.address = q.address;
+            r.bytes.assign(q.size, 0x5A);
+            r.tag = q.tag;
+            pending_.push_back(r);
+            if (!q.write && ++reads_ == 2) pending_.push_back(r);
+        }
+        if (!pending_.empty() && out_->can_push(now)) {
+            out_->push(now, pending_.front());
+            pending_.erase(pending_.begin());
+        }
+        counters().busy();
+    }
+    [[nodiscard]] bool idle() const override { return pending_.empty(); }
+
+private:
+    Link<DramRequest>* in_ = nullptr;
+    Link<DramResponse>* out_ = nullptr;
+    std::vector<DramResponse> pending_;
+    int reads_ = 0;
+};
+
+// An L3 side that never takes a beat: the engine's L3 link fills and stays full.
+class Wall : public Component {
+public:
+    Wall(std::string name, Domain& d) : Component(std::move(name), d) {}
+    void evaluate(Cycle) override {}
+    [[nodiscard]] bool idle() const override { return true; }
+};
+
+TEST_CASE("A second DRAM response to one read is a fault, even while L3 holds the first", "[cycle][dma]") {
+    // #556's review. Two reads; the first's beat fills the one-credit L3 link, which nothing
+    // drains; the second's response lands, waits for L3, and comes again. It must be refused, not
+    // queued twice (and pushed after its read is gone).
+    Simulator sim;
+    sim.set_deadlock_window(200);
+    Domain& d = sim.add_domain(Domain::from_ghz("kpu", 1.0));
+    auto& dram = sim.add<EchoDram>("dram", d);
+    auto& dma = sim.add<DmaEngine>("dma", d, DmaEngine::Config{1, 4096, 8, 4}, L3Program{l3_load(0, 0, 128)});
+    auto& wall = sim.add<Wall>("l3", d);
+    auto& req = sim.link<DramRequest>("req", dma, dram, 4);
+    auto& rsp = sim.link<DramResponse>("rsp", dram, dma, 4);
+    auto& to_l3 = sim.link<L3Beat>("to l3", dma, wall, 1);
+    auto& from_l3 = sim.link<L3Beat>("from l3", wall, dma, 1);
+    auto& credits = sim.link<SlotCredit>("credits", wall, dma, 1);
+    dram.connect(req, rsp);
+    dma.connect(req, rsp, to_l3, from_l3, credits);
+    try {
+        sim.run_until_idle(kLimit);
+        FAIL("the second response should be refused");
+    } catch (const InvariantViolation& e) {
+        CHECK(e.where() == "dma");
+        CHECK_THAT(e.what(), ContainsSubstring("a second DRAM response to read"));
+    }
 }
 
 TEST_CASE("The engine and the tile refuse a program or a configuration they cannot run", "[cycle][l3][dma]") {

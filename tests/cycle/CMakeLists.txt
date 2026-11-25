@@ -66,6 +66,17 @@ set_target_properties(test_cycle_l3_dma PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_l3_dma COMMAND test_cycle_l3_dma)
 set_tests_properties(test_cycle_l3_dma PROPERTIES LABELS "cycle;l3;dma;memory;v0.10")
 
+# Step 1c (#539): the NoC hubs and ports on the core, built from a deployment's layout.
+add_executable(test_cycle_noc test_cycle_noc.cpp)
+target_link_libraries(test_cycle_noc PRIVATE Catch2::Catch2WithMain kpu_memory_components kpu_trace kpu_program)
+target_include_directories(test_cycle_noc PRIVATE ${CMAKE_SOURCE_DIR}/include
+                           ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common)
+target_compile_definitions(test_cycle_noc PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+kpu_set_target_options(test_cycle_noc)
+set_target_properties(test_cycle_noc PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_noc COMMAND test_cycle_noc)
+set_tests_properties(test_cycle_noc PROPERTIES LABELS "cycle;noc;dma;memory;v0.10")
+
 # Step 0c (#535): the test structure's trace and counters files, validated against each other.
 # Open build/tests/cycle/cycle_trace_demo.json in https://ui.perfetto.dev
 add_executable(cycle_trace_demo cycle_trace_demo.cpp)
