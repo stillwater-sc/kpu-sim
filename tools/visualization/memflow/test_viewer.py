@@ -252,6 +252,43 @@ process.stdout.write(JSON.stringify([g, [0, 4, 5, 10, 12, 19, 20, 29, 30, 45].ma
         self.assertEqual(at, [[[0, 0, 5]], [[0, 0, 5]], [], [[3, 10, 20]], [[0, 12, 30], [3, 10, 20]],
                               [[0, 12, 30], [3, 10, 20]], [[0, 12, 30]], [[0, 12, 30]], [], [[3, 40, 50]]])
 
+    def test_the_real_bundles_fills_move_no_dram_bytes(self):
+        # A Fill is a request with no bursts: none names it, and the DRAM bytes the page counts (every
+        # request's bytes but a Fill's) are exactly the bursts' bytes. A cycle-core bundle has Fills.
+        got = self.read(BUNDLE, """
+let fills = 0, fillBursts = 0, dram = 0;
+for (let q = 0; q < R.Q.rows; q++) { if (R.Q.kind[q] === 2) fills++; else dram += R.Q.bytes[q]; }
+for (let b = 0; b < R.B.rows; b++) if (R.B.request[b] !== Mflow.NONE && R.Q.kind[R.B.request[b]] === 2) fillBursts++;
+process.stdout.write(JSON.stringify({ source: R.m.source || null, fills, fillBursts, dram, burstBytes: R.B.rows * R.m.burst_bytes }));""")
+        self.assertEqual(got["fillBursts"], 0)
+        self.assertEqual(got["dram"], got["burstBytes"])
+        if got["source"] == "cycle-core":
+            self.assertGreater(got["fills"], 0)
+
+    def test_the_real_bundles_waits_are_grouped_and_found(self):
+        # groupWaits and waitsAt on the bundle's own waits table: every interval lands in its engine's
+        # list for its cause, and is found at its first cycle; a cycle-core bundle has waits.
+        got = self.read(BUNDLE, "\n".join(["const WAIT = Mflow.WAIT;",
+                                          extract(self.page, "function groupWaits(W, engine) {"),
+                                          extract(self.page, "function waitsAt(W, byCause, t) {"), """
+const W = R.W, engines = [...new Set(W.engine)];
+let grouped = 0, found = 0, cycles = 0;
+for (const e of engines) {
+  const g = groupWaits(W, e);
+  g.forEach((l, k) => { for (const i of l) {
+    grouped++; cycles += W.t_to[i] - W.t_from[i];
+    if (W.engine[i] !== e || W.reason[i] !== k) throw new Error("wait " + i + " grouped under the wrong engine or cause");
+    if (waitsAt(W, g, W.t_from[i]).some(([c, a, b]) => c === k && a === W.t_from[i] && b === W.t_to[i])) found++;
+  } });
+}
+process.stdout.write(JSON.stringify({ source: R.m.source || null, rows: W.rows, grouped, found, cycles }));"""]))
+        self.assertNotIn("error", got)
+        self.assertEqual(got["grouped"], got["rows"])
+        self.assertEqual(got["found"], got["rows"])
+        if got["source"] == "cycle-core":
+            self.assertGreater(got["rows"], 0)
+            self.assertGreater(got["cycles"], 0)
+
     def test_every_colour_is_defined_in_both_themes(self):
         # The waits, the Fills: each token the page draws with has a light and a dark value (the
         # page has one light block and two dark ones: the media query and data-theme="dark").
