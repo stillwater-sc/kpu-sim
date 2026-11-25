@@ -12,6 +12,11 @@ kpu_add_tool(run
         kpu_memory_components
         kpu_trace
 )
+# kpu_run.cpp carries every level and, with --memory-subsystem, the cycle core's memory subsystem:
+# past MSVC's default object-file section limit (C1128).
+if(MSVC)
+    target_compile_options(run PRIVATE /bigobj)
+endif()
 
 # NOTE: the guard is KPU_BUILD_TESTS, not BUILD_TESTING. BUILD_TESTING is empty in this
 # project (it never includes CTest), so a `if(BUILD_TESTING)` block silently registers
