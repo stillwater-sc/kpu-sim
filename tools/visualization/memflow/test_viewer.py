@@ -237,6 +237,30 @@ process.stdout.write(JSON.stringify([s, [0, 4, 5, 10, 15, 19, 20, 25].map(t => v
         self.assertEqual(steps, [[0, 1], [5, 2], [15, 1], [20, 0]])
         self.assertEqual(values, [1, 1, 2, 2, 1, 1, 0, 0])
 
+    def test_waits_are_grouped_by_cause_and_found_at_a_cycle(self):
+        # The waits lane's data: an engine's intervals by cause, and the causes holding it at t
+        # (half-open: an interval [a, b) holds at a, not at b); another engine's waits are not its.
+        src = "\n".join(["const WAIT = [0, 1, 2, 3, 4, 5];",
+                         extract(self.page, "function groupWaits(W, engine) {"),
+                         extract(self.page, "function waitsAt(W, byCause, t) {"), """
+const W = { rows: 5, engine: [0, 0, 0, 1, 0], reason: [3, 0, 3, 3, 0],
+            t_from: [10, 0, 40, 10, 12], t_to: [20, 5, 50, 20, 30] };
+const g = groupWaits(W, 0);
+process.stdout.write(JSON.stringify([g, [0, 4, 5, 10, 12, 19, 20, 29, 30, 45].map(t => waitsAt(W, g, t))]));"""])
+        groups, at = self.node(src)
+        self.assertEqual(groups, [[1, 4], [], [], [0, 2], [], []])
+        self.assertEqual(at, [[[0, 0, 5]], [[0, 0, 5]], [], [[3, 10, 20]], [[0, 12, 30], [3, 10, 20]],
+                              [[0, 12, 30], [3, 10, 20]], [[0, 12, 30]], [[0, 12, 30]], [], [[3, 40, 50]]])
+
+    def test_every_colour_is_defined_in_both_themes(self):
+        # The waits, the Fills: each token the page draws with has a light and a dark value (the
+        # page has one light block and two dark ones: the media query and data-theme="dark").
+        blocks = re.findall(r"(:root\s*\{.*?\}|:root:not\(\[data-theme=\"light\"\]\)\s*\{.*?\}|:root\[data-theme=\"dark\"\]\s*\{.*?\})", self.page, re.S)
+        self.assertEqual(len(blocks), 3)
+        for tok in ["--fill"] + ["--w%d" % k for k in range(6)]:
+            for b in blocks:
+                self.assertIn(tok + ":", b, f"{tok} missing from a theme block")
+
     def test_a_non_bundle_is_refused(self):
         p = self.pack(str(self.tmp), "-o", str(self.tmp / "x.html"))
         self.assertEqual(p.returncode, 2)
