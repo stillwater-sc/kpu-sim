@@ -22,6 +22,7 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+READER = HERE.parent / "common" / "mflow.js"
 BUNDLE = None
 
 
@@ -67,12 +68,15 @@ class ViewerSmokeTest(unittest.TestCase):
         self.assertEqual(manifest["format"], "kpu-mflow")
         for table in manifest["tables"].values():
             self.assertIn(table["file"], payload["bins"])
+        # The reader is inlined in place of its <script src>: the packed page needs no other file.
+        self.assertNotIn('<script src="../common/mflow.js">', page)
+        self.assertIn("function parse(files)", page)
 
     def test_viewer_reads_the_version_the_writer_writes(self):
         # The page refuses any other manifest version, so a format bump that the viewer does not
         # follow would leave it refusing every new bundle -- invisible to a syntax check.
         written = json.loads((Path(BUNDLE) / "manifest.json").read_text(encoding="utf-8"))["version"]
-        accepted = re.search(r"const VERSIONS = \[([\d, ]+)\]", self.page)
+        accepted = re.search(r"const VERSIONS = \[([\d, ]+)\]", READER.read_text(encoding="utf-8"))
         self.assertIsNotNone(accepted)
         self.assertIn(written, [int(v) for v in accepted.group(1).split(",")])
 
@@ -87,41 +91,128 @@ class ViewerSmokeTest(unittest.TestCase):
         self.assertLessEqual({"dram_bank", "dram_bus", "dma", "dmabuf"}, kinds)
         self.assertLessEqual(kinds, {"dram_bank", "dram_bus", "dma", "dmabuf", "port", "dmawait"})
 
-    def test_the_viewer_reads_the_real_bundle(self):
-        # Runs the page's own reader (col + parse) over the bundle under Node: every column the
-        # page names must exist with the dtype it expects, and every cross-index must hold.
-        src = "\n".join([
-            "const NONE = 0xFFFFFFFF;",
-            extract(self.page, "function col(buf, cols, name, n) {"),
-            extract(self.page, "function parse(files) {"),
-            "const fs = require('fs'), path = require('path'), dir = process.argv[2] || %s;" % json.dumps(str(Path(BUNDLE).resolve())),
+    def read(self, bundle, extra=""):
+        """Run the shared reader (../common/mflow.js) over a bundle directory under Node."""
+        return self.node("\n".join([
+            "const Mflow = require(%s);" % json.dumps(str(READER)),
+            "const fs = require('fs'), path = require('path'), dir = %s;" % json.dumps(str(Path(bundle).resolve())),
             "const files = { 'manifest.json': fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8') };",
             "for (const t of Object.values(JSON.parse(files['manifest.json']).tables)) {",
             "  const b = fs.readFileSync(path.join(dir, t.file));",
             "  files[t.file] = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); }",
-            "const R = parse(files);",
-            "const used = { B: ['mc','channel','bank_group','bank','row','col','engine','request','is_load','outcome','t_posted','t_submit','t_cmd','t_data0','t_data1','t_done'],",
-            "  C: ['mc','channel','bank_group','bank','row','kind','burst','t_issue','t_end','t_data0','t_data1'],",
-            "  Q: ['engine','port','is_load','address','bytes','t_offered','t_credit','t_first','t_last','t_retired'],",
-            "  F: ['engine','held','staged','t'], P: ['port','request','kind','t'] };",
-            "const missing = [];",
-            "for (const [k, cols] of Object.entries(used)) for (const c of cols) if (!R[k][c]) missing.push(k + '.' + c);",
-            "process.stdout.write(JSON.stringify({ missing, bursts: R.B.rows, commands: R.C.rows, requests: R.Q.rows }));",
-        ])
-        got = self.node(src)
+            "let R; try { R = Mflow.parse(files); } catch (e) { process.stdout.write(JSON.stringify({ error: e.message })); process.exit(0); }",
+            extra,
+        ]))
+
+    def test_the_viewer_reads_the_real_bundle(self):
+        # The page's reader is ../common/mflow.js: every column the page names must exist with the
+        # dtype it expects, every cross-index must hold, and version 4's fields must be there.
+        got = self.read(BUNDLE, """
+const used = { B: ['mc','channel','bank_group','bank','row','col','engine','request','is_load','outcome','t_posted','t_submit','t_cmd','t_data0','t_data1','t_done'],
+  C: ['mc','channel','bank_group','bank','row','kind','burst','t_issue','t_end','t_data0','t_data1'],
+  Q: ['engine','port','is_load','address','bytes','t_offered','t_credit','t_first','t_last','t_retired','kind','ticket','slot'],
+  F: ['engine','held','staged','t'], P: ['port','request','kind','t'], W: ['engine','reason','t_from','t_to'] };
+const missing = [];
+for (const [k, cols] of Object.entries(used)) for (const c of cols) if (!R[k][c]) missing.push(k + '.' + c);
+process.stdout.write(JSON.stringify({ missing, version: R.m.version, bursts: R.B.rows, commands: R.C.rows,
+  requests: R.Q.rows, waits: R.W.rows }));""")
+        self.assertNotIn("error", got)
         self.assertEqual(got["missing"], [])
         self.assertGreater(got["bursts"], 0)
         self.assertGreater(got["commands"], got["bursts"])   # every burst has at least its RD/WR
         self.assertGreater(got["requests"], 0)
 
+    def version_3_copy(self):
+        """The bundle declared version 3: its v4 columns and waits table are ignored."""
+        d = self.tmp / "v3.mflow"
+        shutil.copytree(BUNDLE, d)
+        m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+        m["version"] = 3
+        m.pop("source", None)
+        m.pop("write_window", None)
+        m["tables"].pop("waits", None)
+        (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+        return d
+
+    def test_a_version_3_bundle_reads_as_version_4_would(self):
+        got = self.read(self.version_3_copy(), """
+const kinds = [...R.Q.kind].every((k, q) => k === (R.Q.is_load[q] ? 0 : 1));
+process.stdout.write(JSON.stringify({ version: R.m.version, kinds, waits: R.W.rows,
+  tickets: [...R.Q.ticket].every(t => t === Mflow.NONE), slots: [...R.Q.slot].every(t => t === Mflow.NONE) }));""")
+        self.assertEqual(got, {"version": 3, "kinds": True, "waits": 0, "tickets": True, "slots": True})
+
+    def test_other_versions_and_contradicting_kinds_are_refused(self):
+        d = self.tmp / "v5.mflow"
+        shutil.copytree(BUNDLE, d)
+        m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+        m["version"] = 5
+        (d / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
+        self.assertIn("not a version-3 or -4", self.read(d)["error"])
+        # A request whose kind contradicts its is_load: the reader refuses it by name.
+        d = self.tmp / "bad.mflow"
+        shutil.copytree(BUNDLE, d)
+        m = json.loads((d / "manifest.json").read_text(encoding="utf-8"))
+        t = m["tables"]["requests"]
+        kind = next(c for c in t["columns"] if c["name"] == "kind")
+        blob = bytearray((d / t["file"]).read_bytes())
+        is_load = next(c for c in t["columns"] if c["name"] == "is_load")
+        q = 0
+        blob[kind["offset"] + q] = 1 if blob[is_load["offset"] + q] else 0   # a store that loads, or a load that stores
+        (d / t["file"]).write_bytes(bytes(blob))
+        self.assertIn("is_load says otherwise", self.read(d)["error"])
+
+    def test_a_served_bundle_is_fetched_by_the_names_in_its_manifest(self):
+        # Mflow.open(url) fetches the manifest, then each table the manifest names, from the bundle's
+        # directory: a stub fetch serves the files and records what was asked for.
+        got = self.node("\n".join([
+            "const Mflow = require(%s);" % json.dumps(str(READER)),
+            "const fs = require('fs'), path = require('path'), dir = %s;" % json.dumps(str(Path(BUNDLE).resolve())),
+            """const asked = [];
+const stub = async url => {
+  asked.push(url);
+  const f = path.join(dir, url.replace('http://server/runs/x/mem.mflow/', ''));
+  if (!fs.existsSync(f)) return { ok: false, status: 404 };
+  const b = fs.readFileSync(f);
+  return { ok: true, text: async () => b.toString('utf8'), arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) };
+};
+(async () => {
+  const out = {};
+  // The bundle's directory, with and without its trailing slash, and with a query string.
+  for (const base of ['http://server/runs/x/mem.mflow', 'http://server/runs/x/mem.mflow/', 'http://server/runs/x/mem.mflow/?v=1']) {
+    asked.length = 0;
+    const R = await Mflow.open(base, stub);
+    out[base] = { bursts: R.B.rows, asked: asked.map(u => u.split('/').pop()) };
+  }
+  process.stdout.write(JSON.stringify(out));
+})();""",
+        ]))
+        self.assertEqual(len(got), 3)
+        for base, g in got.items():
+            self.assertGreater(g["bursts"], 0, base)
+            self.assertEqual(g["asked"][0], "manifest.json", base)
+            self.assertIn("bursts.bin", g["asked"], base)
+
+    def test_a_served_bundle_cannot_name_a_file_outside_it(self):
+        got = self.node("\n".join([
+            "const Mflow = require(%s);" % json.dumps(str(READER)),
+            """const manifest = JSON.stringify({ format: 'kpu-mflow', version: 4, tables: { bursts: { file: '../../etc/passwd', rows: 0, columns: [] } } });
+const stub = async url => ({ ok: true, text: async () => manifest, arrayBuffer: async () => new ArrayBuffer(0) });
+Mflow.open('http://server/b/', stub).then(() => process.stdout.write('"accepted"'), e => process.stdout.write(JSON.stringify(e.message)));""",
+        ]))
+        self.assertIn("names a table file", got)
+
+    def test_the_page_reads_a_served_bundle_only_from_its_own_origin(self):
+        self.assertIn('<script src="../common/mflow.js"></script>', self.page)
+        self.assertIn("url.origin === location.origin", self.page)
+
     def test_a_bad_column_is_refused_by_name(self):
         # An unknown dtype must say so, not fail on the alignment check with a TypeError.
-        src = "\n".join([extract(self.page, "function col(buf, cols, name, n) {"), """
+        src = "const { col } = require(%s);" % json.dumps(str(READER)) + """
 const out = [];
 for (const c of [{ name: "x", dtype: "u16", offset: 0 }, { name: "x", dtype: "f64", offset: 4 }]) {
   try { col(new ArrayBuffer(64), [c], "x", 1); out.push("accepted"); } catch (e) { out.push(e.message); }
 }
-process.stdout.write(JSON.stringify(out));"""])
+process.stdout.write(JSON.stringify(out));"""
         self.assertEqual(self.node(src), ["column x has an unknown dtype u16", "column x is misaligned"])
 
     def test_record_strings_never_become_markup(self):
@@ -133,7 +224,7 @@ process.stdout.write(JSON.stringify([esc('<img src=x onerror=alert(1)>'), esc("a
         for sink in ("const kv = ", "const chip = ", '$("obs").innerHTML'):
             line = next(l for l in self.page.splitlines() if sink in l)
             self.assertIn("esc(", line, f"{sink} writes record strings without esc")
-        self.assertIn('m.arbitration !== "round_robin" && m.arbitration !== "fixed"', self.page)
+        self.assertIn('m.arbitration !== "round_robin" && m.arbitration !== "fixed"', READER.read_text(encoding="utf-8"))
 
     def test_the_step_series_counts_in_flight(self):
         src = "\n".join([extract(self.page, "function stepSeries(intervals) {"),
@@ -159,6 +250,8 @@ process.stdout.write(JSON.stringify([s, [0, 4, 5, 10, 15, 19, 20, 25].map(t => v
         js = self.tmp / "viewer.js"
         js.write_text(scripts[-1], encoding="utf-8")
         p = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        p = subprocess.run([node, "--check", str(READER)], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
 
 

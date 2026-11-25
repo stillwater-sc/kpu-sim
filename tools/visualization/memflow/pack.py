@@ -6,7 +6,7 @@ embedded, to share, archive or attach to a report (docs/plans/memory-side-debugg
 Usage:
     python3 pack.py <bundle.mflow> -o view.html
 
-The output needs no server and no other file. Binary columns are embedded as base64, so the
+The output needs no server and no other file: the shared reader (../common/mflow.js) is inlined. Binary columns are embedded as base64, so the
 page is about 4/3 the size of the bundle; a bundle over ~12 MB is refused rather than
 producing a page browsers struggle with -- view it from its folder instead.
 
@@ -24,6 +24,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 MARKER = "<!--MFLOW_EMBED-->"
+READER = HERE.parent / "common" / "mflow.js"
+READER_TAG = '<script src="../common/mflow.js"></script>'
 MAX_BYTES = 12 * 1024 * 1024
 
 
@@ -60,6 +62,15 @@ def main():
     if MARKER not in page:
         print("pack: index.html has no embed marker", file=sys.stderr)
         sys.exit(2)
+    # The shared reader goes in too, in place of its <script src>: the page needs no other file.
+    if READER_TAG not in page:
+        print("pack: index.html does not load " + READER_TAG, file=sys.stderr)
+        sys.exit(2)
+    reader = READER.read_text(encoding="utf-8")
+    if "</script" in reader.lower():
+        print(f"pack: {READER} holds '</script', which would end its inlined <script> early", file=sys.stderr)
+        sys.exit(2)
+    page = page.replace(READER_TAG, f"<script>\n{reader}</script>", 1)
     payload = json.dumps({"manifest": manifest, "lod": lod, "bins": bins})
     # "</" inside a <script> would end it early; JSON allows the escaped form.
     payload = payload.replace("</", "<\\/")
