@@ -245,3 +245,13 @@ if(KPU_PYTHON3)
     set_tests_properties(cycle_csp_l3_trace_check PROPERTIES LABELS "cycle;csp;l3;dma;trace;v0.10"
                          FIXTURES_REQUIRED cycle_csp_l3)
 endif()
+
+# Step 2c (#544): the PE array, the wavefront measured.
+add_executable(test_cycle_pe_array test_cycle_pe_array.cpp)
+target_link_libraries(test_cycle_pe_array PRIVATE Catch2::Catch2WithMain kpu_program)
+target_include_directories(test_cycle_pe_array PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_cycle_pe_array PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+kpu_set_target_options(test_cycle_pe_array)
+set_target_properties(test_cycle_pe_array PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_pe_array COMMAND test_cycle_pe_array)
+set_tests_properties(test_cycle_pe_array PROPERTIES LABELS "cycle;array;compute;v0.10")
