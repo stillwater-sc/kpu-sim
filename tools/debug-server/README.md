@@ -33,6 +33,7 @@ To keep a tunnel open in the background without a shell, use `ssh -N -L 8080:loc
 |---|---|
 | `/` | The runs, newest first: status, device, start time, and each artifact with links to the viewers that read it |
 | `/api/runs` | The same list, as JSON |
+| `/api/events` | Server-sent events: `run-added`, `run-changed` and `run-removed`, each with its run as JSON |
 | `/files/<path>` | A file under the root, confined to it. Range requests are honoured |
 | `/view/<viewer>/` | A viewer, plus `/view/common/` for the scripts the viewers share |
 
@@ -45,6 +46,23 @@ To keep a tunnel open in the background without a shell, use `ssh -N -L 8080:loc
 - **`.mflow` bundles** open in the memory-side debugger (`/view/memflow/index.html?bundle=...`).
 - **An LPDDR5 Chrome DRAM trace** opens in the bank analyzer, until the `.mflow` DRAM views replace it (step 9).
 - **The other viewers** (tile flow, occupancy, floorplan, domain flow) are served as pages that open their own files.
+
+## Live updates
+
+The server rediscovers the runs under the root every second. It polls modification times, so it needs no inotify and works on any filesystem. Each change goes to every open page as an event:
+- **The index:** a new or rewritten run appears in the list, highlighted, without a reload.
+- **A view of a run** (the memory-side debugger, opened from the index): when that run is rewritten, a bar offers **Reload**. The view never reloads itself, so the cursor and the zoom stay until you choose. While `kpu-run` is still rewriting the run (`run.json` says `running`), there is no bar yet; it appears when the run finishes.
+
+A run directory changes when its `run.json` does, and a bare bundle when its `manifest.json` does.
+
+## Open in Perfetto
+
+Each Perfetto or Chrome trace in the index has an **Open in Perfetto** button. ui.perfetto.dev runs in your laptop's browser, where it can't reach the server, so the button does the handover:
+1. It opens ui.perfetto.dev in a new tab.
+2. It fetches the trace from the server, through the tunnel.
+3. It gives the trace to that tab with Perfetto's `postMessage` protocol, once the tab has answered.
+
+The trace goes only to the tab the click opened, and only to Perfetto's origin. If nothing opens, allow pop-ups for `localhost`.
 
 ## Safety
 

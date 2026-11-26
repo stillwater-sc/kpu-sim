@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Tests for the read-only debug server (docs/plans/cycle-mflow-and-debug-server.md step 7): the
-server on a free loopback port over a temporary root holding a run directory, a bare .mflow
-bundle, a trace, a file outside the root and a symlink to it.
+Tests for the read-only debug server (docs/plans/cycle-mflow-and-debug-server.md steps 7 and 8):
+the server on a free loopback port over a temporary root holding a run directory, a bare .mflow
+bundle, a trace, a file outside the root and a symlink to it; and, over a root of its own, the
+live updates: a run written while the server runs is listed and its event is sent.
 
 Usage: python3 test_kpu_debug_server.py [-v]
 
@@ -13,17 +14,20 @@ Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 import http.client
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from kpu_debug import core  # noqa: E402
-from kpu_debug.server import HOST, make_server, parse_range  # noqa: E402
+from kpu_debug import server as server_module  # noqa: E402
+from kpu_debug.server import HOST, Live, make_server, parse_range  # noqa: E402
 
 MANIFEST = {"format": "kpu-mflow", "version": 4, "tables": {}}
 SUMMARY = b"memory subsystem: ...\n"
@@ -254,6 +258,218 @@ class ServerTest(unittest.TestCase):
             with self.subTest(viewer=name):
                 status, _, _ = self.get(f"/view/{name}/{v['page']}")
                 self.assertEqual(status, 200)
+
+
+    # -- Open in Perfetto ----------------------------------------------------
+    def test_every_trace_has_an_open_in_perfetto_button(self):
+        _, _, body = self.get("/")
+        page = body.decode("utf-8")
+        # The run's Perfetto export and the bare DRAM trace; nothing else is a trace.
+        buttons = re.findall(r'<button type="button" class="perfetto" data-url="([^"]*)" data-name="([^"]*)">', page)
+        self.assertEqual(sorted(buttons), [("/files/2026-11-25-mm64/trace.json", "2026-11-25-mm64/perfetto"),
+                                           ("/files/dram.json", "dram.json/dram.json")])
+        # The trace goes to Perfetto's origin only, after its PONG, and from the tab the click opened.
+        self.assertIn('const PERFETTO = "https://ui.perfetto.dev";', page)
+        self.assertIn('ev.origin !== PERFETTO || ev.source !== win || ev.data !== "PONG"', page)
+        self.assertIn("win.postMessage({ perfetto: { buffer,", page)
+
+    def test_each_row_names_its_run_for_the_live_list(self):
+        _, _, body = self.get("/")
+        self.assertIn(b'<tr data-id="2026-11-25-mm64">', body)
+        self.assertIn(b'<div class="panel" id="runs">', body)
+        self.assertIn(b'new EventSource("/api/events")', body)
+
+    def test_a_run_has_a_version_from_its_manifest(self):
+        _, _, body = self.get("/api/runs")
+        runs = {x["id"]: x for x in json.loads(body)["runs"]}
+        st = (self.root / "2026-11-25-mm64" / "run.json").stat()
+        self.assertEqual(runs["2026-11-25-mm64"]["version"], f"{st.st_mtime_ns:x}-{st.st_size:x}")
+        st = (self.root / "bare.mflow" / "manifest.json").stat()
+        self.assertEqual(runs["bare.mflow"]["version"], f"{st.st_mtime_ns:x}-{st.st_size:x}")
+
+
+def remove_tree(d):
+    """shutil.rmtree, retried: on Windows a file the poller has open for a moment cannot be removed."""
+    for _ in range(50):
+        try:
+            shutil.rmtree(d)
+            return
+        except PermissionError:
+            time.sleep(0.05)
+    shutil.rmtree(d)
+
+
+def run_json(device, status="ok", started="2026-11-25T12:00:00Z"):
+    return json.dumps({"format": "kpu-run", "version": 1, "kind": "memory-subsystem", "status": status,
+                       "device": device, "started": started, "artifacts": {"summary": "summary.txt"}})
+
+
+class ChangesTest(unittest.TestCase):
+    """core.changes: the events between two discoveries."""
+
+    def run_(self, id_, version):
+        return {"id": id_, "version": version, "artifacts": []}
+
+    def test_added_changed_and_removed(self):
+        before = [self.run_("a", "1"), self.run_("b", "1"), self.run_("c", "1")]
+        after = [self.run_("d", "1"), self.run_("b", "2"), self.run_("a", "1")]
+        self.assertEqual([(e, r["id"]) for e, r in core.changes(before, after)],
+                         [("run-added", "d"), ("run-changed", "b"), ("run-removed", "c")])
+        # A removed run is sent as it last was.
+        self.assertIs(core.changes(before, after)[-1][1], before[2])
+
+    def test_no_change_is_no_event(self):
+        runs = [self.run_("a", "1")]
+        self.assertEqual(core.changes(runs, [dict(r) for r in runs]), [])
+
+
+class LiveTest(unittest.TestCase):
+    """A run written while the server runs appears in /api/runs, and an event is sent (step 8)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="kpu-debug-live-"))
+        self.root = self.tmp / "runs"
+        self.root.mkdir()
+        self.srv = make_server(self.root, 0, poll=0.05)
+        self.port = self.srv.server_address[1]
+        self.thread = threading.Thread(target=self.srv.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def stream(self):
+        c = http.client.HTTPConnection(HOST, self.port, timeout=10)
+        c.request("GET", "/api/events")
+        r = c.getresponse()
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.getheader("Content-Type"), "text/event-stream; charset=utf-8")
+        self.assertEqual(r.getheader("Cache-Control"), "no-store")
+        self.addCleanup(c.close)
+        self.assertEqual(r.readline(), b"retry: 2000\n")   # sent once the stream is subscribed
+        self.assertEqual(r.readline(), b"\n")
+        return r
+
+    def next_event(self, r):
+        """The next event on stream `r`, as (name, data); comments are skipped."""
+        name, data = None, None
+        while True:
+            line = r.readline()
+            self.assertTrue(line, "the stream ended")
+            line = line.decode("utf-8").rstrip("\n")
+            if line.startswith(":"):
+                continue
+            if line.startswith("event: "):
+                name = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+            elif line == "" and name:
+                return name, data
+
+    def runs(self):
+        c = http.client.HTTPConnection(HOST, self.port, timeout=10)
+        c.request("GET", "/api/runs")
+        body = c.getresponse().read()
+        c.close()
+        return {x["id"]: x for x in json.loads(body)["runs"]}
+
+    def write_run(self, name, status="ok"):
+        d = self.root / name
+        d.mkdir(exist_ok=True)
+        (d / "summary.txt").write_bytes(SUMMARY)
+        tmp = d / "run.json.tmp"   # as kpu-run writes it: whole, then renamed into place
+        tmp.write_text(run_json("s1", status))
+        for _ in range(50):   # on Windows, not while the poller has run.json open for a moment
+            try:
+                os.replace(tmp, d / "run.json")
+                break
+            except PermissionError:
+                time.sleep(0.05)
+        else:
+            os.replace(tmp, d / "run.json")
+        return d
+
+    def test_a_run_written_while_serving_is_listed_and_sent(self):
+        r = self.stream()
+        self.assertEqual(self.runs(), {})
+        self.write_run("mm64", status="running")
+        name, data = self.next_event(r)
+        self.assertEqual((name, data["id"], data["run"]["status"]), ("run-added", "mm64", "running"))
+        self.assertEqual(data["run"]["artifacts"][0]["url"], "/files/mm64/summary.txt")
+        self.assertEqual(self.runs()["mm64"]["status"], "running")
+        # Rewritten when it finishes: a change, with the run's new manifest.
+        time.sleep(0.01)   # a distinct mtime on coarse filesystems; the size differs anyway
+        self.write_run("mm64", status="ok")
+        name, data = self.next_event(r)
+        self.assertEqual((name, data["id"], data["run"]["status"]), ("run-changed", "mm64", "ok"))
+        self.assertEqual(self.runs()["mm64"]["status"], "ok")
+        # Removed: sent as it last was, so a view can tell it was its run.
+        remove_tree(self.root / "mm64")
+        name, data = self.next_event(r)
+        self.assertEqual((name, data["id"], data["run"]["status"]), ("run-removed", "mm64", "ok"))
+        self.assertEqual(self.runs(), {})
+
+    def test_a_bare_bundle_written_while_serving_is_sent(self):
+        r = self.stream()
+        b = self.root / "memsim.mflow"
+        b.mkdir()
+        (b / "manifest.json").write_text(json.dumps(MANIFEST))
+        name, data = self.next_event(r)
+        self.assertEqual((name, data["id"], data["run"]["kind"]), ("run-added", "memsim.mflow", "mflow"))
+
+    def test_every_stream_is_sent_every_event(self):
+        a, b = self.stream(), self.stream()
+        self.write_run("two")
+        self.assertEqual(self.next_event(a)[1]["id"], "two")
+        self.assertEqual(self.next_event(b)[1]["id"], "two")
+
+    def test_head_opens_no_stream(self):
+        c = http.client.HTTPConnection(HOST, self.port, timeout=10)
+        c.request("HEAD", "/api/events")
+        r = c.getresponse()
+        self.assertEqual((r.status, r.read()), (200, b""))
+        c.close()
+        self.assertEqual(self.srv.live.subscribers, set())
+
+    def test_the_stream_ends_when_the_server_closes(self):
+        r = self.stream()
+        self.srv.live.close()
+        deadline = time.monotonic() + 5
+        while r.readline():
+            self.assertLess(time.monotonic(), deadline)
+        self.assertEqual(self.srv.live.subscribers, set())
+
+    def test_a_client_that_goes_is_unsubscribed(self):
+        c = http.client.HTTPConnection(HOST, self.port, timeout=10)
+        c.request("GET", "/api/events")
+        c.getresponse().readline()
+        self.assertEqual(len(self.srv.live.subscribers), 1)
+        c.close()
+        # Its handler finds out on its next write: an event, or the keep-alive.
+        self.write_run("after")
+        deadline = time.monotonic() + 5
+        while self.srv.live.subscribers and time.monotonic() < deadline:
+            self.write_run("after-" + str(int((deadline - time.monotonic()) * 100)))
+            time.sleep(0.1)
+        self.assertEqual(self.srv.live.subscribers, set())
+
+
+class BacklogTest(unittest.TestCase):
+    def test_a_subscriber_that_falls_behind_is_dropped(self):
+        tmp = Path(tempfile.mkdtemp(prefix="kpu-debug-backlog-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        live = Live(tmp)   # not started: publish by hand
+        slow, fast = live.subscribe(), live.subscribe()
+        for i in range(server_module.BACKLOG):
+            live.publish(("run-added", {"id": str(i)}))
+            fast.events.get_nowait()
+        self.assertFalse(slow.dropped)
+        live.publish(("run-added", {"id": "one too many"}))
+        self.assertTrue(slow.dropped)
+        self.assertEqual(live.subscribers, {fast})
+        self.assertEqual(fast.events.get_nowait()[1]["id"], "one too many")
 
 
 if __name__ == "__main__":
