@@ -9,8 +9,6 @@ traces/
 ├── README.md                       # This file
 └── memory/
     ├── lpddr5/                     # LPDDR5 memory controller traces
-    │   ├── tools/                  # Visualization tools
-    │   │   └── blockdiagram.html   # Animated block diagram
     │   ├── single-bank/            # Level 1: Single bank patterns
     │   │   ├── page_hits_trace.json
     │   │   ├── page_conflicts_trace.json
@@ -150,16 +148,14 @@ Maximum throughput characterization.
 
 ### Web-Based Viewers
 
-The DRAM views are moving to `tools/visualization/dram/`, rebuilt on `.mflow` records
-(`docs/plans/cycle-mflow-and-debug-server.md` step 9). The timing diagram has moved:
-`tools/visualization/dram/timing.html`, the bank analyzer `tools/visualization/dram/bank_analyzer.html`, and the request swimlanes
-`tools/visualization/dram/swimlane.html`.
+The LPDDR5 DRAM views live in `tools/visualization/dram/`, rebuilt on `.mflow` records
+(`docs/plans/cycle-mflow-and-debug-server.md` step 9): the timing diagram (`timing.html`), the
+bank analyzer (`bank_analyzer.html`), the request swimlanes (`swimlane.html`) and the memory
+block diagram (`blockdiagram.html`). Open them from the debug server, or pack one with a bundle:
+`python3 tools/visualization/dram/pack.py <view> <bundle.mflow> -o view.html`.
 
-Located in `traces/memory/{lpddr5,gddr6}/tools/`:
-
-| Tool | Description | Best For |
-|------|-------------|----------|
-| `blockdiagram.html` | Animated architecture | Data flow visualization |
+The GDDR6 views, still on Chrome DRAM traces, are in `traces/memory/gddr6/tools/`:
+`timing.html`, `bank_analyzer.html`, `swimlane.html` and `blockdiagram.html`.
 
 ### CLI Tools
 
