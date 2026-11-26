@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRAM Timing Diagram</title>
+<!--
+  tools/visualization/dram/timing.html -- the DRAM timing diagram
+  (docs/plans/cycle-mflow-and-debug-server.md §3.5, step 9a).
+
+  Classic waveforms of a .mflow record's DRAM side, per channel (mc, ch), on the controller's
+  clock ticks: the command bus, each bank's state (closed, activating, the open row,
+  precharging, refreshing) with its CAS commands, and the data bus. Select a burst to see the
+  commands that served it and the timing around its CAS, measured against the device's own
+  table (the manifest's dram_timing), as mflow_check.py's M5 checks it.
+
+  Everything comes from the record, through ../common/mflow.js (the reader) and
+  ../common/dram.js (channels, banks, states, chains, timing). Nothing is inferred from names.
+
+  Open this file and choose the bundle's folder (or drop its files), or open it as
+  timing.html?bundle=<url of the bundle's directory> from a server; pack.py embeds a bundle. A
+  moment can be shared as a link: ?ch=<mc0/ch0>&burst=<n>&t=<tick>&zoom=<ticks shown>.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+:root {
+  --bg: #f4f5f6; --panel: #fcfcfb; --ink: #15181c; --ink-2: #4a5059; --ink-3: #7b828c;
+  --line: #d9dce0; --grid: #e8eaed; --lane: #f0f2f4;
+  --act: #2f9e6e; --rd: #2a78d6; --wr: #d9822b; --pre: #8a919b; --ref: #8e5bd0;
+  --open: #d7e9df; --crit: #d03b3b; --accent: #2a5db0; --sel: #15181c;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --lane: #1f2226;
+    --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6;
+    --open: #1f3a2d; --crit: #ef6b6b; --accent: #7aa7ea; --sel: #eef0f2;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --lane: #1f2226;
+    --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6;
+    --open: #1f3a2d; --crit: #ef6b6b; --accent: #7aa7ea; --sel: #eef0f2;
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1500px; margin: 0 auto; padding: 18px 16px 60px; display: grid; gap: 16px; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 13px; margin: 0; color: var(--ink-2); font-weight: 600; }
+.sub { color: var(--ink-2); max-width: 95ch; margin: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .row2 { grid-template-columns: minmax(0, 1fr); } }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px var(--font-data); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.load { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 10px; }
+.load.drag { border-color: var(--accent); }
+.transport { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; position: sticky; top: 0; z-index: 4; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
+button, select, input[type=number] { font: 13px var(--font-ui); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; }
+button, select { cursor: pointer; }
+button:hover { border-color: var(--ink-3); }
+input[type=number] { width: 9ch; font-family: var(--font-data); }
+label { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 5px; align-items: center; }
+.clock { font: 13px var(--font-data); }
+canvas { display: block; width: 100%; touch-action: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; border: 1px solid var(--line); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font: 12px var(--font-data); }
+.kv span:nth-of-type(odd) { color: var(--ink-3); }
+.kv .h { grid-column: 1 / -1; color: var(--ink-2); font: 600 12px var(--font-ui); margin-top: 6px; }
+table.t { border-collapse: collapse; font: 12px var(--font-data); width: 100%; }
+table.t th, table.t td { text-align: right; padding: 2px 8px; border-bottom: 1px solid var(--line); }
+table.t th:first-child, table.t td:first-child { text-align: left; }
+table.t th { color: var(--ink-3); font-weight: 400; }
+td.bad { color: var(--crit); font-weight: 600; }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font: 12px var(--font-data); box-shadow: 0 4px 16px rgba(0,0,0,.18); max-width: 380px; white-space: pre; }
+.note { font-size: 12px; color: var(--ink-3); }
+code { font: 12px var(--font-data); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>DRAM timing diagram</h1>
+    <p class="sub">The command bus, each bank's state and the data bus of a channel, tick by tick, from a
+      <code>.mflow</code> record (<code>kpu-run --memory-mflow</code>, <code>kpu-memsim --out</code>). Select a
+      burst to see the commands that served it, and the timing around them against the device's own table.</p>
+  </header>
+
+  <section class="load" id="load">
+    <div><label>Bundle folder <input type="file" id="pick" webkitdirectory multiple></label></div>
+    <p class="note">Or drop the bundle's files here. Served by the debug server, the page reads <code>?bundle=</code>.</p>
+    <p class="note" id="loadMsg"></p>
+  </section>
+<!--MFLOW_EMBED-->
+
+  <section class="panel" id="summary" hidden>
+    <div class="chips" id="chips"></div>
+    <p class="note" id="timingNote"></p>
+  </section>
+
+  <div class="transport" id="transport" hidden>
+    <select id="chan" aria-label="channel"></select>
+    <button id="prev" title="previous burst (←)">◀ burst</button>
+    <input type="number" id="burstNo" min="0" aria-label="burst">
+    <button id="next" title="next burst (→)">burst ▶</button>
+    <button id="fit">Burst</button>
+    <button id="zoomOut">Zoom out</button>
+    <button id="whole">Whole run</button>
+    <label><input type="checkbox" id="idle"> idle banks</label>
+    <span class="clock" id="clock"></span>
+  </div>
+
+  <section class="panel" id="diagram" hidden>
+    <h2>Waveforms (drag or wheel to zoom in, "Zoom out" to zoom out, click a command or a burst to select it)</h2>
+    <canvas id="cv" height="400"></canvas>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <div class="row2" id="lower" hidden>
+    <section class="panel"><h2>Selected burst</h2><div id="inspect" class="kv"></div><div id="gapsBox"></div></section>
+    <section class="panel"><h2>The device's timing table (ticks)</h2><div id="params"></div></section>
+  </div>
+</div>
+<div class="tip" id="tip" hidden></div>
+<script src="../common/mflow.js"></script>
+<script src="../common/dram.js"></script>
+<script src="../common/live.js"></script>
+<script>
+(function () {
+"use strict";
+const $ = id => document.getElementById(id);
+const { NONE, OUTCOME, REQKIND } = Mflow;
+const { ACT, RD, WR, PRE, REF, CMD } = Dram;
+
+// ------------------------------------------------------------------ pure helpers (tested)
+// A tick axis step: 1, 2 or 5 times a power of ten, about `px` pixels apart at `perTick` px/tick.
+function niceStep(perTick, px) {
+  const raw = px / Math.max(perTick, 1e-9);
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))));
+  for (const m of [1, 2, 5, 10]) if (m * p >= raw) return m * p;
+  return 10 * p;
+}
+
+// The view a link asks for, clamped to the run: { t, zoom, burst, ch } from ?t=&zoom=&burst=&ch=.
+function viewFromQuery(search, end) {
+  const q = new URLSearchParams(search);
+  const num = k => { const v = Number(q.get(k)); return q.has(k) && Number.isFinite(v) ? v : null; };
+  const zoom = num("zoom");
+  const t = num("t");
+  const burst = num("burst");
+  return {
+    zoom: zoom !== null && zoom >= 4 ? Math.min(zoom, Math.max(end, 4)) : null,
+    t: t !== null ? Math.min(Math.max(t, 0), end) : null,
+    burst: burst !== null && Number.isInteger(burst) && burst >= 0 ? burst : null,
+    ch: q.get("ch"),
+  };
+}
+
+// Whether a bank served anything: an ACT, a CAS or a PRE (a bank that only refreshes is idle).
+function busy(R, bank) {
+  return bank.cmds.some(i => R.C.kind[i] !== REF);
+}
+
+// The ticks a burst's view fits, from its gaps (Dram.gaps): its CAS to the end of its data, and
+// before it the row's ACT, and the PRE or REF before that, each only while it is near (within four
+// times its parameter): a hit's row may have opened thousands of ticks earlier, and the commands
+// around it are left to zooming out, as are tRAS and tRC.
+function burstSpan(gaps) {
+  const g = n => gaps.find(x => x.name === n);
+  const data = g("tBurst");
+  if (!data) return null;
+  const cas = g("tCL") || g("tWL");
+  let a = cas ? cas.a : data.a;
+  const rcd = g("tRCD");
+  if (rcd && rcd.measured <= 4 * rcd.required) {
+    a = rcd.a;
+    const before = g("tRP") || g("tRFCpb");
+    if (before && before.measured <= 4 * before.required) a = before.a;
+  }
+  return [a, data.b];
+}
+
+// The CAS commands of a channel's command list, by issue tick: the bursts it serves, in order.
+function casOf(R, cmds) {
+  return cmds.filter(i => R.C.kind[i] === RD || R.C.kind[i] === WR);
+}
+
+// ------------------------------------------------------------------ state
+let R = null, X = null, chan = null, cas = [], sel = null;   // sel: a burst index
+let viewA = 0, viewB = 1, cursor = null;
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const COL = {};
+function colours() {
+  for (const k of ["ink", "ink-2", "ink-3", "line", "grid", "lane", "act", "rd", "wr", "pre", "ref", "open", "crit", "sel", "panel"])
+    COL[k] = css("--" + k);
+}
+const KIND_COL = k => [COL.act, COL.rd, COL.wr, COL.pre, COL.ref][k];
+const STATE_COL = s => ({ activating: COL.act, open: COL.open, precharging: COL.pre, refreshing: COL.ref }[s] || null);
+const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// ------------------------------------------------------------------ loading
+async function loadFrom(source) {
+  $("loadMsg").textContent = "Reading…";
+  try { R = await Mflow.open(source); start(); }
+  catch (e) { $("loadMsg").textContent = "Could not read the bundle: " + e.message; }
+}
+$("pick").addEventListener("change", e => loadFrom(e.target.files));
+const drop = $("load");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drag"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("drag"); loadFrom(e.dataTransfer.files); });
+
+function start() {
+  X = Dram.model(R);
+  if (!X.channels.length) { $("loadMsg").textContent = "The record has no DRAM channel."; return; }
+  const m = R.m;
+  $("load").hidden = true;
+  for (const id of ["summary", "transport", "diagram", "lower"]) $(id).hidden = false;
+  const chip = (k, v) => `<span class="chip">${esc(k)} <b>${esc(v)}</b></span>`;
+  const n = [0, 0, 0, 0, 0];
+  for (let i = 0; i < R.C.rows; i++) n[R.C.kind[i]]++;
+  $("chips").innerHTML = [chip("device", m.device), chip("source", m.source || "-"),
+    chip("unit", X.unit), chip("ticks per cycle", X.ticksPerCycle), chip("run", X.end + " ticks"),
+    chip("channels", X.channels.length), chip("bursts", R.B.rows),
+    chip("ACT / RD / WR / PRE / REF", n.join(" / "))].join("");
+  $("timingNote").textContent = m.timing_note ? "DRAM timing: " + m.timing_note : "";
+  $("chan").innerHTML = X.channels.map((c, i) => `<option value="${i}">${esc(c.key)} (${c.cmds.length} commands)</option>`).join("");
+  $("params").innerHTML = '<table class="t"><tr><th>parameter</th><th>ticks</th><th>cycles</th></tr>' +
+    Object.entries(X.params).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td><td>${(v / X.ticksPerCycle).toFixed(2)}</td></tr>`).join("") + "</table>";
+  $("legend").innerHTML = [["ACT", "act"], ["RD", "rd"], ["WR", "wr"], ["PRE", "pre"], ["REF", "ref"], ["row open", "open"]]
+    .map(([t, v]) => `<span><span class="sw" style="background:var(--${v})"></span>${t}</span>`).join("") +
+    '<span>brackets: the selected burst\'s timing, red if under the table</span>';
+  colours();
+  const q = viewFromQuery(location.search, X.end);
+  const ci = Math.max(0, X.channels.findIndex(c => c.key === q.ch));
+  setChannel(ci, false);
+  if (q.burst !== null && q.burst < R.B.rows) select(q.burst, q.zoom === null);
+  else if (cas.length) select(R.C.burst[cas[0]], true);
+  if (q.zoom !== null) { const c = q.t !== null ? q.t : (viewA + viewB) / 2; setView(c - q.zoom / 2, c + q.zoom / 2); }
+  if (q.t !== null) cursor = q.t;
+  draw();
+}
+
+function setChannel(i, redraw = true) {
+  chan = X.channels[i];
+  $("chan").value = String(i);
+  cas = casOf(R, chan.cmds);
+  $("burstNo").max = String(R.B.rows - 1);
+  if (redraw) { setView(0, X.end); draw(); }
+}
+
+// ------------------------------------------------------------------ the view
+function setView(a, b) {
+  const span = Math.max(4, b - a);
+  a = Math.max(0, Math.min(a, X.end - span));
+  viewA = a; viewB = Math.min(X.end, a + span);
+  if (viewB - viewA < 4) viewB = viewA + 4;
+  share();
+}
+let shareTimer = 0;
+function share() {   // the view, as a link: ?ch=&burst=&t=&zoom= (kept with ?bundle=)
+  clearTimeout(shareTimer);
+  shareTimer = setTimeout(() => {
+    const q = new URLSearchParams(location.search);
+    q.set("ch", chan.key);
+    if (sel !== null) q.set("burst", String(sel)); else q.delete("burst");
+    q.set("t", String(Math.round(cursor !== null ? cursor : (viewA + viewB) / 2)));
+    q.set("zoom", String(Math.round(viewB - viewA)));
+    try { history.replaceState(null, "", "?" + q.toString()); } catch (e) { /* a file:// page may refuse */ }
+  }, 250);
+}
+
+function select(b, fit) {
+  sel = b;
+  $("burstNo").value = String(b);
+  const c = X.channels.findIndex(c => c.mc === R.B.mc[b] && c.ch === R.B.channel[b]);
+  if (c >= 0 && X.channels[c] !== chan) setChannel(c, false);
+  if (fit) fitBurst();
+  inspect();
+  share();
+}
+function fitBurst() {
+  if (sel === null) return;
+  const span = burstSpan(Dram.gaps(R, X, sel));
+  if (!span) return;
+  const [a, b] = span, pad = Math.max(8, (b - a) * 0.25);
+  setView(a - pad, b + pad);
+}
+function step(d) {
+  if (!cas.length) return;
+  let k = sel === null ? -1 : cas.findIndex(i => R.C.burst[i] === sel);
+  k = Math.max(0, Math.min(cas.length - 1, k + d));
+  select(R.C.burst[cas[k]], true);
+  draw();
+}
+
+// ------------------------------------------------------------------ drawing
+const LABEL_W = 92, AXIS_H = 22, CMD_H = 30, BANK_H = 20, DQ_H = 30, GAP_ROW = 16;
+let rows = [];   // [{ kind, y, h, bank }]
+function layout() {
+  rows = [];
+  let y = AXIS_H;
+  rows.push({ kind: "cmd", y, h: CMD_H }); y += CMD_H;
+  const showIdle = $("idle").checked;
+  for (const b of chan.banks) {
+    if (!showIdle && !busy(R, b)) continue;
+    rows.push({ kind: "bank", y, h: BANK_H, bank: b }); y += BANK_H;
+  }
+  rows.push({ kind: "dq", y, h: DQ_H }); y += DQ_H;
+  const ng = sel === null ? 0 : Dram.gaps(R, X, sel).length;
+  rows.push({ kind: "gaps", y, h: Math.max(1, ng) * GAP_ROW + 10 }); y += Math.max(1, ng) * GAP_ROW + 10;
+  return y + 4;
+}
+
+const cv = $("cv"), ctx = cv.getContext("2d");
+function draw() {
+  if (!X) return;
+  const H = layout();
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const per = (W - LABEL_W) / (viewB - viewA);
+  const x = t => LABEL_W + (t - viewA) * per;
+  ctx.font = "11px " + css("--font-data");
+  ctx.textBaseline = "middle";
+
+  // grid and axis
+  const s = niceStep(per, 70);
+  ctx.fillStyle = COL["ink-3"]; ctx.strokeStyle = COL.grid; ctx.lineWidth = 1;
+  for (let t = Math.ceil(viewA / s) * s; t <= viewB; t += s) {
+    const px = Math.round(x(t)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(px, AXIS_H); ctx.lineTo(px, H); ctx.stroke();
+    ctx.fillText(String(t), px + 2, 10);
+  }
+  for (const r of rows) {   // lanes and labels
+    ctx.fillStyle = COL.lane; ctx.fillRect(LABEL_W, r.y + 1, W - LABEL_W, r.h - 2);
+    ctx.fillStyle = COL["ink-2"];
+    const lab = r.kind === "cmd" ? "CMD bus" : r.kind === "dq" ? "DQ (data)" : r.kind === "gaps" ? "timing" : r.bank.key;
+    ctx.fillText(lab, 6, r.y + r.h / 2);
+  }
+  ctx.save(); ctx.beginPath(); ctx.rect(LABEL_W, 0, W - LABEL_W, H); ctx.clip();
+  const chainSet = new Set(sel === null ? [] : Dram.chain(R, sel));
+  const lo = Dram.firstAt(R, chan.cmds, viewA - 400), wide = per >= 16;
+  for (const r of rows) {
+    if (r.kind === "bank") {
+      for (const st of r.bank.states) {
+        if (st.to < viewA || st.from > viewB) continue;
+        const c = STATE_COL(st.s);
+        if (!c) continue;
+        ctx.fillStyle = c; ctx.globalAlpha = st.s === "open" ? 1 : 0.55;
+        ctx.fillRect(x(st.from), r.y + 3, Math.max(1, x(st.to) - x(st.from)), r.h - 6);
+        ctx.globalAlpha = 1;
+        if (st.s === "open" && x(st.to) - x(st.from) > 50) {
+          ctx.fillStyle = COL["ink-2"];
+          ctx.fillText("row " + st.row, Math.max(x(st.from), LABEL_W) + 4, r.y + r.h / 2);
+        }
+      }
+    }
+  }
+  for (let j = lo; j < chan.cmds.length; j++) {
+    const i = chan.cmds[j], t = Dram.tick(R, i, "issue");
+    if (t > viewB) break;
+    const k = R.C.kind[i], w = Math.max(2, per);
+    const mine = chainSet.has(i);
+    // the command bus
+    const cr = rows[0];
+    ctx.fillStyle = KIND_COL(k);
+    ctx.fillRect(x(t), cr.y + 6, w, cr.h - 12);
+    if (mine) { ctx.strokeStyle = COL.sel; ctx.lineWidth = 2; ctx.strokeRect(x(t) - 1, cr.y + 4, w + 2, cr.h - 8); }
+    if (wide) { ctx.fillStyle = COL.panel; ctx.fillText(CMD[k], x(t) + 2, cr.y + cr.h / 2); }
+    // its bank: a CAS as a mark (states carry ACT, PRE and REF)
+    const br = rows.find(r => r.kind === "bank" && r.bank.bg === R.C.bank_group[i] && r.bank.ba === R.C.bank[i]);
+    if (br && (k === RD || k === WR)) {
+      ctx.fillStyle = KIND_COL(k); ctx.fillRect(x(t), br.y + 2, Math.max(2, per), br.h - 4);
+      if (mine) { ctx.strokeStyle = COL.sel; ctx.lineWidth = 2; ctx.strokeRect(x(t) - 1, br.y + 1, Math.max(2, per) + 2, br.h - 2); }
+    }
+    // the data bus
+    if (k === RD || k === WR) {
+      const d0 = Dram.tick(R, i, "data0"), d1 = Dram.tick(R, i, "data1"), dr = rows.find(r => r.kind === "dq");
+      ctx.fillStyle = KIND_COL(k); ctx.globalAlpha = 0.75;
+      ctx.fillRect(x(d0), dr.y + 6, Math.max(1, x(d1) - x(d0)), dr.h - 12);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.panel; ctx.fillRect(x(d0), dr.y + 6, 1, dr.h - 12);   // back-to-back bursts stay apart
+      if (mine) { ctx.strokeStyle = COL.sel; ctx.lineWidth = 2; ctx.strokeRect(x(d0), dr.y + 4, x(d1) - x(d0), dr.h - 8); }
+      if (x(d1) - x(d0) > 34) { ctx.fillStyle = COL.panel; ctx.fillText("b" + R.C.burst[i], x(d0) + 3, dr.y + dr.h / 2); }
+    }
+  }
+  // the selected burst's timing brackets
+  if (sel !== null) {
+    const gr = rows.find(r => r.kind === "gaps");
+    Dram.gaps(R, X, sel).forEach((g, n) => {
+      const y = gr.y + 6 + n * GAP_ROW + GAP_ROW / 2;
+      ctx.strokeStyle = g.ok ? COL.ink : COL.crit; ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(x(g.a), y - 4); ctx.lineTo(x(g.a), y); ctx.lineTo(x(g.b), y); ctx.lineTo(x(g.b), y - 4); ctx.stroke();
+      ctx.fillText(`${g.name} ${g.measured}${g.ok ? " ≥ " : " < "}${g.required}`, Math.max(LABEL_W, x(g.b)) + 4, y);
+    });
+  }
+  if (cursor !== null && cursor >= viewA && cursor <= viewB) {
+    ctx.strokeStyle = COL.crit; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(Math.round(x(cursor)) + 0.5, AXIS_H); ctx.lineTo(Math.round(x(cursor)) + 0.5, H); ctx.stroke();
+  }
+  ctx.restore();
+  const cyc = t => (t / X.ticksPerCycle).toFixed(1);
+  $("clock").textContent = `ticks ${Math.round(viewA)}–${Math.round(viewB)} (cycles ${cyc(viewA)}–${cyc(viewB)})` +
+    (cursor !== null ? ` · cursor ${Math.round(cursor)}` : "");
+}
+
+// ------------------------------------------------------------------ the inspector
+function inspect() {
+  if (sel === null) { $("inspect").innerHTML = ""; $("gapsBox").innerHTML = ""; return; }
+  const B = R.B, b = sel, q = B.request[b];
+  const kv = (k, v) => `<span>${esc(k)}</span><span>${esc(v)}</span>`;
+  let h = kv("burst", b) + kv("direction", B.is_load[b] ? "read" : "write") +
+    kv("bank", `mc${B.mc[b]}/ch${B.channel[b]}/bg${B.bank_group[b]}/ba${B.bank[b]}`) +
+    kv("row / col", `${B.row[b]} / ${B.col[b]}`) + kv("page", OUTCOME[B.outcome[b]]);
+  if (q !== NONE) {
+    h += '<div class="h">its request</div>' + kv("request", q) + kv("kind", REQKIND[R.Q.kind[q]]) +
+      kv("engine", R.Q.engine[q]) + kv("bytes", R.Q.bytes[q]) +
+      kv("action (ticket)", R.Q.ticket[q] === NONE ? "-" : R.Q.ticket[q]) + kv("L3 slot", R.Q.slot[q] === NONE ? "-" : R.Q.slot[q]);
+  }
+  h += '<div class="h">its commands (ticks)</div>';
+  for (const i of Dram.chain(R, b)) {
+    const k = R.C.kind[i];
+    h += kv(CMD[k], `issue ${Dram.tick(R, i, "issue")}, end ${Dram.tick(R, i, "end")}` +
+      (k === RD || k === WR ? `, data ${Dram.tick(R, i, "data0")}–${Dram.tick(R, i, "data1")}` : "") +
+      (k === ACT || k === PRE ? `, row ${R.C.row[i]}` : ""));
+  }
+  $("inspect").innerHTML = h;
+  const g = Dram.gaps(R, X, b);
+  $("gapsBox").innerHTML = g.length ? '<table class="t"><tr><th>timing</th><th>from → to</th><th>measured</th><th>required</th></tr>' +
+    g.map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.from)} → ${esc(x.to)}</td><td class="${x.ok ? "" : "bad"}">${x.measured}</td><td>${x.required}</td></tr>`).join("") + "</table>" : "";
+}
+
+// ------------------------------------------------------------------ interaction
+function tickAt(px) { return viewA + (px - LABEL_W) * (viewB - viewA) / (cv.clientWidth - LABEL_W); }
+function hit(px, py) {   // the command (or burst) under a point: { i } or null
+  const t = tickAt(px), per = (cv.clientWidth - LABEL_W) / (viewB - viewA), slack = 4 / per;
+  const row = rows.find(r => py >= r.y && py < r.y + r.h);
+  if (!row || px < LABEL_W) return null;
+  const lo = Dram.firstAt(R, chan.cmds, t - 64 - slack);
+  for (let j = lo; j < chan.cmds.length; j++) {
+    const i = chan.cmds[j], a = Dram.tick(R, i, "issue");
+    if (a > t + slack) break;
+    const k = R.C.kind[i];
+    if (row.kind === "cmd" && t >= a - slack && t <= a + 1 + slack) return i;
+    if (row.kind === "bank" && (k === RD || k === WR) && row.bank.bg === R.C.bank_group[i] && row.bank.ba === R.C.bank[i] &&
+        t >= a - slack && t <= a + 1 + slack) return i;
+  }
+  if (row.kind === "dq") {
+    for (const i of cas) if (t >= Dram.tick(R, i, "data0") && t < Dram.tick(R, i, "data1")) return i;
+  }
+  return null;
+}
+let drag = null;
+cv.addEventListener("pointerdown", e => { drag = { x: e.offsetX, a: viewA, b: viewB, moved: false }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", e => {
+  if (drag) {
+    const dx = e.offsetX - drag.x;
+    if (Math.abs(dx) > 3) drag.moved = true;
+    if (drag.moved) { const d = dx * (drag.b - drag.a) / (cv.clientWidth - LABEL_W); setView(drag.a - d, drag.b - d); draw(); }
+    return;
+  }
+  const i = hit(e.offsetX, e.offsetY), tip = $("tip");
+  if (i === null) { tip.hidden = true; return; }
+  const k = R.C.kind[i];
+  tip.textContent = `${CMD[k]} #${i}  mc${R.C.mc[i]}/ch${R.C.channel[i]}/bg${R.C.bank_group[i]}/ba${R.C.bank[i]}  row ${R.C.row[i]}\n` +
+    `issue ${Dram.tick(R, i, "issue")}  end ${Dram.tick(R, i, "end")}` +
+    (k === RD || k === WR ? `  data ${Dram.tick(R, i, "data0")}–${Dram.tick(R, i, "data1")}` : "") +
+    (R.C.burst[i] !== NONE ? `\nburst ${R.C.burst[i]} (${OUTCOME[R.B.outcome[R.C.burst[i]]]})` : "\nmaintenance (no burst)");
+  tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 12) + "px"; tip.hidden = false;
+});
+cv.addEventListener("pointerleave", () => { $("tip").hidden = true; });
+cv.addEventListener("pointerup", e => {
+  const d = drag; drag = null;
+  if (!d || d.moved) return;
+  cursor = tickAt(e.offsetX);
+  const i = hit(e.offsetX, e.offsetY);
+  if (i !== null && R.C.burst[i] !== NONE) select(R.C.burst[i], false);
+  share(); draw();
+});
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const t = tickAt(e.offsetX), f = Math.exp(e.deltaY * 0.0015);
+  setView(t - (t - viewA) * f, t + (viewB - t) * f); draw();
+}, { passive: false });
+$("chan").addEventListener("change", e => { setChannel(Number(e.target.value)); sel = null; inspect(); });
+$("prev").addEventListener("click", () => step(-1));
+$("next").addEventListener("click", () => step(1));
+$("fit").addEventListener("click", () => { fitBurst(); draw(); });
+$("whole").addEventListener("click", () => { setView(0, X.end); draw(); });
+$("zoomOut").addEventListener("click", () => { const c = (viewA + viewB) / 2, s = (viewB - viewA) * 2; setView(c - s / 2, c + s / 2); draw(); });
+$("idle").addEventListener("change", draw);
+$("burstNo").addEventListener("change", e => {
+  const b = Number(e.target.value);
+  if (Number.isInteger(b) && b >= 0 && b < R.B.rows) { select(b, true); draw(); }
+});
+document.addEventListener("keydown", e => {
+  if (!X || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "ArrowLeft") step(-1); else if (e.key === "ArrowRight") step(1);
+});
+window.addEventListener("resize", draw);
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { colours(); draw(); });
+
+// An embedded bundle (pack.py) loads at once; so does one a server names (?bundle=<url>).
+const served = new URLSearchParams(location.search).get("bundle");
+if (window.MFLOW_EMBED) loadFrom(window.MFLOW_EMBED);
+else if (served) {
+  // Only a bundle on this page's own server: a link must not point the page at another site.
+  const url = new URL(served, location.href);
+  if (url.origin === location.origin) {
+    loadFrom(url.href);
+    if (window.MflowLive) MflowLive.watch("bundle");   // the debug server's reload bar
+  } else $("loadMsg").textContent = "Not reading " + url.origin + ": ?bundle= names a bundle on this page's server";
+}
+
+// For tests (test_views.py runs these under Node): the pure helpers.
+if (typeof module !== "undefined") module.exports = { niceStep, viewFromQuery, casOf, busy, burstSpan };
+})();
+</script>
+</body>
+</html>

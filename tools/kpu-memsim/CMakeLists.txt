@@ -83,6 +83,12 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/t4_mixed.mflow)
         set_tests_properties(memflow_viewer_smoke PROPERTIES DEPENDS kpu_memsim_t4
             LABELS "memside;dram;tools")
+        # The DRAM views (plan step 9) on the T4 run: two channels, 32 banks.
+        add_test(NAME dram_views_t4
+            COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/dram/test_views.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/t4_mixed.mflow)
+        set_tests_properties(dram_views_t4 PROPERTIES DEPENDS kpu_memsim_t4
+            LABELS "memside;dram;tools;viewer")
 
         # The checker (plan step 4): the T4 run holds every invariant, and each check fails on
         # a bundle that breaks it.

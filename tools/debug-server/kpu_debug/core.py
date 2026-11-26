@@ -29,6 +29,10 @@ REPO = Path(__file__).resolve().parents[3]
 VIEWERS = {
     "memflow": {"dir": REPO / "tools" / "visualization" / "memflow", "page": "index.html",
                 "title": "Memory-side debugger", "reads": "mflow", "param": "bundle"},
+    # The DRAM views (step 9) share one directory; each is a viewer of its own. A page's
+    # ../common/ still resolves to /view/common/.
+    "dram-timing": {"dir": REPO / "tools" / "visualization" / "dram", "page": "timing.html",
+                    "title": "DRAM timing diagram", "reads": "mflow", "param": "bundle"},
     "tileflow": {"dir": REPO / "tools" / "visualization" / "tileflow", "page": "index.html",
                  "title": "Tile-flow viewer", "reads": None, "param": None},
     "occupancy": {"dir": REPO / "tools" / "visualization" / "occupancy", "page": "index.html",
