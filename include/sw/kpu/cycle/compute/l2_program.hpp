@@ -149,11 +149,15 @@ struct L2RowData {
 };
 
 // The tile-ready token, L2 -> Streamer: slot `slot` is READY with `tile`, its Move's last row
-// written. The Streamer fires a command only when it holds the tokens of both its operands.
+// written. It admits `feeds` commands' reads of this residency, the program's Feeds of it, and no
+// more: the Streamer spends one per command that reads the operand, and drops the token when none is
+// left, so a later residency of the same tile is admitted only by its own token (CodeRabbit, #593).
+// The Streamer fires a command only when it holds a token for each of its operands.
 struct SlotReady {
     std::uint64_t id = 0;
     std::uint32_t slot = 0;
     TileID tile{};
+    std::uint32_t feeds = 0;
 };
 
 // --- what moves between the BlockMover and L3 -----------------------------------------------------

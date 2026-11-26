@@ -13,7 +13,8 @@
 //
 // WHEN A COMMAND FIRES (streamer.py:408-414), at clock a:
 //   - the Streamer holds the tile-ready tokens of both its operands (SlotReady, from the L2: the tag
-//     CAM): it waits for its tiles, never reads early;
+//     CAM): it waits for its tiles, never reads early. A token admits its residency's Feeds, one per
+//     command, and is dropped when they are spent: it never admits a later residency of the tile;
 //   - the previous command's interval has passed: a >= a_prev + I_prev, I = max(K, h, w). This is
 //     what keeps the L1 credit: lane m's next block lands in the clock its last element leaves.
 //
@@ -128,8 +129,13 @@ public:
         // The tile-ready tokens: a slot's latest tile.
         while (ready_->can_pop(now)) {
             const SlotReady t = ready_->pop(now);
-            if (t.slot >= config_.slots) throw std::logic_error(where(now) + ": a token for slot " + std::to_string(t.slot));
-            tokens_[t.slot] = t.tile;
+            if (t.slot >= config_.slots || t.feeds == 0 || tokens_[t.slot])
+                throw std::logic_error(where(now) + ": a token for slot " + std::to_string(t.slot) + " (" +
+                                       t.tile.to_string() + ", " + std::to_string(t.feeds) + " Feeds)" +
+                                       (tokens_.size() > t.slot && tokens_[t.slot]
+                                            ? ", which still holds " + tokens_[t.slot]->tile.to_string() + "'s"
+                                            : std::string()));
+            tokens_[t.slot] = Token{t.tile, t.feeds};
         }
         // Rows back from L2, in the order they were asked for, into the read pipeline.
         while (data_->can_pop(now)) {
@@ -230,6 +236,10 @@ public:
                 c.a.tile.to_string() + " in slot " + std::to_string(c.a.slot) + ", B " + c.b.tile.to_string() +
                 " in slot " + std::to_string(c.b.slot) + ")";
             if (!holds(c.a) || !holds(c.b)) d += ": waiting for its tiles";
+            for (std::uint32_t s = 0; s < config_.slots; ++s)
+                if (tokens_[s])
+                    d += "; slot " + std::to_string(s) + " token " + tokens_[s]->tile.to_string() + " (" +
+                         std::to_string(tokens_[s]->feeds) + " Feeds left)";
         } else {
             d = "all " + std::to_string(program_.size()) + " commands fired";
         }
@@ -274,6 +284,10 @@ private:
         Cycle issued, load_at;
         std::optional<std::vector<std::uint8_t>> bytes;
     };
+    struct Token {
+        TileID tile;
+        std::uint32_t feeds;   // the commands it still admits
+    };
     struct Last {
         Cycle accepted;
         std::int64_t interval;
@@ -284,7 +298,7 @@ private:
     }
     // The Streamer holds the operand's tile-ready token.
     [[nodiscard]] bool holds(const StreamerCommand::Operand& o) const {
-        return tokens_[o.slot].has_value() && *tokens_[o.slot] == o.tile;
+        return tokens_[o.slot].has_value() && tokens_[o.slot]->tile == o.tile;
     }
 
     // The program's own consistency, before anything runs. Raises std::invalid_argument naming the
@@ -336,6 +350,8 @@ private:
                                        [](Cycle at, const Pending& q) { return at < q.at; });
             pending_.insert(it, p);
         }
+        for (const StreamerCommand::Operand* o : {&c.a, &c.b})
+            if (--tokens_[o->slot]->feeds == 0) tokens_[o->slot].reset();   // the residency's last Feed
         loads_left_[n] = c.a.lanes + c.b.lanes;
         records_[n].accepted = now;
         last_ = Last{now, std::int64_t(std::max({c.k, c.a.lanes, c.b.lanes}))};
@@ -373,7 +389,7 @@ private:
     Config config_;
     StreamerProgram program_;
     L1LaneBuffers a_, b_;
-    std::vector<std::optional<TileID>> tokens_;   // by slot: the tile its last token named
+    std::vector<std::optional<Token>> tokens_;   // by slot: its residency's token, while it admits a Feed
     std::deque<Pending> pending_;         // reads not yet issued, in clock order
     std::deque<Awaited> awaited_;         // reads issued, rows not yet loaded, in issue order
     std::vector<std::uint32_t> loads_left_;
@@ -389,29 +405,40 @@ private:
     std::vector<Link<L1Element>*> a_out_, b_out_;
 };
 
-// A Streamer program and the L2's agree: the commands read each (slot, tile) as the L2 program's
-// Feeds of it say, in order, with the same rows. The L2 frees a slot after its Feeds, so a command
-// past them would find the slot gone. Raises std::invalid_argument.
+// A Streamer program and the L2's agree: in each slot, the commands read the tiles the L2 program's
+// Feeds name, in the same order and with the same rows (the order across tiles too: a command that
+// reads a slot's next tile before its current one would wait for a Move that waits for it,
+// CodeRabbit, #593). The L2 frees a slot after its Feeds, so a command past them would find the slot
+// gone. Raises std::invalid_argument naming the slot and the first read that differs.
 inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
-    using Key = std::pair<std::uint32_t, std::string>;
-    std::map<Key, std::vector<std::uint32_t>> feeds, reads;
+    using Read = std::pair<std::string, std::uint32_t>;   // the tile, its rows
+    std::map<std::uint32_t, std::vector<Read>> feeds, reads;
     for (const L2Action& a : l2)
-        if (a.kind == L2Action::Kind::Feed) feeds[{a.slot, a.tile.to_string()}].push_back(a.rows);
+        if (a.kind == L2Action::Kind::Feed) feeds[a.slot].push_back({a.tile.to_string(), a.rows});
     for (const StreamerCommand& c : commands) {
-        reads[{c.a.slot, c.a.tile.to_string()}].push_back(c.a.lanes);
-        reads[{c.b.slot, c.b.tile.to_string()}].push_back(c.b.lanes);
+        reads[c.a.slot].push_back({c.a.tile.to_string(), c.a.lanes});
+        reads[c.b.slot].push_back({c.b.tile.to_string(), c.b.lanes});
     }
-    if (feeds == reads) return;
-    for (const auto& [key, rows] : reads) {
-        const auto it = feeds.find(key);
-        const std::size_t n = it == feeds.end() ? 0 : it->second.size();
-        if (n != rows.size() || it->second != rows)
-            throw std::invalid_argument("check_feeds: the commands read " + key.second + " in slot " +
-                                        std::to_string(key.first) + " " + std::to_string(rows.size()) +
-                                        " times, the L2 program's Feeds " + std::to_string(n) +
-                                        (n == rows.size() ? ", with other rows" : ""));
+    std::map<std::uint32_t, bool> slots;
+    for (const auto& [s, v] : feeds) slots[s] = true;
+    for (const auto& [s, v] : reads) slots[s] = true;
+    for (const auto& [s, unused] : slots) {
+        const std::vector<Read>& f = feeds[s];
+        const std::vector<Read>& r = reads[s];
+        const std::string slot = "check_feeds: slot " + std::to_string(s) + ": ";
+        for (std::size_t i = 0; i < std::min(f.size(), r.size()); ++i) {
+            if (f[i].first != r[i].first)
+                throw std::invalid_argument(slot + "read " + std::to_string(i) + " is of " + r[i].first +
+                                            " by the commands, of " + f[i].first + " by the L2 program's Feeds");
+            if (f[i].second != r[i].second)
+                throw std::invalid_argument(slot + "read " + std::to_string(i) + " of " + r[i].first + " is " +
+                                            std::to_string(r[i].second) + " rows by the commands, " +
+                                            std::to_string(f[i].second) + " by its Feed");
+        }
+        if (f.size() != r.size())
+            throw std::invalid_argument(slot + "the commands read it " + std::to_string(r.size()) +
+                                        " times, the L2 program's Feeds " + std::to_string(f.size()));
     }
-    throw std::invalid_argument("check_feeds: the L2 program feeds a tile no command reads");
 }
 
 }  // namespace sw::kpu::cycle

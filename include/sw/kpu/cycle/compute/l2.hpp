@@ -92,11 +92,18 @@ public:
         validate_l2_program(program, cfg.slots, cfg.rows_per_slot, cfg.row_bytes, "cycle::L2 " + this->name());
         // Each Release is bound to the Move before it into its slot, and waits for that tile's
         // consumers before it in the program.
+        // Each Move's Feeds are what its tile-ready token admits.
         std::vector<std::uint32_t> consumers(cfg.slots, 0);
+        feeds_.assign(cfg.slots, {});
         for (std::size_t i = 0; i < program.size(); ++i) {
             const L2Action& a = program[i];
-            if (a.kind == L2Action::Kind::Move) consumers[a.slot] = 0;
-            else if (a.kind == L2Action::Kind::Writeback || a.kind == L2Action::Kind::Feed) ++consumers[a.slot];
+            if (a.kind == L2Action::Kind::Move) {
+                consumers[a.slot] = 0;
+                feeds_[a.slot].push_back(0);
+            } else if (a.kind == L2Action::Kind::Writeback || a.kind == L2Action::Kind::Feed) {
+                ++consumers[a.slot];
+                if (a.kind == L2Action::Kind::Feed) ++feeds_[a.slot].back();
+            }
             else releases_.push_back({i, a.slot, a.tile, consumers[a.slot]});
         }
         clear();
@@ -419,7 +426,9 @@ private:
         s.landed[w.row] = true;
         if (++s.written == s.rows) {
             pool_.signal(w.slot, w.tile);   // OWNED -> READY: the tile-ready token
-            if (ready_) tokens_.push_back(SlotReady{++token_id_, w.slot, w.tile});
+            // The token for this residency's Feeds, the slot's next Move's in the program.
+            const std::uint32_t feeds = feeds_[w.slot].at(moves_[w.slot]++);
+            if (ready_ && feeds > 0) tokens_.push_back(SlotReady{++token_id_, w.slot, w.tile, feeds});
         }
     }
 
@@ -440,6 +449,7 @@ private:
             rd.held = false;
         }
         tokens_.clear();
+        moves_.assign(config_.slots, 0);
         head_ = 0;
         credit_id_ = token_id_ = 0;
     }
@@ -455,6 +465,8 @@ private:
     std::vector<std::uint32_t> reads_now_, writes_now_;   // this clock's accesses, by bank
     std::vector<Reader> readers_ = std::vector<Reader>(2);   // 0: the BlockMover's, 1: the Streamer's
     std::deque<SlotReady> tokens_;                     // tile-ready tokens not yet sent
+    std::vector<std::vector<std::uint32_t>> feeds_;    // by slot: each of its Moves' Feeds, in order
+    std::vector<std::size_t> moves_;                   // by slot: its Moves signalled READY so far
     std::size_t head_ = 0;
     std::uint64_t credit_id_ = 0, token_id_ = 0;
     Link<L2RowWrite>* writes_ = nullptr;

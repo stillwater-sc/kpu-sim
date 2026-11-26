@@ -317,6 +317,43 @@ TEST_CASE("The L2's two readers share its banks' ports: a Writeback of A while t
     CHECK(r.l2.state(0) == L2::State::Free);
 }
 
+TEST_CASE("A tile moved into its slot again is read only after its own Move: a token admits its residency's Feeds",
+          "[cycle][streamer][l2]") {
+    // A[0] and B[0] each go through their slot twice, the second time with other data (L3 rows 4-7).
+    // The first residency's token must not admit the second command: it would read the first
+    // residency's data, or overrun its Release's count of consumers (CodeRabbit, #593).
+    L2Program p;
+    for (std::uint32_t n = 0; n < 2; ++n) {
+        p.push_back(l2_move(0, kTileA, kA + std::uint64_t(n) * 4 * kRow, kRow, 4));
+        p.push_back(l2_move(1, kTileB, kB + std::uint64_t(n) * 4 * kRow, kRow, 4));
+        p.push_back(l2_feed(0, kTileA, 4));
+        p.push_back(l2_feed(1, kTileB, 4));
+        p.push_back(l2_release(0, kTileA));
+        p.push_back(l2_release(1, kTileB));
+    }
+    const StreamerCommand cmd{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true};
+    StreamerRig r(p, {cmd, cmd}, options());
+    load(r, Chain{4, 4, 16, 2});
+    REQUIRE(r.sim.run_until_idle(kLimit));
+    for (const char side : {'A', 'B'})
+        for (std::uint32_t m = 0; m < 4; ++m) {
+            CAPTURE(side, m);
+            const auto got = r.sink.lane(side, m);
+            REQUIRE(got.size() == 32);
+            for (std::size_t i = 0; i < 32; ++i) {
+                CAPTURE(i);
+                const std::uint32_t n = static_cast<std::uint32_t>(i / 16), k = static_cast<std::uint32_t>(i % 16);
+                CHECK(got[i].e.bits == element(side, n * 4 + m, k));
+                CHECK(got[i].e.first == (k == 0));
+                CHECK(got[i].e.last == (k == 15));
+            }
+        }
+    // The second command fired only after the second Moves made the slots READY again.
+    REQUIRE(r.st.records().size() == 2);
+    CHECK(r.l2.acquires() == 4);
+    CHECK(r.l2.releases() == 4);
+}
+
 TEST_CASE("Two runs are identical", "[cycle][streamer]") {
     const Chain c{4, 4, 16, 3};
     const auto run = [&] {
@@ -361,8 +398,21 @@ TEST_CASE("The Streamer's program is checked before anything runs", "[cycle][str
     const Chain c{4, 4, 16, 2};
     CHECK_NOTHROW(check_feeds(commands(c), l2_program(c)));
     CHECK_THROWS_WITH(check_feeds(commands(c), l2_program(Chain{4, 4, 16, 1})),
-                      ContainsSubstring("2 times, the L2 program's Feeds 1"));
-    CHECK_THROWS_WITH(check_feeds(commands(Chain{4, 2, 16, 2}), l2_program(c)), ContainsSubstring("with other rows"));
+                      ContainsSubstring("slot 0: the commands read it 2 times, the L2 program's Feeds 1"));
+    CHECK_THROWS_WITH(check_feeds(commands(Chain{4, 2, 16, 2}), l2_program(c)),
+                      ContainsSubstring("slot 1: read 0 of B[0,0,0] is 2 rows by the commands, 4 by its Feed"));
+    // The order across a slot's tiles is checked too: commands that read A1 before A0, where the L2
+    // feeds A0, releases it and only then moves A1 in, would wait forever (CodeRabbit, #593).
+    const TileID a1{MatrixID::A, 1, 0, 0}, b1{MatrixID::B, 1, 0, 0};
+    const L2Program two{l2_move(0, kTileA, kA, kRow, 4), l2_move(1, kTileB, kB, kRow, 4), l2_feed(0, kTileA, 4),
+                        l2_feed(1, kTileB, 4), l2_release(0, kTileA), l2_release(1, kTileB),
+                        l2_move(0, a1, kA, kRow, 4), l2_move(1, b1, kB, kRow, 4), l2_feed(0, a1, 4),
+                        l2_feed(1, b1, 4), l2_release(0, a1), l2_release(1, b1)};
+    const StreamerCommand first{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true};
+    const StreamerCommand second{{0, a1, 0, 4}, {1, b1, 0, 4}, 16, true, true};
+    CHECK_NOTHROW(check_feeds({first, second}, two));
+    CHECK_THROWS_WITH(check_feeds({second, first}, two),
+                      ContainsSubstring("slot 0: read 0 is of A[1,0,0] by the commands, of A[0,0,0] by the L2"));
     CHECK_THROWS_WITH(validate_l2_program({l2_move(0, kTileA, 0, 16, 4), l2_feed(0, kTileA, 8)}, 2, 16, 16, "l2"),
                       ContainsSubstring("8 rows, but its Move wrote 4"));
     CHECK_THROWS_WITH(validate_l2_program({l2_move(0, kTileA, 0, 16, 4), l2_feed(0, kTileB, 4)}, 2, 16, 16, "l2"),
