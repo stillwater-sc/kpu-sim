@@ -297,4 +297,10 @@ TEST_CASE("The program and the configurations are checked before anything runs",
     CHECK_THROWS_WITH(L2("l2", d, c, {l2_move(2, tile(0), 0, 256, 4)}), ContainsSubstring("there are 2 slots"));
     CHECK_THROWS_WITH(L2("l2", d, c, {l2_move(0, tile(0), 0, 256, 4), l2_writeback(0, tile(1), 0, 256, 4)}),
                       ContainsSubstring("the slot holds A[0,0,0]"));
+    // A Writeback of more rows than its Move wrote is refused before anything runs (CodeRabbit,
+    // #592); one of the same rows or fewer is a program.
+    CHECK_THROWS_WITH(L2("l2", d, c, {l2_move(0, tile(0), 0, 256, 4), l2_writeback(0, tile(0), 0, 256, 8)}),
+                      ContainsSubstring("8 rows, but its Move wrote 4"));
+    CHECK_NOTHROW(L2("l2", d, c, {l2_move(0, tile(0), 0, 256, 4), l2_writeback(0, tile(0), 0, 256, 4),
+                                  l2_writeback(0, tile(0), 0, 256, 2), l2_release(0, tile(0))}));
 }

@@ -63,12 +63,13 @@ inline const char* to_string(L2Action::Kind k) {
 
 // The program's own consistency, before anything runs: every slot exists, every transfer fits its
 // slot and strides at least a row, a Move goes only into a slot its last tile was released from,
-// and a Writeback or Release names the tile the slot holds. Raises std::invalid_argument naming the
+// and a Writeback or Release names the tile the slot holds (a Writeback no more rows than its Move wrote). Raises std::invalid_argument naming the
 // action. (The run checks the same protocol again, state by state: a level's defect is a SlotFault.)
 inline void validate_l2_program(const L2Program& p, std::uint32_t slots, std::uint32_t rows_per_slot,
                                 std::uint32_t row_bytes, const std::string& who) {
     std::vector<int> held(slots, 0);           // 0 free, 1 holds a tile
     std::vector<TileID> tile(slots);
+    std::vector<std::uint32_t> rows(slots, 0);   // the slot's Move's rows
     for (std::size_t i = 0; i < p.size(); ++i) {
         const L2Action& a = p[i];
         const std::string at = who + ": action " + std::to_string(i) + " (" + to_string(a.kind) + " slot " +
@@ -89,12 +90,16 @@ inline void validate_l2_program(const L2Program& p, std::uint32_t slots, std::ui
                                                 " (no Release before this Move)");
                 held[a.slot] = 1;
                 tile[a.slot] = a.tile;
+                rows[a.slot] = a.rows;
                 break;
             case L2Action::Kind::Writeback:
             case L2Action::Kind::Release:
                 if (!held[a.slot] || tile[a.slot] != a.tile)
                     throw std::invalid_argument(at + ": the slot holds " +
                                                 (held[a.slot] ? tile[a.slot].to_string() : std::string("no tile")));
+                if (a.kind == L2Action::Kind::Writeback && a.rows > rows[a.slot])
+                    throw std::invalid_argument(at + ": " + std::to_string(a.rows) + " rows, but its Move wrote " +
+                                                std::to_string(rows[a.slot]));
                 if (a.kind == L2Action::Kind::Release) held[a.slot] = 0;
                 break;
         }
