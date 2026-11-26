@@ -43,7 +43,7 @@ To keep a tunnel open in the background without a shell, use `ssh -N -L 8080:loc
 - **Not followed:** symlinks.
 
 **Which viewers open what:**
-- **`.mflow` bundles** open in the memory-side debugger (`/view/memflow/index.html?bundle=...`).
+- **`.mflow` bundles** open in the memory-side debugger (`/view/memflow/index.html?bundle=...`) and the DRAM timing diagram (`/view/dram-timing/timing.html?bundle=...`).
 - **An LPDDR5 Chrome DRAM trace** opens in the bank analyzer, until the `.mflow` DRAM views replace it (step 9).
 - **The other viewers** (tile flow, occupancy, floorplan, domain flow) are served as pages that open their own files.
 

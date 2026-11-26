@@ -11,7 +11,6 @@ traces/
     ├── lpddr5/                     # LPDDR5 memory controller traces
     │   ├── tools/                  # Visualization tools
     │   │   ├── swimlane.html       # Swimlane pipeline view
-    │   │   ├── timing.html         # DRAM timing diagram view
     │   │   ├── blockdiagram.html   # Animated block diagram
     │   │   └── bank_analyzer.html  # Bank state analyzer
     │   ├── single-bank/            # Level 1: Single bank patterns
@@ -153,12 +152,15 @@ Maximum throughput characterization.
 
 ### Web-Based Viewers
 
+The DRAM views are moving to `tools/visualization/dram/`, rebuilt on `.mflow` records
+(`docs/plans/cycle-mflow-and-debug-server.md` step 9). The timing diagram has moved:
+`tools/visualization/dram/timing.html`.
+
 Located in `traces/memory/{lpddr5,gddr6}/tools/`:
 
 | Tool | Description | Best For |
 |------|-------------|----------|
 | `swimlane.html` | Horizontal pipeline view | Request parallelism |
-| `timing.html` | DRAM waveform diagram | Timing validation |
 | `blockdiagram.html` | Animated architecture | Data flow visualization |
 | `bank_analyzer.html` | Per-bank lanes | Resource utilization |
 
