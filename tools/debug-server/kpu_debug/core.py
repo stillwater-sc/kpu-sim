@@ -84,7 +84,10 @@ def _rel(root, p):
 
 
 def _bundle_format(d):
-    m = _json(d / "manifest.json")
+    mf = d / "manifest.json"
+    if mf.is_symlink():   # a manifest that is a link could read a file outside the root
+        return None
+    m = _json(mf)
     return m.get("format") if isinstance(m, dict) else None
 
 
@@ -92,9 +95,8 @@ def _trace_kind(path):
     """A .json that is a Chrome or Perfetto trace: "dram-trace" for the LPDDR5 controller's (its
     events name LPDDR5 banks), "trace" for any other; None if it is not a trace."""
     try:
-        if path.stat().st_size > 256 * 1024 * 1024:
-            return None
-        head = path.read_text(encoding="utf-8", errors="replace")[:65536]
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            head = f.read(65536)   # only the prefix: a trace can be hundreds of MiB
     except OSError:
         return None
     if '"traceEvents"' not in head and not head.lstrip().startswith("["):
@@ -133,8 +135,9 @@ def discover_runs(root):
             entries = sorted(os.scandir(d), key=lambda e: e.name)
         except OSError:
             return
-        names = {e.name for e in entries}
-        if "run.json" in names:
+        manifest = next((e for e in entries if e.name == "run.json"), None)
+        # A run.json that is a link is not read: it could publish a manifest from outside the root.
+        if manifest is not None and not manifest.is_symlink() and manifest.is_file():
             m = _json(Path(d) / "run.json")
             if isinstance(m, dict) and m.get("format") == "kpu-run":
                 runs.append(_run(root, Path(d), m))

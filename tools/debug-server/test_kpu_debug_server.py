@@ -49,15 +49,28 @@ class ServerTest(unittest.TestCase):
         (root / "bare.mflow" / "manifest.json").write_text(json.dumps(MANIFEST))
         (root / "dram.json").write_text('[{"ph": "X", "name": "ACTIVATE", "cat": "LPDDR5_BANK"}]')
         (root / "notes.json").write_text('{"just": "data"}')
-        weird = root / "<script>alert(1)<"
-        weird.mkdir()
-        (weird / "x.mflow").mkdir()
-        (weird / "x.mflow" / "manifest.json").write_text(json.dumps(MANIFEST))
+        # Markup in a manifest's field (portable: Windows forbids < and > in file names).
+        hostile = root / "hostile"
+        hostile.mkdir()
+        (hostile / "run.json").write_text(json.dumps({
+            "format": "kpu-run", "version": 1, "kind": "memory-subsystem", "status": "ok",
+            "device": "<img src=x onerror=alert(1)>", "started": "2026-11-24T00:00:00Z", "artifacts": {}}))
         (cls.tmp / "outside.txt").write_text("secret\n")
+        # A run manifest and a bundle manifest outside the root, for symlinks to point at.
+        elsewhere = cls.tmp / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "run.json").write_text(json.dumps({
+            "format": "kpu-run", "version": 1, "kind": "memory-subsystem", "status": "ok",
+            "device": "outside-device", "started": "2026-11-26T00:00:00Z", "artifacts": {}}))
+        (elsewhere / "manifest.json").write_text(json.dumps(MANIFEST))
         cls.symlink = False
         try:
             os.symlink(cls.tmp / "outside.txt", root / "link.txt")
             os.symlink(cls.tmp, root / "linkdir")
+            (root / "linked-run").mkdir()
+            os.symlink(elsewhere / "run.json", root / "linked-run" / "run.json")
+            (root / "linked.mflow").mkdir()
+            os.symlink(elsewhere / "manifest.json", root / "linked.mflow" / "manifest.json")
             cls.symlink = True
         except (OSError, NotImplementedError):
             pass
@@ -113,14 +126,43 @@ class ServerTest(unittest.TestCase):
             self.skipTest("no symlinks here")
         runs = core.discover_runs(self.root)
         self.assertFalse(any(r["id"].startswith(("linkdir", "link.txt")) for r in runs))
+        # A run.json or a bundle manifest that is a link to a file outside the root is not read.
+        self.assertFalse(any(r["id"] in ("linked-run", "linked.mflow") for r in runs))
+        status, _, body = self.get("/api/runs")
+        self.assertNotIn(b"outside-device", body)
+
+    def test_a_directory_named_with_markup_is_escaped(self):
+        # Where the filesystem allows < and > in a name (not Windows): the name is escaped too.
+        d = self.root / "named" / "<script>alert(1)<"
+        try:
+            d.mkdir(parents=True)
+        except OSError:
+            self.skipTest("this filesystem does not allow < and > in a name")
+        try:
+            (d / "x.mflow").mkdir()
+            (d / "x.mflow" / "manifest.json").write_text(json.dumps(MANIFEST))
+            status, _, body = self.get("/")
+            page = body.decode("utf-8")
+            self.assertIn("&lt;script&gt;alert(1)&lt;", page)
+            self.assertNotIn("<script>alert(1)", page)
+        finally:
+            shutil.rmtree(self.root / "named", ignore_errors=True)
+
+    def test_a_large_trace_is_classified_from_its_prefix(self):
+        # Only the first 64 KiB is read to tell a trace from other JSON: a large trace past that
+        # point is still a trace, and reading it costs no more than its prefix.
+        big = self.tmp / "big.json"
+        big.write_text('{"traceEvents": [{"ph": "X", "name": "x"}' + ', {"ph": "X"}' * 400000 + "]}")
+        self.assertGreater(big.stat().st_size, 1 << 20)
+        self.assertEqual(core._trace_kind(big), "trace")
 
     def test_the_index_escapes_what_it_lists(self):
         status, r, body = self.get("/")
         self.assertEqual(status, 200)
         page = body.decode("utf-8")
         self.assertIn("2026-11-25-mm64", page)
-        self.assertIn("&lt;script&gt;alert(1)&lt;", page)
-        self.assertNotIn("<script>alert(1)", page)
+        self.assertIn("&lt;img src=x onerror=alert(1)&gt;", page)
+        self.assertNotIn("<img src=x", page)
         # A bundle's name links to its manifest: the server serves files, not directories.
         self.assertIn('href="/files/2026-11-25-mm64/mem.mflow/manifest.json"', page)
         self.assertEqual(r.getheader("X-Content-Type-Options"), "nosniff")
