@@ -84,4 +84,4 @@ function watch(param) {
 const api = { watch, notice, concerns, sameArtifact };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else root.MflowLive = api;
-})(typeof window !== "undefined" ? window : this);
+})(typeof window !== "undefined" ? window : globalThis);
