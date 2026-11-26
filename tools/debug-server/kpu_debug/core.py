@@ -41,9 +41,10 @@ VIEWERS = {
                   "title": "Floorplan viewer", "reads": None, "param": None},
     "domainflow": {"dir": REPO / "tools" / "visualization" / "domainflow", "page": "index.html",
                    "title": "Domain-flow viewer", "reads": None, "param": None},
-    # The LPDDR5 views on the Chrome DRAM trace, until the .mflow views replace them (step 9).
-    "lpddr5": {"dir": REPO / "traces" / "memory" / "lpddr5" / "tools", "page": "bank_analyzer.html",
-               "title": "LPDDR5 bank analyzer (Chrome DRAM trace)", "reads": "dram-trace", "param": "trace"},
+    "dram-bank": {"dir": REPO / "tools" / "visualization" / "dram", "page": "bank_analyzer.html",
+                  "title": "DRAM bank analyzer", "reads": "mflow", "param": "bundle"},
+    # A Chrome DRAM trace (dram-trace) has no browser view of its own: the .mflow views replaced
+    # them (step 9), and the trace itself retires (step 11). It still opens in Perfetto.
 }
 # Shared scripts the viewers load by relative path (../common/mflow.js): served beside them.
 SHARED = {"common": REPO / "tools" / "visualization" / "common"}

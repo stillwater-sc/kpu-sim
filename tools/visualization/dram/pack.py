@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "common"))
 from pack_mflow import PackError, pack  # noqa: E402
 
-VIEWS = {"timing": "timing.html"}
+VIEWS = {"timing": "timing.html", "bank_analyzer": "bank_analyzer.html"}
 
 
 def main():

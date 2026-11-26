@@ -26,7 +26,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 COMMON = HERE.parent / "common"
 READER, DRAM = COMMON / "mflow.js", COMMON / "dram.js"
-VIEWS = ["timing.html"]
+VIEWS = ["timing.html", "bank_analyzer.html"]
 BUNDLE = None
 
 
@@ -190,6 +190,63 @@ process.stdout.write(JSON.stringify([Dram.chain(R, 3), Dram.gaps(R, X, 3).map(g 
   { name: "d/odd", kind: "dram_bank" }, { name: "d/mc[0]/ch[0]/bg[0]/ba[1]/x", kind: "dram_bank" } ] })));""")
         self.assertEqual(got, [[1, 2, 3, 0]])
 
+    def test_a_banks_row_openings_and_numbers(self):
+        got = self.dram("""
+const X = Dram.model(R), [ba0, ba1, idle] = X.channels[0].banks;
+const ep = b => Dram.episodes(R, b, X.end).map(e => [e.row, e.from, e.to, e.open, e.rd, e.wr, e.close]);
+process.stdout.write(JSON.stringify([ep(ba0), ep(ba1), Dram.bankStats(R, ba0, X.end), Dram.bankStats(R, idle, X.end),
+  X.channels.map(c => c.banks.map(b => b.bursts))]));""")
+        e0, e1, s0, si, bursts = got
+        # ACT 10 .. PRE 60 (one RD), then ACT 230 open to the run's end (one RD).
+        self.assertEqual(e0, [[7, 10, 60, False, 1, 0, 2], [9, 230, 280, True, 1, 0, None]])
+        self.assertEqual(e1, [])   # a bank that only refreshes opens no row
+        self.assertEqual(s0["cmds"], [2, 2, 0, 1, 1])
+        self.assertEqual((s0["bursts"], s0["reads"], s0["writes"]), (2, 2, 0))
+        self.assertEqual(s0["outcomes"], [0, 0, 1, 1])   # as the record states them: empty, conflict
+        self.assertEqual(s0["hitRate"], 0)
+        self.assertEqual(s0["ticks"], {"closed": 26, "activating": 28, "open": 72, "precharging": 14, "refreshing": 140})
+        self.assertEqual((s0["opens"], s0["rows"], s0["meanOpen"]), (2, 2, 50))
+        self.assertEqual((si["bursts"], si["hitRate"], si["opens"], si["meanOpen"]), (0, None, 0, None))
+        self.assertEqual(bursts, [[[0, 1], [], []], [[2]]])
+
+    # -- the bank analyzer's helpers --------------------------------------------------
+    def analyzer(self, *sigs, body):
+        page = self.pages["bank_analyzer.html"]
+        return self.node("\n".join([f"const Dram = require({json.dumps(str(DRAM))});",
+                                    "const { STATES } = Dram, Mflow = { NONE: 0xFFFFFFFF };", HAND,
+                                    *[extract(page, s) for s in sigs], body]))
+
+    def test_banks_are_totalled_by_bank_group_and_sorted(self):
+        got = self.analyzer("function groups(R, chan, end) {", "const COLUMNS = [", "function sortBanks(banks, key) {", body="""
+// a second bank in bank group 0 with a hit, to sort against
+R.B.rows++; for (const [k, v] of Object.entries({ mc: 0, channel: 0, bank_group: 0, bank: 1, row: 1, is_load: 0, outcome: 1, request: 0xFFFFFFFF })) R.B[k].push(v);
+const X = Dram.model(R), G = groups(R, X.channels[0], X.end);
+process.stdout.write(JSON.stringify([G.map(g => [g.group, g.banks.map(b => b.bank.key), g.total.bursts, g.total.outcomes, g.total.hitRate, g.total.ticks.refreshing]),
+  sortBanks(G[0].banks, "bursts").map(b => b.bank.key), sortBanks(G[0].banks, "hitRate").map(b => b.bank.key),
+  sortBanks(G[0].banks, "bank").map(b => b.bank.key), sortBanks(G[0].banks, "nosuch").map(b => b.bank.key)]));""")
+        totals, byBursts, byHit, byBank, unknown = got
+        self.assertEqual(totals, [[0, ["bg0/ba0", "bg0/ba1"], 3, [0, 1, 1, 1], 1 / 3, 280], [1, ["bg1/ba0"], 0, [0, 0, 0, 0], None, 0]])
+        self.assertEqual(byBursts, ["bg0/ba0", "bg0/ba1"])
+        self.assertEqual(byHit, ["bg0/ba1", "bg0/ba0"])
+        self.assertEqual(byBank, ["bg0/ba0", "bg0/ba1"])
+        self.assertEqual(unknown, ["bg0/ba0", "bg0/ba1"])
+
+    def test_conflict_acts_and_state_shares(self):
+        got = self.analyzer("function conflictActs(R, chan) {", "function shares(ticks) {", body="""
+const X = Dram.model(R);
+process.stdout.write(JSON.stringify([[...conflictActs(R, X.channels[0]).entries()], [...conflictActs(R, X.channels[1]).entries()],
+  shares({ closed: 1, activating: 1, open: 2, precharging: 0, refreshing: 0 }), shares({ closed: 0, activating: 0, open: 0, precharging: 0, refreshing: 0 })]));""")
+        c0, c1, sh, none = got
+        self.assertEqual(c0, [["bg0/ba0", [230]], ["bg0/ba1", []], ["bg1/ba0", []]])   # burst 1 is the conflict
+        self.assertEqual(c1, [["bg2/ba3", []]])
+        self.assertEqual(sh, [["closed", 0.25], ["activating", 0.25], ["open", 0.5], ["precharging", 0], ["refreshing", 0]])
+        self.assertEqual([f for _, f in none], [0, 0, 0, 0, 0])
+
+    def test_the_analyzers_link_names_a_bank_and_is_clamped(self):
+        got = self.analyzer("function viewFromQuery(search, end) {", body="""
+process.stdout.write(JSON.stringify([viewFromQuery("?ch=mc0/ch1&bank=bg2/ba3&t=99&zoom=10", 50), viewFromQuery("?zoom=1&t=", 50)]));""")
+        self.assertEqual(got, [{"ch": "mc0/ch1", "bank": "bg2/ba3", "t": 50, "zoom": 10}, {"ch": None, "bank": None, "t": None, "zoom": None}])
+
     # -- the timing view's helpers ------------------------------------------------------
     def timing(self, *sigs, body):
         page = self.pages["timing.html"]
@@ -267,10 +324,11 @@ process.stdout.write(JSON.stringify([niceStep(1, 70), niceStep(10, 70), niceStep
                 self.assertIn('MflowLive.watch("bundle")', page)
 
     def test_record_strings_never_become_markup(self):
-        page = self.pages["timing.html"]
-        out = self.node("\n".join([extract(page, "const esc = v =>").split("\n")[0], """
+        for view, page in self.pages.items():
+            with self.subTest(view=view):
+                out = self.node("\n".join([extract(page, "const esc = v =>").split("\n")[0], """
 process.stdout.write(JSON.stringify([esc('<img src=x onerror=alert(1)>'), esc("a&b\\"'")]));"""]))
-        self.assertEqual(out, ["&lt;img src=x onerror=alert(1)&gt;", "a&amp;b&quot;&#39;"])
+                self.assertEqual(out, ["&lt;img src=x onerror=alert(1)&gt;", "a&amp;b&quot;&#39;"])
 
     def test_the_page_scripts_parse(self):
         node = shutil.which("node")
@@ -291,7 +349,7 @@ process.stdout.write(JSON.stringify([esc('<img src=x onerror=alert(1)>'), esc("a
     def test_pack_embeds_the_bundle_and_every_shared_script(self):
         if BUNDLE is None:
             self.skipTest("no bundle given")
-        for view in ("timing",):
+        for view in ("timing", "bank_analyzer"):
             with self.subTest(view=view):
                 out = self.tmp / f"{view}.html"
                 p = self.pack(view, str(BUNDLE), "-o", str(out))

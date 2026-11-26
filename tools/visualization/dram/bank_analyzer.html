@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRAM Bank Analyzer</title>
+<!--
+  tools/visualization/dram/bank_analyzer.html -- the DRAM bank analyzer
+  (docs/plans/cycle-mflow-and-debug-server.md §3.5, step 9b).
+
+  Where a .mflow run's DRAM time went, bank by bank (mc, ch, bg, ba): each bank's commands, its
+  bursts and their page outcomes (hit, empty, conflict: as the record states them, never
+  inferred), the ticks it spent closed, activating, with a row open, precharging and refreshing,
+  and its row openings (how many, how many rows, how long each stayed open). Lanes show each
+  bank's state over the run, with its conflicts marked; select a bank to list its openings.
+
+  Everything comes from the record, through ../common/mflow.js (the reader) and
+  ../common/dram.js (banks, states, openings, numbers). Time is the controller's clock tick.
+
+  Open this file and choose the bundle's folder (or drop its files), or open it as
+  bank_analyzer.html?bundle=<url of the bundle's directory> from a server; pack.py embeds a
+  bundle. A view can be shared as a link: ?ch=<mc0/ch0>&bank=<bg0/ba1>&t=<tick>&zoom=<ticks>.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+:root {
+  --bg: #f4f5f6; --panel: #fcfcfb; --ink: #15181c; --ink-2: #4a5059; --ink-3: #7b828c;
+  --line: #d9dce0; --grid: #e8eaed; --lane: #f0f2f4;
+  --act: #2f9e6e; --rd: #2a78d6; --wr: #d9822b; --pre: #8a919b; --ref: #8e5bd0;
+  --open: #d7e9df; --crit: #d03b3b; --accent: #2a5db0; --sel: #15181c;
+  --hit: #2f9e6e; --empty: #8a919b; --conflict: #d03b3b;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --lane: #1f2226;
+    --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6;
+    --open: #1f3a2d; --crit: #ef6b6b; --accent: #7aa7ea; --sel: #eef0f2;
+    --hit: #3fbf86; --empty: #6d747e; --conflict: #ef6b6b;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --lane: #1f2226;
+    --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6;
+    --open: #1f3a2d; --crit: #ef6b6b; --accent: #7aa7ea; --sel: #eef0f2;
+    --hit: #3fbf86; --empty: #6d747e; --conflict: #ef6b6b;
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1500px; margin: 0 auto; padding: 18px 16px 60px; display: grid; gap: 16px; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 13px; margin: 0; color: var(--ink-2); font-weight: 600; }
+.sub { color: var(--ink-2); max-width: 95ch; margin: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .row2 { grid-template-columns: minmax(0, 1fr); } }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px var(--font-data); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.load { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 10px; }
+.load.drag { border-color: var(--accent); }
+.transport { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; position: sticky; top: 0; z-index: 4; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
+button, select { font: 13px var(--font-ui); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--ink-3); }
+label { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 5px; align-items: center; }
+.clock { font: 13px var(--font-data); }
+canvas { display: block; width: 100%; touch-action: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; border: 1px solid var(--line); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font: 12px var(--font-data); }
+.kv span:nth-child(odd) { color: var(--ink-3); }
+.scroll { overflow: auto; max-height: 520px; }
+table.t { border-collapse: collapse; font: 12px var(--font-data); width: 100%; }
+table.t th, table.t td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.t th:first-child, table.t td:first-child { text-align: left; }
+table.t th { color: var(--ink-3); font-weight: 400; position: sticky; top: 0; background: var(--panel); cursor: pointer; }
+table.t th.on { color: var(--ink); font-weight: 600; }
+table.t tr.grp td { color: var(--ink-2); font-weight: 600; cursor: pointer; background: var(--lane); }
+table.t tr.bank { cursor: pointer; }
+table.t tr.bank.sel td { background: var(--lane); color: var(--accent); font-weight: 600; }
+.bar { display: inline-flex; width: 120px; height: 10px; border-radius: 2px; overflow: hidden; vertical-align: -1px; background: var(--lane); }
+.bar i { display: block; height: 100%; }
+.note { font-size: 12px; color: var(--ink-3); }
+code { font: 12px var(--font-data); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>DRAM bank analyzer</h1>
+    <p class="sub">Where each bank's time went in a <code>.mflow</code> record (<code>kpu-run --memory-mflow</code>,
+      <code>kpu-memsim --out</code>): its bursts and their page outcomes as the record states them, its time closed,
+      activating, open, precharging and refreshing, and its row openings.</p>
+  </header>
+
+  <section class="load" id="load">
+    <div><label>Bundle folder <input type="file" id="pick" webkitdirectory multiple></label></div>
+    <p class="note">Or drop the bundle's files here. Served by the debug server, the page reads <code>?bundle=</code>.</p>
+    <p class="note" id="loadMsg"></p>
+  </section>
+<!--MFLOW_EMBED-->
+
+  <section class="panel" id="summary" hidden>
+    <div class="chips" id="chips"></div>
+  </section>
+
+  <div class="transport" id="transport" hidden>
+    <select id="chan" aria-label="channel"></select>
+    <button id="zoomOut">Zoom out</button>
+    <button id="whole">Whole run</button>
+    <label><input type="checkbox" id="idle"> idle banks</label>
+    <span class="clock" id="clock"></span>
+  </div>
+
+  <section class="panel" id="lanes" hidden>
+    <h2>Each bank's state over the run (drag or wheel to zoom in; click a lane to select its bank)</h2>
+    <canvas id="cv" height="300"></canvas>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="panel" id="tableBox" hidden>
+    <h2>Banks (click a heading to sort, a bank group to fold it, a bank to select it)</h2>
+    <div class="scroll"><table class="t" id="banks"></table></div>
+  </section>
+
+  <div class="row2" id="lower" hidden>
+    <section class="panel"><h2>Selected bank: its row openings</h2><div class="scroll"><table class="t" id="episodes"></table></div></section>
+    <section class="panel"><h2>Selected bank</h2><div id="inspect" class="kv"></div><p class="note" id="timingLink"></p></section>
+  </div>
+</div>
+<script src="../common/mflow.js"></script>
+<script src="../common/dram.js"></script>
+<script src="../common/live.js"></script>
+<script>
+(function () {
+"use strict";
+const $ = id => document.getElementById(id);
+const { STATES, CMD } = Dram;
+const OUT = ["unknown", "hit", "empty", "conflict"];
+
+// ------------------------------------------------------------------ pure helpers (tested)
+// One table row per bank, and a total per bank group: [{ group, total, banks: [{ bank, s }] }]
+// where s is Dram.bankStats. A total sums the counts and ticks; its hit rate is recomputed.
+function groups(R, chan, end) {
+  const by = new Map();
+  for (const bank of chan.banks) {
+    if (!by.has(bank.bg)) by.set(bank.bg, []);
+    by.get(bank.bg).push({ bank, s: Dram.bankStats(R, bank, end) });
+  }
+  return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([bg, banks]) => {
+    const t = { cmds: [0, 0, 0, 0, 0], bursts: 0, reads: 0, writes: 0, outcomes: [0, 0, 0, 0], ticks: {}, opens: 0, rows: null, meanOpen: null };
+    for (const s of STATES) t.ticks[s] = 0;
+    for (const { s } of banks) {
+      s.cmds.forEach((n, k) => { t.cmds[k] += n; });
+      s.outcomes.forEach((n, k) => { t.outcomes[k] += n; });
+      for (const k of STATES) t.ticks[k] += s.ticks[k];
+      t.bursts += s.bursts; t.reads += s.reads; t.writes += s.writes; t.opens += s.opens;
+    }
+    const known = t.outcomes[1] + t.outcomes[2] + t.outcomes[3];
+    t.hitRate = known ? t.outcomes[1] / known : null;
+    return { group: bg, total: t, banks };
+  });
+}
+
+// The table's columns: [key, heading, value of stats s]. Sorting is by value, descending (the
+// bank order breaks ties); "bank" keeps the record's order.
+const COLUMNS = [
+  ["bank", "bank", null],
+  ["bursts", "bursts", s => s.bursts],
+  ["rd", "RD", s => s.cmds[1]],
+  ["wr", "WR", s => s.cmds[2]],
+  ["hit", "hit", s => s.outcomes[1]],
+  ["empty", "empty", s => s.outcomes[2]],
+  ["conflict", "conflict", s => s.outcomes[3]],
+  ["hitRate", "hit rate", s => (s.hitRate === null ? -1 : s.hitRate)],
+  ["act", "ACT", s => s.cmds[0]],
+  ["pre", "PRE", s => s.cmds[3]],
+  ["ref", "REF", s => s.cmds[4]],
+  ["opens", "openings", s => s.opens],
+  ["rows", "rows", s => (s.rows === null ? -1 : s.rows)],
+  ["meanOpen", "mean open (ticks)", s => (s.meanOpen === null ? -1 : s.meanOpen)],
+  ["open", "row open", s => s.ticks.open],
+];
+function sortBanks(banks, key) {
+  const c = COLUMNS.find(c => c[0] === key);
+  if (!c || !c[2]) return banks.slice();
+  return banks.map((x, i) => [x, i]).sort((a, b) => c[2](b[0].s) - c[2](a[0].s) || a[1] - b[1]).map(x => x[0]);
+}
+
+// Each state's share of a bank's ticks, in STATES order: [[state, fraction]].
+function shares(ticks) {
+  const all = STATES.reduce((a, k) => a + ticks[k], 0);
+  return STATES.map(k => [k, all ? ticks[k] / all : 0]);
+}
+
+// The ticks of the ACTs that served a conflict burst (its row was not the open one), per bank of
+// `chan`: Map bank key -> ticks, in issue order. One pass over the channel's commands.
+function conflictActs(R, chan) {
+  const out = new Map(chan.banks.map(b => [b.key, []]));
+  for (const i of chan.cmds) {
+    const b = R.C.burst[i];
+    if (R.C.kind[i] !== Dram.ACT || b === Mflow.NONE || R.B.outcome[b] !== 3) continue;
+    const k = "bg" + R.C.bank_group[i] + "/ba" + R.C.bank[i];
+    if (out.has(k)) out.get(k).push(Dram.tick(R, i, "issue"));
+  }
+  return out;
+}
+
+// The view a link asks for: { ch, bank, t, zoom }, t and zoom clamped to the run.
+function viewFromQuery(search, end) {
+  const q = new URLSearchParams(search);
+  const num = k => { const v = Number(q.get(k)); return q.has(k) && q.get(k) !== "" && Number.isFinite(v) ? v : null; };
+  const zoom = num("zoom"), t = num("t");
+  return { ch: q.get("ch"), bank: q.get("bank"),
+           t: t !== null ? Math.min(Math.max(t, 0), end) : null,
+           zoom: zoom !== null && zoom >= 4 ? Math.min(zoom, Math.max(end, 4)) : null };
+}
+
+// ------------------------------------------------------------------ state
+let R = null, X = null, chan = null, G = [], conflicts = new Map(), selBank = null, sortKey = "bank";
+let viewA = 0, viewB = 1;
+const folded = new Set();
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const COL = {};
+function colours() {
+  for (const k of ["ink", "ink-2", "ink-3", "grid", "lane", "act", "pre", "ref", "open", "conflict", "accent"]) COL[k] = css("--" + k);
+}
+const STATE_COL = s => ({ activating: COL.act, open: COL.open, precharging: COL.pre, refreshing: COL.ref }[s] || null);
+const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pct = x => (x === null ? "-" : (100 * x).toFixed(1) + "%");
+
+// ------------------------------------------------------------------ loading
+async function loadFrom(source) {
+  $("loadMsg").textContent = "Reading…";
+  try { R = await Mflow.open(source); start(); }
+  catch (e) { $("loadMsg").textContent = "Could not read the bundle: " + e.message; }
+}
+$("pick").addEventListener("change", e => loadFrom(e.target.files));
+const drop = $("load");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drag"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("drag"); loadFrom(e.dataTransfer.files); });
+
+function start() {
+  X = Dram.model(R);
+  if (!X.channels.length) { $("loadMsg").textContent = "The record has no DRAM channel."; return; }
+  $("load").hidden = true;
+  for (const id of ["summary", "transport", "lanes", "tableBox", "lower"]) $(id).hidden = false;
+  const o = [0, 0, 0, 0];
+  for (let b = 0; b < R.B.rows; b++) o[R.B.outcome[b]]++;
+  const chip = (k, v) => `<span class="chip">${esc(k)} <b>${esc(v)}</b></span>`;
+  $("chips").innerHTML = [chip("device", R.m.device), chip("source", R.m.source || "-"), chip("run", X.end + " ticks"),
+    chip("channels", X.channels.length), chip("banks", X.channels.reduce((a, c) => a + c.banks.length, 0)),
+    chip("bursts", R.B.rows), chip("hit / empty / conflict", o[1] + " / " + o[2] + " / " + o[3])].join("");
+  $("chan").innerHTML = X.channels.map((c, i) => `<option value="${i}">${esc(c.key)}</option>`).join("");
+  $("legend").innerHTML = [["activating", "act"], ["row open", "open"], ["precharging", "pre"], ["refreshing", "ref"]]
+    .map(([t, v]) => `<span><span class="sw" style="background:var(--${v})"></span>${t}</span>`).join("") +
+    '<span><span class="sw" style="background:var(--conflict)"></span>a conflict burst\'s ACT</span><span>closed: blank</span>';
+  colours();
+  const q = viewFromQuery(location.search, X.end);
+  setChannel(Math.max(0, X.channels.findIndex(c => c.key === q.ch)), false);
+  setView(0, X.end);
+  if (q.zoom !== null) { const c = q.t !== null ? q.t : X.end / 2; setView(c - q.zoom / 2, c + q.zoom / 2); }
+  const b = chan.banks.find(b => b.key === q.bank);
+  selectBank(b || null);
+}
+
+function setChannel(i, redraw = true) {
+  chan = X.channels[i];
+  $("chan").value = String(i);
+  G = groups(R, chan, X.end);
+  conflicts = conflictActs(R, chan);
+  if (redraw) { selectBank(null); }
+}
+
+// ------------------------------------------------------------------ the table
+function renderTable() {
+  const head = "<tr>" + COLUMNS.map(c => `<th data-k="${c[0]}" class="${c[0] === sortKey ? "on" : ""}">${esc(c[1])}</th>`).join("") +
+    "<th>outcomes</th><th title=\"activating, row open, precharging, refreshing; closed is blank\">state time</th></tr>";
+  const cells = s => COLUMNS.slice(1).map(c => {
+    const v = c[0] === "hitRate" ? pct(s.hitRate) : c[0] === "meanOpen" ? (s.meanOpen === null ? "-" : Math.round(s.meanOpen))
+      : c[0] === "rows" && s.rows === null ? "-" : c[2](s);
+    return `<td>${esc(v)}</td>`;
+  }).join("");
+  const outBar = s => {
+    const n = s.outcomes[1] + s.outcomes[2] + s.outcomes[3];
+    if (!n) return '<span class="bar"></span>';
+    return '<span class="bar">' + [1, 2, 3].map(k => `<i style="width:${(100 * s.outcomes[k] / n).toFixed(2)}%;background:var(--${OUT[k]})"></i>`).join("") + "</span>";
+  };
+  const stBar = s => '<span class="bar">' + shares(s.ticks).filter(([k]) => k !== "closed").map(([k, f]) =>
+    `<i style="width:${(100 * f).toFixed(2)}%;background:var(--${{ activating: "act", open: "open", precharging: "pre", refreshing: "ref" }[k]})"></i>`).join("") + "</span>";
+  const showIdle = $("idle").checked;
+  let h = head;
+  for (const g of G) {
+    h += `<tr class="grp" data-g="${g.group}"><td>${folded.has(g.group) ? "▸" : "▾"} bg${g.group}</td>${cells(g.total)}<td>${outBar(g.total)}</td><td>${stBar(g.total)}</td></tr>`;
+    if (folded.has(g.group)) continue;
+    for (const { bank, s } of sortBanks(g.banks, sortKey)) {
+      if (!showIdle && !s.bursts && !s.cmds[0]) continue;
+      h += `<tr class="bank${bank === selBank ? " sel" : ""}" data-b="${esc(bank.key)}"><td>${esc(bank.key)}</td>${cells(s)}<td>${outBar(s)}</td><td>${stBar(s)}</td></tr>`;
+    }
+  }
+  $("banks").innerHTML = h;
+}
+$("banks").addEventListener("click", e => {
+  const th = e.target.closest("th[data-k]");
+  if (th) { sortKey = th.dataset.k; renderTable(); return; }
+  const g = e.target.closest("tr.grp");
+  if (g) { const n = Number(g.dataset.g); if (folded.has(n)) folded.delete(n); else folded.add(n); renderTable(); draw(); return; }
+  const b = e.target.closest("tr.bank");
+  if (b) selectBank(chan.banks.find(x => x.key === b.dataset.b) || null);
+});
+
+// ------------------------------------------------------------------ the selected bank
+function selectBank(bank) {
+  selBank = bank;
+  renderTable(); inspect(); draw(); share();
+}
+function inspect() {
+  if (!selBank) { $("inspect").innerHTML = '<span>bank</span><span>none selected</span>'; $("episodes").innerHTML = ""; $("timingLink").textContent = ""; return; }
+  const s = Dram.bankStats(R, selBank, X.end);
+  const kv = (k, v) => `<span>${esc(k)}</span><span>${esc(v)}</span>`;
+  $("inspect").innerHTML = kv("bank", chan.key + "/" + selBank.key) + kv("bursts (read / write)", `${s.bursts} (${s.reads} / ${s.writes})`) +
+    kv("hit / empty / conflict", `${s.outcomes[1]} / ${s.outcomes[2]} / ${s.outcomes[3]}`) + kv("hit rate", pct(s.hitRate)) +
+    kv("commands", CMD.map((c, k) => c + " " + s.cmds[k]).join(", ")) +
+    STATES.map(k => kv(k, `${s.ticks[k]} ticks (${pct(s.ticks[k] / X.end)})`)).join("") +
+    kv("openings", `${s.opens} of ${s.rows} rows, ${s.meanOpen === null ? "-" : Math.round(s.meanOpen)} ticks each on average`);
+  const ep = Dram.episodes(R, selBank, X.end);
+  const MAX = 500;
+  $("episodes").innerHTML = "<tr><th>row</th><th>opened</th><th>closed</th><th>ticks open</th><th>RD</th><th>WR</th><th>closed by</th></tr>" +
+    ep.slice(0, MAX).map(e => `<tr><td>${e.row}</td><td>${e.from}</td><td>${e.open ? "-" : e.to}</td><td>${e.to - e.from}</td><td>${e.rd}</td><td>${e.wr}</td>` +
+      `<td>${e.close === null ? (e.open ? "still open" : "an ACT") : CMD[R.C.kind[e.close]]}</td></tr>`).join("") +
+    (ep.length > MAX ? `<tr><td colspan="7">… ${ep.length - MAX} more</td></tr>` : "");
+  // The timing diagram, at this bank's first opening, when the bundle came from a server.
+  const served = new URLSearchParams(location.search).get("bundle");
+  if (served && ep.length) {
+    const u = new URLSearchParams({ bundle: served, ch: chan.key, t: String(ep[0].from), zoom: "200" });
+    $("timingLink").innerHTML = `<a href="timing.html?${esc(u.toString())}">Open the timing diagram at its first opening</a>`;
+  } else $("timingLink").textContent = "";
+}
+
+// ------------------------------------------------------------------ the lanes
+function setView(a, b) {
+  const span = Math.max(4, b - a);
+  a = Math.max(0, Math.min(a, X.end - span));
+  viewA = a; viewB = Math.min(X.end, a + span);
+  share();
+}
+let shareTimer = 0;
+function share() {
+  clearTimeout(shareTimer);
+  shareTimer = setTimeout(() => {
+    const q = new URLSearchParams(location.search);
+    q.set("ch", chan.key);
+    if (selBank) q.set("bank", selBank.key); else q.delete("bank");
+    q.set("t", String(Math.round((viewA + viewB) / 2))); q.set("zoom", String(Math.round(viewB - viewA)));
+    try { history.replaceState(null, "", "?" + q.toString()); } catch (e) { /* a file:// page may refuse */ }
+  }, 250);
+}
+const LABEL_W = 92, AXIS_H = 20, LANE_H = 16;
+let lanes = [];
+const cv = $("cv"), ctx = cv.getContext("2d");
+function draw() {
+  if (!X) return;
+  const showIdle = $("idle").checked;
+  lanes = [];
+  let y = AXIS_H;
+  for (const g of G) {
+    if (folded.has(g.group)) continue;
+    for (const { bank, s } of g.banks) {
+      if (!showIdle && !s.bursts && !s.cmds[0]) continue;
+      lanes.push({ bank, y }); y += LANE_H;
+    }
+  }
+  const H = y + 4, dpr = window.devicePixelRatio || 1, W = cv.clientWidth;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  const per = (W - LABEL_W) / (viewB - viewA), x = t => LABEL_W + (t - viewA) * per;
+  ctx.font = "11px " + css("--font-data"); ctx.textBaseline = "middle";
+  const raw = 80 / per, p = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))));
+  const step = [1, 2, 5, 10].map(m => m * p).find(v => v >= raw);
+  ctx.strokeStyle = COL.grid; ctx.fillStyle = COL["ink-3"];
+  for (let t = Math.ceil(viewA / step) * step; t <= viewB; t += step) {
+    const px = Math.round(x(t)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(px, AXIS_H); ctx.lineTo(px, H); ctx.stroke(); ctx.fillText(String(t), px + 2, 9);
+  }
+  for (const l of lanes) {
+    ctx.fillStyle = l.bank === selBank ? COL.accent : COL["ink-2"];
+    ctx.fillText(l.bank.key, 6, l.y + LANE_H / 2);
+    ctx.fillStyle = COL.lane; ctx.fillRect(LABEL_W, l.y + 1, W - LABEL_W, LANE_H - 2);
+  }
+  ctx.save(); ctx.beginPath(); ctx.rect(LABEL_W, 0, W - LABEL_W, H); ctx.clip();
+  for (const l of lanes) {
+    for (const st of l.bank.states) {
+      if (st.to < viewA || st.from > viewB) continue;
+      const c = STATE_COL(st.s);
+      if (!c) continue;
+      ctx.fillStyle = c; ctx.fillRect(x(st.from), l.y + 2, Math.max(1, x(st.to) - x(st.from)), LANE_H - 4);
+    }
+    ctx.fillStyle = COL.conflict;   // a conflict burst's ACT: the row it needed was not the open one
+    for (const t of conflicts.get(l.bank.key) || [])
+      if (t >= viewA && t <= viewB) ctx.fillRect(x(t) - 1, l.y + 1, 2, LANE_H - 2);
+    if (l.bank === selBank) { ctx.strokeStyle = COL.accent; ctx.lineWidth = 2; ctx.strokeRect(LABEL_W + 1, l.y + 1, W - LABEL_W - 2, LANE_H - 2); }
+  }
+  ctx.restore();
+  $("clock").textContent = `ticks ${Math.round(viewA)}–${Math.round(viewB)} of ${X.end}`;
+}
+let drag = null;
+cv.addEventListener("pointerdown", e => { drag = { x: e.offsetX, a: viewA, b: viewB, moved: false }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const dx = e.offsetX - drag.x;
+  if (Math.abs(dx) > 3) drag.moved = true;
+  if (drag.moved) { const d = dx * (drag.b - drag.a) / (cv.clientWidth - LABEL_W); setView(drag.a - d, drag.b - d); draw(); }
+});
+cv.addEventListener("pointerup", e => {
+  const d = drag; drag = null;
+  if (!d || d.moved) return;
+  const l = lanes.find(l => e.offsetY >= l.y && e.offsetY < l.y + LANE_H);
+  if (l) selectBank(l.bank);
+});
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const t = viewA + (e.offsetX - LABEL_W) * (viewB - viewA) / (cv.clientWidth - LABEL_W), f = Math.exp(e.deltaY * 0.0015);
+  setView(t - (t - viewA) * f, t + (viewB - t) * f); draw();
+}, { passive: false });
+$("chan").addEventListener("change", e => setChannel(Number(e.target.value)));
+$("whole").addEventListener("click", () => { setView(0, X.end); draw(); });
+$("zoomOut").addEventListener("click", () => { const c = (viewA + viewB) / 2, s = (viewB - viewA) * 2; setView(c - s / 2, c + s / 2); draw(); });
+$("idle").addEventListener("change", () => { renderTable(); draw(); });
+window.addEventListener("resize", draw);
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { colours(); draw(); });
+
+// An embedded bundle (pack.py) loads at once; so does one a server names (?bundle=<url>).
+const served = new URLSearchParams(location.search).get("bundle");
+if (window.MFLOW_EMBED) loadFrom(window.MFLOW_EMBED);
+else if (served) {
+  // Only a bundle on this page's own server: a link must not point the page at another site.
+  const url = new URL(served, location.href);
+  if (url.origin === location.origin) {
+    loadFrom(url.href);
+    if (window.MflowLive) MflowLive.watch("bundle");   // the debug server's reload bar
+  } else $("loadMsg").textContent = "Not reading " + url.origin + ": ?bundle= names a bundle on this page's server";
+}
+
+// For tests (test_views.py runs these under Node): the pure helpers.
+if (typeof module !== "undefined") module.exports = { groups, sortBanks, shares, conflictActs, viewFromQuery };
+})();
+</script>
+</body>
+</html>
