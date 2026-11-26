@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory Block Diagram</title>
+<!--
+  tools/visualization/dram/blockdiagram.html -- the memory side as a block diagram, animated
+  (docs/plans/cycle-mflow-and-debug-server.md §3.5, step 9d).
+
+  The architecture of a .mflow record's run: its DMA engines (bursts in flight against their
+  windows, store buffers, what holds them up), its memory controllers and their channels
+  (bursts waiting for the grant and queued for a command), each channel's command bus (CA), its
+  banks (state and open row) and its data bus (DQ). Play, scrub or step through the run; each
+  frame is the record at one executor cycle.
+
+  The geometry comes from the record's stations (how many engines, controllers, channels, bank
+  groups and banks), never from fixed constants; the state from its tables, through
+  ../common/mflow.js and ../common/dram.js.
+
+  Open this file and choose the bundle's folder (or drop its files), or open it as
+  blockdiagram.html?bundle=<url of the bundle's directory> from a server; pack.py embeds a bundle.
+  A moment can be shared as a link: ?t=<cycle>.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+:root {
+  --bg: #f4f5f6; --panel: #fcfcfb; --ink: #15181c; --ink-2: #4a5059; --ink-3: #7b828c;
+  --line: #d9dce0; --lane: #f0f2f4; --accent: #2a5db0;
+  --act: #2f9e6e; --rd: #2a78d6; --wr: #d9822b; --pre: #8a919b; --ref: #8e5bd0; --open: #d7e9df;
+  --w0: #8e5bd0; --w1: #2a9d8f; --w2: #c2185b; --w3: #5a6acf; --w4: #b8860b; --w5: #6b7d2e;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --lane: #1f2226; --accent: #7aa7ea;
+    --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6; --open: #1f3a2d;
+    --w0: #a97ee6; --w1: #49c0b1; --w2: #ec5a92; --w3: #8794e8; --w4: #d9ac3a; --w5: #9bb04f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --lane: #1f2226; --accent: #7aa7ea;
+    --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6; --open: #1f3a2d;
+    --w0: #a97ee6; --w1: #49c0b1; --w2: #ec5a92; --w3: #8794e8; --w4: #d9ac3a; --w5: #9bb04f;
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1500px; margin: 0 auto; padding: 18px 16px 60px; display: grid; gap: 16px; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 13px; margin: 0; color: var(--ink-2); font-weight: 600; }
+.sub { color: var(--ink-2); max-width: 95ch; margin: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px var(--font-data); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.load { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 10px; }
+.load.drag { border-color: var(--accent); }
+.transport { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; position: sticky; top: 0; z-index: 4; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
+button, select { font: 13px var(--font-ui); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--ink-3); }
+input[type=range] { flex: 1 1 300px; min-width: 0; }
+label { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 5px; align-items: center; }
+.clock { font: 13px var(--font-data); min-width: 22ch; }
+.scroll { overflow: auto; }
+svg { display: block; font-family: var(--font-data); }
+svg .box { fill: var(--panel); stroke: var(--line); }
+svg .title { fill: var(--ink); font: 600 12px var(--font-ui); }
+svg .txt { fill: var(--ink-2); font-size: 11px; }
+svg .dim { fill: var(--ink-3); font-size: 10px; }
+svg .track { fill: var(--lane); }
+svg .wire { stroke: var(--line); stroke-width: 2; fill: none; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; border: 1px solid var(--line); }
+ul.log { list-style: none; margin: 0; padding: 0; font: 12px var(--font-data); max-height: 220px; overflow: auto; }
+ul.log li { white-space: pre; }
+.note { font-size: 12px; color: var(--ink-3); }
+code { font: 12px var(--font-data); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Memory block diagram</h1>
+    <p class="sub">The memory side of a <code>.mflow</code> record's run, cycle by cycle: DMA engines, memory controllers,
+      each channel's command bus, banks and data bus, laid out from the record's own stations.</p>
+  </header>
+
+  <section class="load" id="load">
+    <div><label>Bundle folder <input type="file" id="pick" webkitdirectory multiple></label></div>
+    <p class="note">Or drop the bundle's files here. Served by the debug server, the page reads <code>?bundle=</code>.</p>
+    <p class="note" id="loadMsg"></p>
+  </section>
+<!--MFLOW_EMBED-->
+
+  <section class="panel" id="summary" hidden><div class="chips" id="chips"></div></section>
+
+  <div class="transport" id="transport" hidden>
+    <button id="play">Play</button>
+    <button id="back" title="one cycle back (←)">◀</button>
+    <button id="fwd" title="one cycle on (→)">▶</button>
+    <input type="range" id="scrub" min="0" value="0" aria-label="cycle">
+    <select id="speed" aria-label="speed">
+      <option value="10">10 cycles/s</option><option value="50" selected>50 cycles/s</option>
+      <option value="200">200 cycles/s</option><option value="1000">1000 cycles/s</option>
+    </select>
+    <span class="clock" id="clock"></span>
+  </div>
+
+  <section class="panel" id="diagram" hidden>
+    <div class="scroll"><svg id="svg" width="1000" height="400"></svg></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="panel" id="logBox" hidden>
+    <h2>Commands near the cursor</h2>
+    <ul class="log" id="log"></ul>
+  </section>
+</div>
+<script src="../common/mflow.js"></script>
+<script src="../common/dram.js"></script>
+<script src="../common/live.js"></script>
+<script>
+(function () {
+"use strict";
+const $ = id => document.getElementById(id);
+const { NONE, WAIT } = Mflow;
+const { CMD, RD, WR } = Dram;
+
+// ------------------------------------------------------------------ pure helpers (tested)
+// The diagram's parts, from the record's stations and its DRAM model X:
+//   engines   [{ id, capacity, buffer }]          a dma[i] station, its dmabuf[i] capacity (or null)
+//   mcs       [{ mc, channels: [channel of X] }]  controllers, each with its channels
+//   groups    { "mc0/ch0": [[bank, ...] per bank group] }   the bank grid of each channel
+function geometry(R, X) {
+  const by = kind => (R.m.stations || []).filter(s => s.kind === kind);
+  const idOf = s => { const m = /\[(\d+)\]$/.exec(s.name); return m ? Number(m[1]) : null; };
+  const buffers = new Map(by("dmabuf").map(s => [idOf(s), s.capacity]));
+  const engines = by("dma").map(s => ({ id: idOf(s), capacity: s.capacity, buffer: buffers.has(idOf(s)) ? buffers.get(idOf(s)) : null }))
+    .filter(e => e.id !== null).sort((a, b) => a.id - b.id);
+  const mcs = [];
+  for (const c of X.channels) {
+    let m = mcs.find(x => x.mc === c.mc);
+    if (!m) { m = { mc: c.mc, channels: [] }; mcs.push(m); }
+    m.channels.push(c);
+  }
+  mcs.sort((a, b) => a.mc - b.mc);
+  const groups = {};
+  for (const c of X.channels) {
+    const g = new Map();
+    for (const b of c.banks) { if (!g.has(b.bg)) g.set(b.bg, []); g.get(b.bg).push(b); }
+    groups[c.key] = [...g.entries()].sort((a, b) => a[0] - b[0]).map(([, bs]) => bs.sort((a, b) => a.ba - b.ba));
+  }
+  return { engines, mcs, groups };
+}
+
+// A bank's state at tick T: the state (of Dram.model's) whose [from, to) holds T.
+function stateAt(bank, T) {
+  const s = bank.states;
+  let lo = 0, hi = s.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (s[mid].from <= T) lo = mid; else hi = mid - 1; }
+  return s.length && s[lo].from <= T && T < s[lo].to ? s[lo] : null;
+}
+
+// The record at executor cycle t:
+//   engines   { id: { reads, writes, requests, waits: [reasons], held, staged } }
+//             bursts in flight (posted <= t < done) by direction, requests open (offered <= t <
+//             retired), the causes holding it, and its store buffer (the last sample at or before t)
+//   channels  { key: { grant, queued, ca: [command indices], dq: command index or null } }
+//             bursts waiting for the grant (posted <= t < granted) and queued for their first
+//             command (granted <= t < first command), the commands issued in the cycle's ticks,
+//             and the CAS whose data is on the bus
+function snapshot(R, X, t) {
+  const B = R.B, Q = R.Q, W = R.W, F = R.F;
+  const eng = {}, ch = {};
+  const e = id => eng[id] || (eng[id] = { reads: 0, writes: 0, requests: 0, waits: [], held: 0, staged: 0 });
+  for (const c of X.channels) ch[c.key] = { grant: 0, queued: 0, ca: [], dq: null };
+  for (let b = 0; b < B.rows; b++) {
+    if (B.t_posted[b] <= t && t < B.t_done[b]) { if (B.is_load[b]) e(B.engine[b]).reads++; else e(B.engine[b]).writes++; }
+    const c = ch["mc" + B.mc[b] + "/ch" + B.channel[b]];
+    if (!c) continue;
+    if (B.t_posted[b] <= t && t < B.t_submit[b]) c.grant++;
+    else if (B.t_submit[b] <= t && t < B.t_cmd[b]) c.queued++;
+  }
+  for (let q = 0; q < Q.rows; q++) if (Q.t_offered[q] <= t && t < Q.t_retired[q]) e(Q.engine[q]).requests++;
+  for (let i = 0; i < W.rows; i++) if (W.t_from[i] <= t && t < W.t_to[i]) { const x = e(W.engine[i]); if (!x.waits.includes(W.reason[i])) x.waits.push(W.reason[i]); }
+  for (const x of Object.values(eng)) x.waits.sort((a, b) => a - b);
+  const last = {};
+  for (let i = 0; i < F.rows; i++) if (F.t[i] <= t && (last[F.engine[i]] === undefined || F.t[i] >= F.t[last[F.engine[i]]])) last[F.engine[i]] = i;
+  for (const [id, i] of Object.entries(last)) { e(Number(id)).held = F.held[i]; e(Number(id)).staged = F.staged[i]; }
+  const T0 = t * X.ticksPerCycle, T1 = (t + 1) * X.ticksPerCycle;
+  for (const c of X.channels) {
+    const s = ch[c.key];
+    for (let j = Dram.firstAt(R, c.cmds, T0 - 1000); j < c.cmds.length; j++) {
+      const i = c.cmds[j], a = Dram.tick(R, i, "issue");
+      if (a >= T1) break;
+      if (a >= T0) s.ca.push(i);
+      const k = R.C.kind[i];
+      if ((k === RD || k === WR) && Dram.tick(R, i, "data0") < T1 && Dram.tick(R, i, "data1") > T0) s.dq = i;
+    }
+  }
+  return { engines: eng, channels: ch };
+}
+
+// ------------------------------------------------------------------ state
+let R = null, X = null, G = null, t = 0, end = 1, playing = false, timer = 0;
+const WAIT_LABEL = ["slot credit", "L3 link credit", "DRAM request credit", "burst window", "store buffer", "program order"];
+const STATE_FILL = { closed: "var(--lane)", activating: "var(--act)", open: "var(--open)", precharging: "var(--pre)", refreshing: "var(--ref)" };
+const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// ------------------------------------------------------------------ loading
+async function loadFrom(source) {
+  $("loadMsg").textContent = "Reading…";
+  try { R = await Mflow.open(source); start(); }
+  catch (e) { $("loadMsg").textContent = "Could not read the bundle: " + e.message; }
+}
+$("pick").addEventListener("change", e => loadFrom(e.target.files));
+const drop = $("load");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drag"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("drag"); loadFrom(e.dataTransfer.files); });
+
+function start() {
+  X = Dram.model(R);
+  G = geometry(R, X);
+  end = Math.max(1, Math.ceil(X.end / X.ticksPerCycle));
+  $("load").hidden = true;
+  for (const id of ["summary", "transport", "diagram", "logBox"]) $(id).hidden = false;
+  const chip = (k, v) => `<span class="chip">${esc(k)} <b>${esc(v)}</b></span>`;
+  $("chips").innerHTML = [chip("device", R.m.device), chip("source", R.m.source || "-"), chip("run", end + " cycles"),
+    chip("engines", G.engines.length), chip("controllers", G.mcs.length), chip("channels", X.channels.length),
+    chip("window (reads / writes)", (R.m.window || "-") + " / " + (R.m.write_window || R.m.window || "-"))].join("");
+  $("legend").innerHTML = [["closed", "lane"], ["activating", "act"], ["row open", "open"], ["precharging", "pre"], ["refreshing", "ref"],
+    ["read", "rd"], ["write", "wr"]].map(([n, v]) => `<span><span class="sw" style="background:var(--${v})"></span>${n}</span>`).join("") +
+    "<span>· holds:</span>" + WAIT_LABEL.map((n, k) => `<span><span class="sw" style="background:var(--w${k})"></span>${esc(n)}</span>`).join("");
+  $("scrub").max = String(end);
+  build();
+  const q = Number(new URLSearchParams(location.search).get("t"));
+  setT(Number.isFinite(q) && q > 0 ? Math.min(q, end) : 0);
+}
+
+// ------------------------------------------------------------------ the diagram
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs, parent, text) => {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (text !== undefined) n.textContent = text;
+  if (parent) parent.appendChild(n);
+  return n;
+};
+const parts = { engines: {}, channels: {}, banks: new Map() };
+const EW = 230, EH = 78, BANK_W = 64, BANK_H = 26, GAP = 40;
+function build() {
+  const svg = $("svg");
+  svg.replaceChildren();
+  // the engines, a column on the left
+  G.engines.forEach((e, i) => {
+    const y = 10 + i * (EH + 10), g = el("g", { transform: `translate(10,${y})` }, svg);
+    el("rect", { class: "box", width: EW, height: EH, rx: 6 }, g);
+    el("text", { class: "title", x: 8, y: 16 }, g, `dma[${e.id}]`);
+    const p = { y: y + EH / 2 };
+    p.req = el("text", { class: "dim", x: EW - 8, y: 16, "text-anchor": "end" }, g, "");
+    const bar = (yy, label) => {
+      el("text", { class: "txt", x: 8, y: yy + 8 }, g, label);
+      el("rect", { class: "track", x: 70, y: yy, width: EW - 110, height: 9, rx: 2 }, g);
+      const fill = el("rect", { x: 70, y: yy, width: 0, height: 9, rx: 2 }, g);
+      const n = el("text", { class: "dim", x: EW - 8, y: yy + 8, "text-anchor": "end" }, g, "");
+      return { fill, n };
+    };
+    p.rd = bar(24, "reads"); p.rd.fill.setAttribute("fill", "var(--rd)");
+    p.wr = bar(38, "writes"); p.wr.fill.setAttribute("fill", "var(--wr)");
+    p.buf = bar(52, "buffer"); p.buf.fill.setAttribute("fill", "var(--ink-3)");
+    p.waits = WAIT.map((_, k) => el("rect", { x: 8 + k * 18, y: 66, width: 14, height: 7, rx: 2, fill: `var(--w${k})`, opacity: 0.12 }, g));
+    parts.engines[e.id] = p;
+  });
+  // the controllers and their channels, to the right
+  let y = 10;
+  const cx = 10 + EW + GAP * 2;
+  const wires = el("g", {}, svg);
+  for (const m of G.mcs) {
+    const top = y, gm = el("g", {}, svg);
+    for (const c of m.channels) {
+      const grid = G.groups[c.key], cols = Math.max(1, ...grid.map(r => r.length));
+      const h = 52 + grid.length * (BANK_H + 4) + 30;
+      const gx = cx + 170, g = el("g", { transform: `translate(${gx},${y})` }, svg);
+      el("rect", { class: "box", width: 90 + cols * (BANK_W + 4), height: h, rx: 6 }, g);
+      el("text", { class: "title", x: 8, y: 16 }, g, c.key);
+      const p = { y: y + h / 2 };
+      el("text", { class: "txt", x: 8, y: 36 }, g, "CA");
+      p.ca = el("text", { class: "txt", x: 40, y: 36 }, g, "");
+      grid.forEach((row, r) => {
+        el("text", { class: "dim", x: 8, y: 52 + r * (BANK_H + 4) + 17 }, g, "bg" + row[0].bg);
+        row.forEach((b, k) => {
+          const bx = 40 + k * (BANK_W + 4), by = 46 + r * (BANK_H + 4);
+          const rect = el("rect", { x: bx, y: by, width: BANK_W, height: BANK_H, rx: 3, fill: "var(--lane)", stroke: "var(--line)" }, g);
+          el("text", { class: "dim", x: bx + 4, y: by + 10 }, g, "ba" + b.ba);
+          const row_ = el("text", { class: "txt", x: bx + 4, y: by + 22 }, g, "");
+          parts.banks.set(c.key + "/" + b.key, { rect, row: row_, bank: b });
+        });
+      });
+      const dqY = 46 + grid.length * (BANK_H + 4) + 18;
+      el("text", { class: "txt", x: 8, y: dqY }, g, "DQ");
+      p.dqBar = el("rect", { x: 40, y: dqY - 9, width: cols * (BANK_W + 4) - 4, height: 11, rx: 2, class: "track" }, g);
+      p.dq = el("text", { class: "txt", x: 44, y: dqY }, g, "");
+      parts.channels[c.key] = p;
+      y += h + 10;
+    }
+    // the controller, spanning its channels
+    const h = y - 10 - top;
+    el("rect", { class: "box", x: cx, y: top, width: 140, height: h, rx: 6 }, gm);
+    el("text", { class: "title", x: cx + 8, y: top + 16 }, gm, `mc[${m.mc}]`);
+    for (const c of m.channels) {
+      const p = parts.channels[c.key];
+      p.q = el("text", { class: "txt", x: cx + 8, y: p.y }, gm, "");
+      p.g = el("text", { class: "dim", x: cx + 8, y: p.y + 14 }, gm, "");
+      el("path", { class: "wire", d: `M ${cx + 140} ${p.y} L ${cx + 170} ${p.y}` }, wires);
+    }
+    for (const e of G.engines) el("path", { class: "wire", d: `M ${10 + EW} ${parts.engines[e.id].y} C ${10 + EW + GAP} ${parts.engines[e.id].y}, ${cx - GAP} ${top + h / 2}, ${cx} ${top + h / 2}` }, wires);
+  }
+  const H = Math.max(y, 20 + G.engines.length * (EH + 10));
+  let W = 0;
+  for (const c of X.channels) W = Math.max(W, cx + 170 + 90 + Math.max(1, ...G.groups[c.key].map(r => r.length)) * (BANK_W + 4));
+  svg.setAttribute("width", String(W + 10)); svg.setAttribute("height", String(H));
+}
+
+function render() {
+  const s = snapshot(R, X, t), T = t * X.ticksPerCycle;
+  const win = R.m.window || 1, wwin = R.m.write_window || win;
+  for (const e of G.engines) {
+    const p = parts.engines[e.id], x = s.engines[e.id] || { reads: 0, writes: 0, requests: 0, waits: [], held: 0, staged: 0 };
+    const w = EW - 110;
+    p.rd.fill.setAttribute("width", String(w * Math.min(1, x.reads / win))); p.rd.n.textContent = `${x.reads}/${win}`;
+    p.wr.fill.setAttribute("width", String(w * Math.min(1, x.writes / wwin))); p.wr.n.textContent = `${x.writes}/${wwin}`;
+    if (e.buffer) { p.buf.fill.setAttribute("width", String(w * Math.min(1, x.held / e.buffer))); p.buf.n.textContent = `${x.held}/${e.buffer}` + (x.staged ? ` (${x.staged} staged)` : ""); }
+    else p.buf.n.textContent = "-";
+    p.req.textContent = `${x.requests} request${x.requests === 1 ? "" : "s"}`;
+    p.waits.forEach((r, k) => r.setAttribute("opacity", x.waits.includes(k) ? "1" : "0.12"));
+  }
+  for (const c of X.channels) {
+    const p = parts.channels[c.key], x = s.channels[c.key];
+    p.q.textContent = `${x.queued} queued`; p.g.textContent = `${x.grant} awaiting grant`;
+    p.ca.textContent = x.ca.map(i => CMD[R.C.kind[i]] + " bg" + R.C.bank_group[i] + "/ba" + R.C.bank[i]).join("  ") || "-";
+    if (x.dq !== null) {
+      const rd = R.C.kind[x.dq] === RD;
+      p.dqBar.setAttribute("style", `fill:var(--${rd ? "rd" : "wr"})`);
+      p.dq.setAttribute("style", "fill:var(--panel)");   // readable on the busy bus
+      p.dq.textContent = `${rd ? "read" : "write"} burst ${R.C.burst[x.dq]} (bg${R.C.bank_group[x.dq]}/ba${R.C.bank[x.dq]})`;
+    } else { p.dqBar.removeAttribute("style"); p.dq.removeAttribute("style"); p.dq.textContent = "idle"; }
+  }
+  for (const [, b] of parts.banks) {
+    const st = stateAt(b.bank, T);
+    b.rect.setAttribute("fill", STATE_FILL[st ? st.s : "closed"]);
+    b.row.textContent = st && st.row !== null && st.row !== undefined ? "row " + st.row : "";
+  }
+  $("clock").textContent = `cycle ${t} / ${end} (tick ${Math.round(T)})`;
+  $("scrub").value = String(t);
+  // the log: commands within ±8 cycles
+  const lines = [];
+  for (const c of X.channels) {
+    for (let j = Dram.firstAt(R, c.cmds, T - 8 * X.ticksPerCycle); j < c.cmds.length; j++) {
+      const i = c.cmds[j], a = Dram.tick(R, i, "issue");
+      if (a > T + 8 * X.ticksPerCycle) break;
+      lines.push([a, `${a < T ? " " : a < T + X.ticksPerCycle ? "▶" : " "} tick ${a}  ${c.key}  ${CMD[R.C.kind[i]]} bg${R.C.bank_group[i]}/ba${R.C.bank[i]} row ${R.C.row[i]}` +
+        (R.C.burst[i] === NONE ? "" : `  burst ${R.C.burst[i]}`)]);
+    }
+  }
+  lines.sort((a, b) => a[0] - b[0]);
+  $("log").innerHTML = lines.map(l => `<li>${esc(l[1])}</li>`).join("") || "<li>no command</li>";
+}
+
+function setT(v) {
+  t = Math.max(0, Math.min(end, Math.round(v)));
+  render();
+  try { const q = new URLSearchParams(location.search); q.set("t", String(t)); history.replaceState(null, "", "?" + q.toString()); } catch (e) { /* file:// */ }
+}
+function play(on) {
+  playing = on; $("play").textContent = on ? "Pause" : "Play";
+  clearInterval(timer);
+  if (!on) return;
+  let last = performance.now(), acc = 0;
+  timer = setInterval(() => {
+    const now = performance.now();
+    acc += (now - last) / 1000 * Number($("speed").value); last = now;
+    if (acc >= 1) { const n = Math.floor(acc); acc -= n; if (t + n >= end) { setT(end); play(false); } else setT(t + n); }
+  }, 40);
+}
+$("play").addEventListener("click", () => play(!playing));
+$("back").addEventListener("click", () => { play(false); setT(t - 1); });
+$("fwd").addEventListener("click", () => { play(false); setT(t + 1); });
+$("scrub").addEventListener("input", e => { play(false); setT(Number(e.target.value)); });
+document.addEventListener("keydown", e => {
+  if (!X || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "ArrowLeft") { play(false); setT(t - 1); } else if (e.key === "ArrowRight") { play(false); setT(t + 1); }
+  else if (e.key === " ") { e.preventDefault(); play(!playing); }
+});
+
+// An embedded bundle (pack.py) loads at once; so does one a server names (?bundle=<url>).
+const served = new URLSearchParams(location.search).get("bundle");
+if (window.MFLOW_EMBED) loadFrom(window.MFLOW_EMBED);
+else if (served) {
+  // Only a bundle on this page's own server: a link must not point the page at another site.
+  const url = new URL(served, location.href);
+  if (url.origin === location.origin) {
+    loadFrom(url.href);
+    if (window.MflowLive) MflowLive.watch("bundle");   // the debug server's reload bar
+  } else $("loadMsg").textContent = "Not reading " + url.origin + ": ?bundle= names a bundle on this page's server";
+}
+
+// For tests (test_views.py runs these under Node): the pure helpers.
+if (typeof module !== "undefined") module.exports = { geometry, stateAt, snapshot };
+})();
+</script>
+</body>
+</html>

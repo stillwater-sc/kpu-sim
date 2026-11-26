@@ -45,6 +45,8 @@ VIEWERS = {
                   "title": "DRAM bank analyzer", "reads": "mflow", "param": "bundle"},
     "dram-swim": {"dir": REPO / "tools" / "visualization" / "dram", "page": "swimlane.html",
                   "title": "DRAM request swimlanes", "reads": "mflow", "param": "bundle"},
+    "dram-block": {"dir": REPO / "tools" / "visualization" / "dram", "page": "blockdiagram.html",
+                   "title": "Memory block diagram", "reads": "mflow", "param": "bundle"},
     # A Chrome trace has no browser view of its own: it opens in Perfetto. The LPDDR5 controller's
     # Chrome DRAM trace is retired (step 11); its views read the .mflow record.
 }

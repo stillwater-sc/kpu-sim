@@ -26,8 +26,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 COMMON = HERE.parent / "common"
 READER, DRAM = COMMON / "mflow.js", COMMON / "dram.js"
-VIEWS = ["timing.html", "bank_analyzer.html", "swimlane.html"]
-USES_DRAM = {"timing.html", "bank_analyzer.html"}   # the views drawn from ../common/dram.js
+VIEWS = ["timing.html", "bank_analyzer.html", "swimlane.html", "blockdiagram.html"]
+USES_DRAM = {"timing.html", "bank_analyzer.html", "blockdiagram.html"}   # the views drawn from ../common/dram.js
 BUNDLE = None
 
 
@@ -346,6 +346,57 @@ process.stdout.write(JSON.stringify([engineName(0), engineName(3), engineName(NO
             with self.subTest(view="timing", needle=needle):
                 self.assertIn(needle, tv)
 
+    # -- the block diagram's helpers --------------------------------------------------
+    def block(self, *sigs, body):
+        page = self.pages["blockdiagram.html"]
+        return self.node("\n".join([f"const Dram = require({json.dumps(str(DRAM))});",
+                                    "const { RD, WR } = Dram, Mflow = { NONE: 0xFFFFFFFF, WAIT: [0, 1, 2, 3, 4, 5] };", HAND,
+                                    *[extract(page, x) for x in sigs], body]))
+
+    def test_the_diagrams_geometry_comes_from_the_stations(self):
+        got = self.block("function geometry(R, X) {", body="""
+R.m.stations.push({ name: "dev/dma[1]", kind: "dma", capacity: 16 }, { name: "dev/dmabuf[1]", kind: "dmabuf", capacity: 4 },
+                  { name: "dev/dma[x]", kind: "dma", capacity: 1 });
+const X = Dram.model(R), G = geometry(R, X);
+process.stdout.write(JSON.stringify([G.engines, G.mcs.map(m => [m.mc, m.channels.map(c => c.key)]),
+  Object.fromEntries(Object.entries(G.groups).map(([k, v]) => [k, v.map(r => r.map(b => b.key))]))]));""")
+        engines, mcs, groups = got
+        self.assertEqual(engines, [{"id": 0, "capacity": 16, "buffer": None}, {"id": 1, "capacity": 16, "buffer": 4}])
+        self.assertEqual(mcs, [[0, ["mc0/ch0", "mc0/ch1"]]])
+        self.assertEqual(groups, {"mc0/ch0": [["bg0/ba0", "bg0/ba1"], ["bg1/ba0"]], "mc0/ch1": [["bg2/ba3"]]})
+
+    def test_a_banks_state_at_a_tick(self):
+        got = self.block("function stateAt(bank, T) {", body="""
+const X = Dram.model(R), b = X.channels[0].banks[0];
+process.stdout.write(JSON.stringify([0, 9, 10, 23, 24, 59, 60, 100, 279, 280, -1].map(T => { const s = stateAt(b, T); return s && [s.s, s.row]; })));""")
+        self.assertEqual(got, [["closed", None], ["closed", None], ["activating", 7], ["activating", 7], ["open", 7],
+                               ["open", 7], ["precharging", None], ["refreshing", None], ["open", 9], None, None])
+
+    def test_a_snapshot_of_the_record_at_a_cycle(self):
+        got = self.block("function snapshot(R, X, t) {", body="""
+// burst stage times (cycles; 2 ticks a cycle), requests, waits and buffer samples for the snapshot
+Object.assign(R.B, { engine: [0, 0, 1], t_posted: [4, 100, 5], t_submit: [5, 110, 6], t_cmd: [5, 115, 6], t_done: [24, 140, 24] });
+R.Q = { rows: 2, engine: [0, 1], t_offered: [0, 2], t_retired: [30, 3] };
+R.W = { rows: 3, engine: [0, 0, 0], reason: [3, 3, 1], t_from: [0, 10, 11], t_to: [6, 20, 12] };
+R.F = { rows: 3, engine: [0, 0, 1], held: [1, 2, 3], staged: [0, 1, 0], t: [0, 12, 50] };
+const X = Dram.model(R), f = s => [s.engines, Object.fromEntries(Object.entries(s.channels).map(([k, v]) => [k, [v.grant, v.queued, v.ca, v.dq]]))];
+process.stdout.write(JSON.stringify([f(snapshot(R, X, 4)), f(snapshot(R, X, 11)), f(snapshot(R, X, 19))]));""")
+        (e4, c4), (e11, c11), (e19, c19) = got
+        # cycle 4: burst 0 posted, waiting for the grant; dma[0] held by the burst window; no command yet
+        self.assertEqual(e4["0"], {"reads": 1, "writes": 0, "requests": 1, "waits": [3], "held": 1, "staged": 0})
+        self.assertEqual(c4, {"mc0/ch0": [1, 0, [], None], "mc0/ch1": [0, 0, [], None]})
+        # cycle 11 (ticks 22-23): two causes at once; the buffer's sample at 12 is not yet (the one
+        # at 0 holds); the RD at tick 24 has not issued; dma[1]'s request ended, its write burst has not
+        self.assertEqual(e11["0"]["waits"], [1, 3])
+        self.assertEqual((e11["0"]["held"], e11["0"]["staged"]), (1, 0))
+        self.assertEqual(c11["mc0/ch0"], [0, 0, [], None])
+        self.assertEqual((e11["1"]["requests"], e11["1"]["writes"]), (0, 1))
+        # cycle 19 (ticks 38-39): the RD's data (38-46) and the WR's (38-46, the other channel) are on the buses
+        self.assertEqual(c19["mc0/ch0"][3], 1)
+        self.assertEqual(c19["mc0/ch1"][3], 8)
+        self.assertEqual(e19["1"]["writes"], 1)
+        self.assertEqual((e19["0"]["held"], e19["0"]["staged"]), (2, 1))   # the sample at 12 now holds
+
     # -- the timing view's helpers ------------------------------------------------------
     def timing(self, *sigs, body):
         page = self.pages["timing.html"]
@@ -448,7 +499,7 @@ process.stdout.write(JSON.stringify([esc('<img src=x onerror=alert(1)>'), esc("a
     def test_pack_embeds_the_bundle_and_every_shared_script(self):
         if BUNDLE is None:
             self.skipTest("no bundle given")
-        for view in ("timing", "bank_analyzer", "swimlane"):
+        for view in ("timing", "bank_analyzer", "swimlane", "blockdiagram"):
             with self.subTest(view=view):
                 out = self.tmp / f"{view}.html"
                 p = self.pack(view, str(BUNDLE), "-o", str(out))
