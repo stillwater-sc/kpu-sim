@@ -248,7 +248,9 @@ process.stdout.write(JSON.stringify([[...conflictActs(R, X.channels[0]).entries(
         page = self.pages["bank_analyzer.html"]
         for needle in ('tabindex="0" ` +\n    `aria-sort=', 'tabindex="0" aria-expanded=', 'tabindex="0" aria-selected=',
                        '(e.key === "Enter" || e.key === " ") && operate(e.target)', "if (had) { const el = $(\"banks\").querySelector(had); if (el) el.focus(); }",
-                       '<canvas id="cv" height="300" tabindex="0"', 'e.key !== "ArrowUp" && e.key !== "ArrowDown"'):
+                       '<canvas id="cv" height="300" tabindex="0"', 'e.key !== "ArrowUp" && e.key !== "ArrowDown"',
+                       'if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(0.5); return; }',
+                       'e.key === "ArrowLeft" || e.key === "ArrowRight"', '<button id="zoomIn">Zoom in</button>'):
             with self.subTest(needle=needle):
                 self.assertIn(needle, page)
 
