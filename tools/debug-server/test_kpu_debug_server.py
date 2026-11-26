@@ -26,6 +26,7 @@ from kpu_debug import core  # noqa: E402
 from kpu_debug.server import HOST, make_server, parse_range  # noqa: E402
 
 MANIFEST = {"format": "kpu-mflow", "version": 4, "tables": {}}
+SUMMARY = b"memory subsystem: ...\n"
 
 
 class ServerTest(unittest.TestCase):
@@ -37,7 +38,7 @@ class ServerTest(unittest.TestCase):
         (run / "mem.mflow").mkdir(parents=True)
         (run / "mem.mflow" / "manifest.json").write_text(json.dumps(MANIFEST))
         (run / "mem.mflow" / "bursts.bin").write_bytes(bytes(range(256)) * 4)
-        (run / "summary.txt").write_text("memory subsystem: ...\n")
+        (run / "summary.txt").write_bytes(SUMMARY)   # bytes: text mode writes \r\n on Windows
         (run / "counters.json").write_text("{}")
         (run / "trace.json").write_text('{"traceEvents": [{"ph": "X", "name": "x"}]}')
         (run / "run.json").write_text(json.dumps({
@@ -226,7 +227,7 @@ class ServerTest(unittest.TestCase):
         status, r, body = self.get("/files/2026-11-25-mm64/summary.txt", method="HEAD")
         self.assertEqual(status, 200)
         self.assertEqual(body, b"")
-        self.assertEqual(r.getheader("Content-Length"), str(len("memory subsystem: ...\n")))
+        self.assertEqual(r.getheader("Content-Length"), str(len(SUMMARY)))
 
     def test_it_never_writes(self):
         for method in ("POST", "PUT", "DELETE", "PATCH"):
@@ -234,7 +235,7 @@ class ServerTest(unittest.TestCase):
                 status, r, _ = self.get("/files/2026-11-25-mm64/summary.txt", method=method)
                 self.assertEqual(status, 405)
                 self.assertEqual(r.getheader("Allow"), "GET, HEAD")
-        self.assertEqual((self.root / "2026-11-25-mm64" / "summary.txt").read_text(), "memory subsystem: ...\n")
+        self.assertEqual((self.root / "2026-11-25-mm64" / "summary.txt").read_bytes(), SUMMARY)
 
     # -- viewers -------------------------------------------------------------
     def test_the_viewers_and_their_shared_reader_are_served(self):
