@@ -29,6 +29,10 @@ REPO = Path(__file__).resolve().parents[3]
 VIEWERS = {
     "memflow": {"dir": REPO / "tools" / "visualization" / "memflow", "page": "index.html",
                 "title": "Memory-side debugger", "reads": "mflow", "param": "bundle"},
+    # The DRAM views (step 9) share one directory; each is a viewer of its own. A page's
+    # ../common/ still resolves to /view/common/.
+    "dram-timing": {"dir": REPO / "tools" / "visualization" / "dram", "page": "timing.html",
+                    "title": "DRAM timing diagram", "reads": "mflow", "param": "bundle"},
     "tileflow": {"dir": REPO / "tools" / "visualization" / "tileflow", "page": "index.html",
                  "title": "Tile-flow viewer", "reads": None, "param": None},
     "occupancy": {"dir": REPO / "tools" / "visualization" / "occupancy", "page": "index.html",
@@ -37,9 +41,10 @@ VIEWERS = {
                   "title": "Floorplan viewer", "reads": None, "param": None},
     "domainflow": {"dir": REPO / "tools" / "visualization" / "domainflow", "page": "index.html",
                    "title": "Domain-flow viewer", "reads": None, "param": None},
-    # The LPDDR5 views on the Chrome DRAM trace, until the .mflow views replace them (step 9).
-    "lpddr5": {"dir": REPO / "traces" / "memory" / "lpddr5" / "tools", "page": "bank_analyzer.html",
-               "title": "LPDDR5 bank analyzer (Chrome DRAM trace)", "reads": "dram-trace", "param": "trace"},
+    "dram-bank": {"dir": REPO / "tools" / "visualization" / "dram", "page": "bank_analyzer.html",
+                  "title": "DRAM bank analyzer", "reads": "mflow", "param": "bundle"},
+    # A Chrome DRAM trace (dram-trace) has no browser view of its own: the .mflow views replaced
+    # them (step 9), and the trace itself retires (step 11). It still opens in Perfetto.
 }
 # Shared scripts the viewers load by relative path (../common/mflow.js): served beside them.
 SHARED = {"common": REPO / "tools" / "visualization" / "common"}

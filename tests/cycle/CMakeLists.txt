@@ -133,6 +133,12 @@ if(KPU_PYTHON3)
                 ${CMAKE_CURRENT_BINARY_DIR}/cycle_mflow_s1.mflow --expect-fills --expect-waits)
     set_tests_properties(cycle_mflow_viewer_s1 PROPERTIES LABELS "cycle;memory;mflow;viewer;v0.10"
                          FIXTURES_REQUIRED cycle_mflow)
+    # The DRAM views (plan step 9) draw the same bundle: their data layer runs under Node.
+    add_test(NAME cycle_mflow_dram_views_s1
+        COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/dram/test_views.py
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_mflow_s1.mflow)
+    set_tests_properties(cycle_mflow_dram_views_s1 PROPERTIES LABELS "cycle;memory;mflow;viewer;v0.10"
+                         FIXTURES_REQUIRED cycle_mflow)
 endif()
 
 # Step 0c (#535): the test structure's trace and counters files, validated against each other.
