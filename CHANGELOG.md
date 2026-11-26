@@ -48,6 +48,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **12, the guide** (#573): `docs/02-simulation/debugging-a-cycle-core-run.md`, run, check, serve and
     view.
 
+- **The compute subsystem on the cycle core, Phase 2 steps 2a–2b** (#542, #543; epic #532,
+  `docs/plans/cycle-based-kpu-prototype.md` §5).
+  - **2a, the L2 and the BlockMover** (#542, #592): `cycle/compute/l2.hpp`, `block_mover.hpp` and
+    `l2_program.hpp`.
+    - The L2 is banks of rows, slot-major, with read and write ports per bank and a read latency, in its own
+      250 MHz clock. Its slots follow #387's `SlotPool` (FREE, OWNED, READY, READING), and a transition from
+      the wrong state is a `SlotFault`.
+    - The read latency is a pipeline, not a formula. Each bank measures its reads in flight, which answers
+      #495 by measurement: the integral is reads × latency, exactly.
+    - The BlockMover moves L3 → L2 by strided rows under the slot's credit, one beat of its bus a clock, and
+      writes back L2 → L3. A stand-in L3 serves it until the join.
+  - **2b, the Streamer and the L1 lane buffers** (#543): `cycle/compute/streamer.hpp` and `l1_lanes.hpp`.
+    - An OS COMPUTE fires when the Streamer holds both operands' tile-ready tokens from the L2 and the
+      previous command's interval, max(K, h, w), has passed. It reads one A row and one B row a clock.
+    - Each row loads into its lane through a read pipeline D clocks deep, and the lanes stream one element a
+      clock with the array's skew. `completed` is the last load, a + D + L, and the operand slots are freed by
+      then, before the array has its last element.
+    - A lane's one credit is a token held exactly when left ≤ 1, checked every clock. A load without it, or a
+      row not back from L2 by its load, is an `L1Fault`.
+    - The round trip from the 1 GHz Streamer to the 250 MHz L2 measures 26 clocks, so that is the least D
+      this configuration keeps.
+    - The L2 gains the Streamer's reader port, sharing the banks' ports with the BlockMover's, and a `Feed`
+      action, which counts as a consumer before a Release.
 - **The memory subsystem on the cycle core, Phase 1 steps 1b–1e** (#538–#541; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §4). DRAM, the DMA engine, the NoC and the L3 tile, built
   bottom-up on the cycle core and checked bit for bit against L-B's data.

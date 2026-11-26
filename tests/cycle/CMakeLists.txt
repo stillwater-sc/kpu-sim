@@ -75,6 +75,14 @@ set_target_properties(test_cycle_l2_bm PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_l2_bm COMMAND test_cycle_l2_bm)
 set_tests_properties(test_cycle_l2_bm PROPERTIES LABELS "cycle;l2;blockmover;compute;v0.10")
 
+add_executable(test_cycle_streamer test_cycle_streamer.cpp)
+target_link_libraries(test_cycle_streamer PRIVATE Catch2::Catch2WithMain)
+target_include_directories(test_cycle_streamer PRIVATE ${CMAKE_SOURCE_DIR}/include)
+kpu_set_target_options(test_cycle_streamer)
+set_target_properties(test_cycle_streamer PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_streamer COMMAND test_cycle_streamer)
+set_tests_properties(test_cycle_streamer PROPERTIES LABELS "cycle;streamer;l1;compute;v0.10")
+
 # Step 1c (#539): the NoC hubs and ports on the core, built from a deployment's layout.
 add_executable(test_cycle_noc test_cycle_noc.cpp)
 target_link_libraries(test_cycle_noc PRIVATE Catch2::Catch2WithMain kpu_memory_components kpu_trace kpu_program)

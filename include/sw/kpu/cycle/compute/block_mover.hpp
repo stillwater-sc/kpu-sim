@@ -65,7 +65,8 @@ public:
                                         "whole beats of the bus");
         validate_l2_program(program, cfg.slots, cfg.rows_per_slot, cfg.row_bytes, "cycle::BlockMover " + this->name());
         for (std::size_t i = 0; i < program.size(); ++i)
-            if (program[i].kind != L2Action::Kind::Release) actions_.push_back({i, program[i]});
+            if (program[i].kind == L2Action::Kind::Move || program[i].kind == L2Action::Kind::Writeback)
+                actions_.push_back({i, program[i]});   // the Feeds are the Streamer's, the Releases the L2's
         clear();
     }
 
