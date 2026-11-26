@@ -21,9 +21,9 @@
 //
 // THE TRACE (a Tracer in the options): a track per component (DMA engine, channel, L3 tile, hub,
 // port) and per link, each domain's clock, and a lane per L3 slot: each tile's span "filling"
-// from its first beat to ready, then resident until its Release. The channel's own trace, a track
-// per bank and bank group, is a separate file (MemoryRunOptions::dram_trace) for the LPDDR5 trace
-// validator.
+// from its first beat to ready, then resident until its Release. The DRAM side's own record --
+// bursts, commands, banks -- is the .mflow (MemoryRunOptions::events with an MflowRecorder), for
+// tools/trace/mflow_check.py and the DRAM views.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -69,7 +69,6 @@ struct MemoryRunOptions {
     std::uint64_t deadlock_window = 10'000;  // edges without progress
     Picoseconds limit = 1'000'000'000'000;   // 1 s of simulated time
     Tracer* tracer = nullptr;
-    std::string dram_trace;                  // where to write the channel's own trace ("" = none)
     std::string counters;                    // where to write the counters (write_counters_json; "" = none)
     MemoryEvents* events = nullptr;          // a sink for the engine's and the channel's events (an
                                              // MflowRecorder, record/mflow_recorder.hpp); null = none
@@ -167,7 +166,6 @@ inline MemoryRun run_memory_subsystem(const CspL3Plan& plan, const program::plat
         for (std::uint32_t s = 0; s < plan.slots; ++s)
             if (l3.ready(s) && !seen.count(l3.ticket(s))) seen[l3.ticket(s)] = l3.peek(s);
     });
-    if (!o.dram_trace.empty()) ch.enable_dram_trace(true);
 
     try {
         out.finished = sim.run_until_idle(o.limit);
@@ -208,8 +206,6 @@ inline MemoryRun run_memory_subsystem(const CspL3Plan& plan, const program::plat
             o.tracer->span(lanes[r.slot], tile, kpu.edge(r.ready_at), kpu.edge(r.released_at ? *r.released_at : last));
         }
     }
-    if (!o.dram_trace.empty() && !ch.write_dram_trace(o.dram_trace))
-        throw std::runtime_error("run_memory_subsystem: cannot write " + o.dram_trace);
     return out;
 }
 

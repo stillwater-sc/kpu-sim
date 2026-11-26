@@ -376,8 +376,8 @@ def index_html(root):
             f'<script>{SCRIPT}</script></body></html>')
 
 
-# The artifact kinds Perfetto opens: the Perfetto export, and a Chrome trace of any kind.
-PERFETTO_KINDS = ("trace", "dram-trace")
+# The artifact kinds Perfetto opens: a Perfetto export or any other Chrome trace.
+PERFETTO_KINDS = ("trace",)
 
 # The index's script.
 #  - Live: /api/events names each run added, changed or removed; the list is refetched from "/"

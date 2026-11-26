@@ -239,50 +239,29 @@ def parse_demo_output(output: str) -> dict:
     }
 
 
-def parse_trace_validator_output(output: str, trace_file: str) -> dict:
-    """Parse trace validator JSON output.
+def parse_mflow_check_output(output: str, returncode: int, bundle: str) -> dict:
+    """Parse tools/trace/mflow_check.py's --json output for one .mflow bundle.
+
+    The checker exits 0 when every invariant holds, 1 when one is violated, and 2 when the
+    bundle cannot be read (its message is on stderr, and there are no violations).
 
     Returns:
         {
-            "status": str,
-            "violations": [{"invariant_id": str, "severity": str,
-                           "message": str, "fix_hint": str, "trace_file": str}]
+            "status": "PASS" | "FAIL" | "UNREADABLE" | "UNKNOWN",
+            "checked": [str],
+            "violations": [{"invariant_id": str, "message": str, "bundle": str}]
         }
     """
-    # Try JSON output first
+    if returncode == 2:
+        return {"status": "UNREADABLE", "checked": [], "violations": []}
     try:
         data = json.loads(output)
-        violations = []
-        for v in data.get("violations", []):
-            violations.append({
-                "invariant_id": v.get("invariant", "UNKNOWN"),
-                "severity": v.get("severity", "ERROR"),
-                "message": v.get("message", ""),
-                "fix_hint": v.get("fix_hint", ""),
-                "trace_file": trace_file,
-            })
-        return {
-            "status": data.get("status", "UNKNOWN"),
-            "violations": violations,
-        }
     except (json.JSONDecodeError, TypeError):
-        pass
-
-    # Fall back to text parsing — scan for INV-NNN patterns regardless
-    violations = []
-    for line in output.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        inv_m = re.match(r"(INV-\d+):\s*(.+)", line)
-        if inv_m:
-            violations.append({
-                "invariant_id": inv_m.group(1),
-                "severity": "ERROR",
-                "message": inv_m.group(2),
-                "fix_hint": "",
-                "trace_file": trace_file,
-            })
-
-    status = "FAIL" if violations else ("PASS" if "PASSED" in output or "pass" in output.lower() else "UNKNOWN")
-    return {"status": status, "violations": violations}
+        return {"status": "UNKNOWN", "checked": [], "violations": []}
+    if not isinstance(data, dict):
+        return {"status": "UNKNOWN", "checked": [], "violations": []}
+    violations = [{"invariant_id": v.get("invariant", "UNKNOWN"), "message": v.get("message", ""), "bundle": bundle}
+                  for v in data.get("violations", []) if isinstance(v, dict)]
+    passed = data.get("passed")
+    status = "PASS" if passed is True and returncode == 0 else "FAIL" if passed is False or returncode == 1 else "UNKNOWN"
+    return {"status": status, "checked": list(data.get("checked", [])), "violations": violations}

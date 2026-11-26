@@ -123,10 +123,11 @@ class ServerTest(unittest.TestCase):
                           ("dram-swim", "/view/dram-swim/swimlane.html?bundle=/files/2026-11-25-mm64/mem.mflow/")])
         # Nothing inside a run directory is listed again as a run of its own.
         self.assertFalse(any(k.startswith("2026-11-25-mm64/") for k in runs))
-        # Bare artifacts: a bundle, a DRAM trace (to the LPDDR5 view); a JSON file that is no trace is not a run.
+        # Bare artifacts: a bundle, a Chrome trace (whatever it traces, a trace: Perfetto opens it);
+        # a JSON file that is no trace is not a run.
         self.assertEqual(runs["bare.mflow"]["kind"], "mflow")
-        self.assertEqual(runs["dram.json"]["kind"], "dram-trace")
-        self.assertEqual(runs["dram.json"]["artifacts"][0]["views"], [])   # Perfetto only (step 9b)
+        self.assertEqual(runs["dram.json"]["kind"], "trace")
+        self.assertEqual(runs["dram.json"]["artifacts"][0]["views"], [])   # Perfetto only
         self.assertNotIn("notes.json", runs)
 
     def test_symlinks_are_not_followed_into_runs(self):
@@ -267,7 +268,7 @@ class ServerTest(unittest.TestCase):
     def test_every_trace_has_an_open_in_perfetto_button(self):
         _, _, body = self.get("/")
         page = body.decode("utf-8")
-        # The run's Perfetto export and the bare DRAM trace; nothing else is a trace.
+        # The run's Perfetto export and the bare Chrome trace; nothing else is a trace.
         buttons = re.findall(r'<button type="button" class="perfetto" data-url="([^"]*)" data-name="([^"]*)">', page)
         self.assertEqual(sorted(buttons), [("/files/2026-11-25-mm64/trace.json", "2026-11-25-mm64/perfetto"),
                                            ("/files/dram.json", "dram.json/dram.json")])

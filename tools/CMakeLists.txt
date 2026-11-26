@@ -59,10 +59,8 @@ add_subdirectory(runner)
 # ============================================================================
 add_subdirectory(analysis)
 
-# ============================================================================
-# Trace Tools
-# ============================================================================
-add_subdirectory(trace)
+# Trace tools: tools/trace/ holds the Python record checkers (mflow_check.py, ...), run by the
+# tests that write the records; it builds nothing.
 
 # ============================================================================
 # Development Tools

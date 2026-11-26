@@ -1,42 +1,51 @@
 ---
 name: lpddr5-trace-debug
-description: Known LPDDR5 trace-generation bug classes and their fixes — wrong PRECHARGE txn_id, request type defaulting to WRITE, and tRCD/tRP/tRRD timing violations. Use when the trace validator reports INV-001/INV-002 violations or timing-constraint failures.
+description: Known LPDDR5 recording and controller bug classes and their fixes — a PRECHARGE credited to the wrong request, a refresh treated as a request, a request's direction defaulting to write, and DRAM timing violations. Use when mflow_check.py reports M9/M10/M11 ownership or order violations or M5 timing failures on a .mflow record.
 ---
 
-# LPDDR5 Trace Bugs and Fixes
+# LPDDR5 Record Bugs and Fixes
 
-Migrated out of CLAUDE.md. Each entry is a bug class that has already bitten this repo.
+Migrated out of CLAUDE.md. Each entry is a bug class that has already bitten this repo. The
+checks are `tools/trace/mflow_check.py`'s; `patterns/memory/lpddr5/INVARIANTS.md` maps the old
+INV IDs to them.
 
-## Bug: PRECHARGE has wrong txn_id
+## Bug: PRECHARGE credited to the wrong request
 
-**Symptom:** Validator reports INV-001/INV-002 violation for `txn_id=0`
+**Symptom:** M9 reports a PRE that "serves no burst", or closes a row its burst is not in
+(formerly INV-001/INV-002 on `txn_id=0`)
 
-**Root Cause:** PRECHARGE assigned a sentinel txn_id instead of the original request's txn_id
+**Root Cause:** the PRECHARGE was given a sentinel id instead of the request that opened the page
 
-**Fix:** Track which request opened the page, and use that txn_id for the PRECHARGE
+**Fix:** track which request opened each bank's page, and name that request on its PRECHARGE
 
-## Bug: Request type defaults to WRITE
+## Bug: Refresh treated as a request
 
-**Symptom:** Requests labeled WRITE when they should be READ
+**Symptom:** M11 reports a REF that serves a burst (formerly INV-006)
 
-**Root Cause:** Type detection logic: `type = isRead ? 'READ' : 'WRITE'`
+**Root Cause:** a refresh given a request id, so it is grouped with the requests
 
-**Fix:** Explicit check:
-```javascript
-if (!hasRead && !hasWrite) continue; // Skip - not a request
-type = hasRead ? 'READ' : 'WRITE';
-```
+**Fix:** a REF serves no burst (`NONE`): it is maintenance
+
+## Bug: Request direction defaults to WRITE
+
+**Symptom:** a view or summary counts PRECHARGE-only groups as writes (formerly INV-200)
+
+**Root Cause:** direction inferred by the absence of a READ: `type = isRead ? 'READ' : 'WRITE'`
+
+**Fix:** read the record's own direction (`bursts.is_load`), never infer it from commands
 
 ## Bug: Timing constraint violation
 
-**Symptom:** tRCD, tRP, tRRD violations
+**Symptom:** M5 reports tRCD, tRP, tRAS, tRC, tRFCpb, tRRD, tCCD, tFAW, tWTR or tRTW
 
-**Root Cause:** Commands issued without respecting timing parameters
+**Root Cause:** a command issued without respecting a timing parameter
 
-**Fix:** Add timing checks before issuing commands; respect the parameters in TIMING
+**Fix:** check the parameter before issuing; M5 checks against the record's declared table
+(`dram_timing.params`), in controller ticks
 
 ## Where to look
 
-- Invariant definitions: `patterns/memory/lpddr5/INVARIANTS.md`
-- Validator: `patterns/memory/lpddr5/common/trace_validator.py`
-- C++ harness: `patterns/memory/lpddr5/common/lpddr5_harness.hpp`
+- Invariant definitions and their checks: `patterns/memory/lpddr5/INVARIANTS.md`
+- Checker: `tools/trace/mflow_check.py` (its docstring lists every check)
+- C++ harness: `patterns/memory/lpddr5/common/lpddr5_harness.hpp` (`export_mflow`)
+- Controller: `src/models/temporal/memory/controllers/lpddr5_controller.cpp`

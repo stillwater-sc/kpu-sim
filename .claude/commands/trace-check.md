@@ -1,49 +1,45 @@
-Run trace validators on all generated trace files.
+Check every generated memory-flow record (`.mflow`) with `tools/trace/mflow_check.py`.
 
-1. Find all trace files:
-   `find traces/ -name "*.json" 2>/dev/null`
+1. Find the records (bundles are directories):
+   `find build traces runs -type d -name "*.mflow" 2>/dev/null`
 
-2. For each trace file, run:
-   `python3 patterns/memory/lpddr5/common/trace_validator.py <file> --json`
+2. For each, run:
+   `python3 tools/trace/mflow_check.py <bundle> --json`
+   Exit 0: every invariant holds. 1: violations, in `violations`. 2: the record cannot be
+   read; there are no violations to parse — report the error instead.
 
 3. Report results:
-   | Trace File | Status | Violations |
-   |------------|--------|------------|
+   | Record | Status | Violations |
+   |--------|--------|------------|
 
-4. For any FAILED traces:
-   - Show the invariant ID and violation message
-   - Cross-reference with patterns/memory/lpddr5/INVARIANTS.md
+4. For any FAILED record:
+   - Show the check ID (TF10, TF11, M1–M11) and the message
+   - Cross-reference with `patterns/memory/lpddr5/INVARIANTS.md` (its table maps each INV to
+     its check) and `mflow_check.py`'s docstring
    - Identify the C++ code likely causing the violation
 
-5. If no trace files exist, report that and suggest running a pattern
-   to generate traces first.
+5. If no records exist, report that and suggest generating them:
+   `cd build && ctest -R 'lpddr5_|mflow'` (the LPDDR5 patterns write
+   `build/patterns/memory/lpddr5/<name>.mflow`).
 
-## Trace generation fix loop
+## Record generation fix loop
 
-When trace-generation C++ code changes (migrated from CLAUDE.md):
+When recording or controller code changes:
 
-1. Modify the C++ trace generation code
+1. Modify the C++ code
 2. Rebuild: `cmake --build --preset release`
-3. Run the pattern to generate a trace:
-   `./build/patterns/memory/lpddr5/single-bank/page-conflicts`
-4. Validate:
-   `python3 patterns/memory/lpddr5/common/trace_validator.py traces/memory/lpddr5/single-bank/page_conflicts_trace.json`
-5. If failed: read the violation messages, trace back to the C++ code causing it,
-   fix, and repeat from step 2. See the `lpddr5-trace-debug` skill for known bug classes.
-6. When passed: commit
+3. Run a pattern to write its record:
+   `./build/patterns/memory/lpddr5/lpddr5_page_conflicts --trace /tmp/page_conflicts.mflow`
+4. Check it:
+   `python3 tools/trace/mflow_check.py /tmp/page_conflicts.mflow --summary`
+5. If failed: read the violations, trace back to the C++ code causing them, fix, and repeat
+   from step 2. See the `lpddr5-trace-debug` skill for known bug classes.
+6. When passed: run `ctest -R 'lpddr5_|mflow'` and commit
 
 ## Visualization code loop
 
-1. Modify the HTML visualization code
-2. Run the validator over all traces:
-   ```bash
-   status=0
-   for f in traces/memory/lpddr5/single-bank/*.json; do
-     python3 patterns/memory/lpddr5/common/trace_validator.py "$f" || status=1
-   done
-   [ "$status" -eq 0 ]
-   ```
-   The accumulator matters: a bare loop returns only the LAST validator's status, so an
-   earlier violation followed by a passing final trace would look like success.
-3. Test the visualization in a browser
+1. Modify a view (`tools/visualization/dram/` or `tools/visualization/memflow/`)
+2. Run the views' tests over real records:
+   `cd build && ctest -R 'dram_views|memflow|lpddr5_interleaved_viewer' --output-on-failure`
+3. Open the view on a record in a browser (the debug server, or `pack.py`)
 4. When passed: commit

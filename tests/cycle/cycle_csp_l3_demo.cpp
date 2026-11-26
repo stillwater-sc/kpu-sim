@@ -3,13 +3,13 @@
 // Rung 4 on the cycle core (#540): an int8 64^3 matmul's L3 traffic on kpu_s1, with the
 // hypothesized C, written out for the validators.
 //
-//   cycle_csp_l3_demo <source-dir> <dram-trace.json> <core-trace.json> <counters.json>
+//   cycle_csp_l3_demo <source-dir> <core-trace.json> <counters.json>
 //
 // The walker's Loads, Stores and Releases drive the DMA engine and the L3 tile; L-B's C tiles are
 // filled into their slots at the program's Writebacks. The data is checked (every slot at ready,
 // DRAM's C at the end), and the run writes:
-//   - the LPDDR5 controller's trace, for patterns/memory/lpddr5/common/trace_validator.py;
-//   - the cycle core's trace and counters, for check_trace.py (open either in ui.perfetto.dev).
+//   - the cycle core's trace and counters, for check_trace.py (open the trace in ui.perfetto.dev).
+// The channel checks its controller's DRAM timing invariants as it runs.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -39,8 +39,8 @@ namespace lang = sw::kpu::program::csp::lang;
 namespace driver = sw::kpu::program::driver;
 
 int main(int argc, char** argv) try {
-    if (argc != 5) {
-        std::fprintf(stderr, "usage: cycle_csp_l3_demo <source-dir> <dram-trace.json> <core-trace.json> <counters.json>\n");
+    if (argc != 4) {
+        std::fprintf(stderr, "usage: cycle_csp_l3_demo <source-dir> <core-trace.json> <counters.json>\n");
         return 2;
     }
     const auto dev =
@@ -75,7 +75,6 @@ int main(int argc, char** argv) try {
         for (std::uint32_t s = 0; s < plan.slots; ++s)
             if (r.l3.ready(s) && !good.count(r.l3.ticket(s))) good[r.l3.ticket(s)] = r.l3.peek(s) == plan.placed.at(r.l3.ticket(s));
     });
-    r.channel.enable_dram_trace(true);
     if (!r.sim.run_until_idle(20'000'000'000)) {
         std::fprintf(stderr, "cycle_csp_l3_demo: the run did not finish\n");
         return 1;
@@ -90,12 +89,8 @@ int main(int argc, char** argv) try {
             std::fprintf(stderr, "cycle_csp_l3_demo: %s is not L-B's in DRAM\n", t.tile.to_string().c_str());
             return 1;
         }
-    if (!r.channel.write_dram_trace(argv[2])) {
-        std::fprintf(stderr, "cycle_csp_l3_demo: cannot write %s\n", argv[2]);
-        return 1;
-    }
-    tracer.write(argv[3]);
-    write_counters_json(r.sim, argv[4]);
+    tracer.write(argv[2]);
+    write_counters_json(r.sim, argv[3]);
     std::printf("cycle_csp_l3_demo: int8 64^3 on kpu_s1: %zu Loads, %zu Fills (C), %zu Stores, %zu Releases through %u "
                 "slots, bit for bit; %.1f%% of the data bus\n",
                 plan.loads, plan.fills, plan.stores, plan.releases, plan.slots, 100.0 * r.channel.dram().data_bus_utilization());

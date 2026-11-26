@@ -19,7 +19,7 @@ from parsers import (
     parse_build_output,
     parse_ctest_output,
     parse_demo_output,
-    parse_trace_validator_output,
+    parse_mflow_check_output,
 )
 
 passed = 0
@@ -203,41 +203,38 @@ test("empty demo cycles", result["total_cycles"] == 0)
 
 
 # ============================================================================
-# Trace Validator Parser Tests
+# mflow_check Parser Tests
 # ============================================================================
-print("\n=== Trace Validator Parser ===")
+print("\n=== mflow_check Parser ===")
 
-# JSON output
-json_output = json.dumps({
-    "status": "FAILED",
-    "violations": [
-        {
-            "invariant": "INV-001",
-            "severity": "ERROR",
-            "message": "txn_id=0 has no data operation",
-            "fix_hint": "PRECHARGE should have same txn_id as READ/WRITE"
-        }
-    ]
+# A violated record (exit 1)
+fail_json = json.dumps({
+    "bundle": "b.mflow", "passed": False, "checked": ["TF10", "M9"],
+    "violations": [{"invariant": "M9", "message": "mc[0]/ch[0]/bg[0]/ba[0]: PRE #2 (tick 36, cycle 36) serves no burst"}],
 })
-result = parse_trace_validator_output(json_output, "trace.json")
-test("json status", result["status"] == "FAILED")
-test("json violations count", len(result["violations"]) == 1)
+result = parse_mflow_check_output(fail_json, 1, "b.mflow")
+test("fail status", result["status"] == "FAIL")
+test("fail checked", result["checked"] == ["TF10", "M9"])
+test("fail violations count", len(result["violations"]) == 1)
 if result["violations"]:
     v = result["violations"][0]
-    test("json invariant_id", v["invariant_id"] == "INV-001")
-    test("json severity", v["severity"] == "ERROR")
-    test("json trace_file", v["trace_file"] == "trace.json")
+    test("fail invariant_id", v["invariant_id"] == "M9")
+    test("fail bundle", v["bundle"] == "b.mflow")
 
-# Passing JSON
-pass_json = json.dumps({"status": "PASSED", "violations": []})
-result = parse_trace_validator_output(pass_json, "good_trace.json")
-test("passing json", result["status"] == "PASSED")
-test("passing no violations", len(result["violations"]) == 0)
+# A clean record (exit 0)
+pass_json = json.dumps({"bundle": "b.mflow", "passed": True, "checked": ["TF10"], "violations": []})
+result = parse_mflow_check_output(pass_json, 0, "b.mflow")
+test("pass status", result["status"] == "PASS")
+test("pass no violations", len(result["violations"]) == 0)
 
-# Text fallback
-text_output = "INV-001: txn_id=0 has no data operation\nINV-002: Invalid bank state\n"
-result = parse_trace_validator_output(text_output, "trace.json")
-test("text fallback violations", len(result["violations"]) == 2)
+# An unreadable record (exit 2): no JSON, and not a pass
+result = parse_mflow_check_output("", 2, "b.mflow")
+test("unreadable status", result["status"] == "UNREADABLE")
+test("unreadable no violations", result["violations"] == [])
+
+# Output that is not the checker's JSON is never a pass
+result = parse_mflow_check_output("PASS", 0, "b.mflow")
+test("garbage is unknown", result["status"] == "UNKNOWN")
 
 
 # ============================================================================

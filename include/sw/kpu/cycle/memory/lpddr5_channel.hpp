@@ -42,9 +42,9 @@
 // accepts, under the id the controller gives it, and each command the controller issues, as the
 // controller's own record (from the observer that also checks the data bus).
 //
-// TRACE. The controller's own trace -- banks, buses, commands -- for
-// patterns/memory/lpddr5/common/trace_validator.py: enable_dram_trace() before the run,
-// write_dram_trace() after. The component's state is on the cycle core's trace as any other's.
+// TRACE. The controller's own command trace, in memory: enable_controller_trace() before the run
+// (a test compares it with a bare controller's). The run's DRAM record is the .mflow
+// (record/mflow_recorder.hpp); the component's state is on the cycle core's trace as any other's.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -54,7 +54,6 @@
 #include <sw/kpu/cycle/link.hpp>
 #include <sw/kpu/cycle/memory/memory_events.hpp>
 #include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
-#include <sw/trace/trace_exporter.hpp>
 
 #include <algorithm>
 #include <array>
@@ -223,15 +222,11 @@ public:
     [[nodiscard]] std::size_t outstanding() const { return outstanding_; }
     [[nodiscard]] const Controller& controller() const { return *mc_; }
 
-    // The controller's trace (trace_validator.py's input). Enable before the run: reset() keeps it.
-    void enable_dram_trace(bool on) {
+    // The controller's command trace, kept in memory (controller().trace_entries()). Enable before
+    // the run: reset() keeps it.
+    void enable_controller_trace(bool on) {
         trace_ = on;
         mc_->enable_tracing(on);
-    }
-    // Writes it as Chrome trace JSON, timed at the domain's clock. False if the file failed.
-    bool write_dram_trace(const std::string& path) const {
-        const double ghz = 1000.0 / domain().period_ps();
-        return sw::trace::ChromeTraceExporter::export_traces(path, mc_->trace_entries(), ghz);
     }
 
 private:

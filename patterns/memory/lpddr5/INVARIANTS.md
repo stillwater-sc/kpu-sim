@@ -1,15 +1,16 @@
 # LPDDR5 Memory Controller Trace Invariants
 
-This document defines the invariants that all LPDDR5 memory controller traces must satisfy.
-These invariants are enforced by the trace validator (`trace_validator.py`) and should be
-checked before visualizing traces or using them for validation.
+This document defines the invariants every run of the LPDDR5 memory controller must satisfy.
+They are checked on the run's `.mflow` record by `tools/trace/mflow_check.py`, under the M-check
+IDs below; check a record before viewing it or relying on it.
 
 ## Where each invariant is enforced on the `.mflow` record
 
-The Chrome-trace validator (`trace_validator.py`) is retiring
-(`docs/plans/cycle-mflow-and-debug-server.md` §3.7, step 11). Its invariants are checked on the
-`.mflow` record by `tools/trace/mflow_check.py`, where the record names what the Chrome trace left
-to be inferred (each command's burst, its exact controller ticks, the declared device's timing table):
+The INV IDs were first checked on the controller's Chrome trace by `trace_validator.py`, which is
+retired with that trace (`docs/plans/cycle-mflow-and-debug-server.md` §3.7, step 11). Each is
+checked on the `.mflow` record by `tools/trace/mflow_check.py`, where the record names what the
+Chrome trace left to be inferred (each command's burst, its exact controller ticks, the declared
+device's timing table):
 
 | Invariant | On the record | Note |
 |---|---|---|
@@ -17,7 +18,8 @@ to be inferred (each command's burst, its exact controller ticks, the declared d
 | INV-003 (temporal order within a transaction) | M10 | also: a page closed before its CAS only for a refresh; a page hit exactly when no ACT serves it |
 | INV-005 (bank state machine) | TF10 | one open row per bank, in issue order |
 | INV-006 (a refresh belongs to no transaction) | M11 | |
-| INV-100 to INV-103 (tRCD, tRP, tRRD, tFAW) | M5 | against the declared device's table, in controller ticks; M5 adds tRAS, tRC, tRFCpb, tCCD and the bus turnarounds tWTR and tRTW |
+| INV-100 to INV-103 (tRCD, tRP, tRRD, tFAW) | M5 | against the declared device's table, in controller ticks; M5 adds tRAS, tRC, tRFCpb and tCCD |
+| INV-104, INV-105 (tRTW, tWTR) | M5 | the bus turnarounds: tWTR_S per channel and tWTR_L per bank group, tRTW per channel |
 | INV-200, INV-201 (visualization) | none needed | the views read the record's links and outcomes; they infer no grouping |
 
 ## Purpose
@@ -238,47 +240,37 @@ type = hasRead ? 'READ' : 'WRITE'  // Defaults PRECHARGE-only to WRITE!
 **Rationale:** Timing constraints are relative to ACTIVATE and PRECHARGE. Filtering them
 out breaks timing analysis.
 
-## Validator Output Format
+## Checker Output
 
-When validation fails, the validator produces structured output:
+`mflow_check.py` exits 0 when every invariant holds, 1 when one is violated (parse the
+violations and fix the root cause), and 2 when the record cannot be read (there are no
+violations to parse: fix the recording or the path). With `--json`:
 
 ```json
 {
-  "status": "FAILED",
-  "trace_file": "page_conflicts_trace.json",
+  "bundle": "traces/memory/lpddr5/single-bank/page_conflicts.mflow",
+  "passed": false,
+  "checked": ["TF10", "TF11", "M1", "M2", "M3", "M4", "M6", "M5", "M7", "M9", "M10", "M11"],
   "violations": [
-    {
-      "invariant": "INV-001",
-      "severity": "ERROR",
-      "txn_id": 0,
-      "message": "txn_id=0 has no data operation (only PRECHARGE events)",
-      "events": [
-        {"name": "PRECHARGE", "cycle_issue": 78, "cycle_complete": 92},
-        {"name": "PRECHARGE", "cycle_issue": 128, "cycle_complete": 142}
-      ],
-      "fix_hint": "PRECHARGE should have same txn_id as the READ/WRITE that opened the page"
-    }
-  ],
-  "summary": {
-    "total_transactions": 5,
-    "valid_transactions": 4,
-    "invalid_transactions": 1,
-    "errors": 1,
-    "warnings": 0
-  }
+    {"invariant": "M9", "message": "mc[0]/ch[0]/bg[0]/ba[0]: PRE #2 (tick 36, cycle 36) serves no burst"}
+  ]
 }
 ```
+
+`--summary` adds what the run did: requests and bursts, commands by kind, page outcomes, bytes
+and throughput against the record's ceiling, each bank's commands, and the bursts' latency.
 
 ## Integration with Claude Code
 
 Claude Code should:
 
 1. **Pre-generation:** Read INVARIANTS.md to understand constraints
-2. **Post-generation:** Run trace_validator.py on generated traces
-3. **On failure:** Parse validator output and fix identified issues
-4. **Iteration:** Re-run validator until all invariants pass
+2. **Post-generation:** Run `python3 tools/trace/mflow_check.py <bundle.mflow>` on the record
+3. **On failure:** Parse the violations and fix the root cause, never the symptom
+4. **Iteration:** Re-run the checker until every invariant holds
 
-See `CLAUDE.md` in project root for detailed Claude Code integration guidelines.
+A new invariant is an M-check in `mflow_check.py`, with a self-test in `test_mflow_check.py`
+that breaks a clean record and sees the check fail (the `add-invariant` skill).
 
 ## Revision History
 
@@ -286,3 +278,4 @@ See `CLAUDE.md` in project root for detailed Claude Code integration guidelines.
 |------|---------|--------|---------|
 | 2026-01-05 | 1.0 | Claude Code | Initial invariant documentation |
 | 2026-11-24 | 1.1 | Claude Code | INV-006: a refresh belongs to no transaction (#537) |
+| 2026-11-26 | 2.0 | Claude Code | The Chrome trace and `trace_validator.py` retired; every invariant mapped to its `mflow_check.py` check (#572) |

@@ -3,13 +3,13 @@
 // DRAM -> DMA engine -> L3 tile and back on the cycle core (#538): its traces and counters, for
 // the validators.
 //
-//   cycle_l3_dma_demo <dram-trace.json> <core-trace.json> <counters.json>
+//   cycle_l3_dma_demo <core-trace.json> <counters.json>
 //
 // Rung 2 of the memory subsystem's ladder: eight 4 KiB tiles through an L3 tile's two slots, each
 // loaded from DRAM, stored back, and released for the next. The data is checked: every tile in
 // its slot at the cycle it is ready, and every stored tile in DRAM. Writes:
-//   - the LPDDR5 controller's trace, for patterns/memory/lpddr5/common/trace_validator.py;
-//   - the cycle core's trace and counters, for check_trace.py (open either in ui.perfetto.dev).
+//   - the cycle core's trace and counters, for check_trace.py (open the trace in ui.perfetto.dev).
+// The channel checks its controller's DRAM timing invariants as it runs.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -29,8 +29,8 @@ using namespace sw::kpu::cycle;
 using namespace sw::kpu::cycle::test;
 
 int main(int argc, char** argv) try {
-    if (argc != 4) {
-        std::fprintf(stderr, "usage: cycle_l3_dma_demo <dram-trace.json> <core-trace.json> <counters.json>\n");
+    if (argc != 3) {
+        std::fprintf(stderr, "usage: cycle_l3_dma_demo <core-trace.json> <counters.json>\n");
         return 2;
     }
     constexpr std::uint32_t kTiles = 8, kBytes = 4096, kSlots = 2;
@@ -55,7 +55,6 @@ int main(int argc, char** argv) try {
             if (r.l3.ready(s) && !good.count(r.l3.ticket(s)))
                 good[r.l3.ticket(s)] = r.l3.peek(s) == tile_bytes(static_cast<std::uint32_t>(r.l3.ticket(s)), kBytes);
     });
-    r.channel.enable_dram_trace(true);
 
     if (!r.sim.run_until_idle(1'000'000'000)) {
         std::fprintf(stderr, "cycle_l3_dma_demo: the run did not finish\n");
@@ -72,12 +71,8 @@ int main(int argc, char** argv) try {
             return 1;
         }
     }
-    if (!r.channel.write_dram_trace(argv[1])) {
-        std::fprintf(stderr, "cycle_l3_dma_demo: cannot write %s\n", argv[1]);
-        return 1;
-    }
-    tracer.write(argv[2]);
-    write_counters_json(r.sim, argv[3]);
+    tracer.write(argv[1]);
+    write_counters_json(r.sim, argv[2]);
     const DmaCounts& d = r.dma.dma();
     std::printf("cycle_l3_dma_demo: %u tiles of %u bytes through %u slots, bit for bit; %llu read and %llu write "
                 "bursts, at most %llu in flight; %.1f%% of the data bus\n",

@@ -44,7 +44,7 @@ To keep a tunnel open in the background without a shell, use `ssh -N -L 8080:loc
 
 **Which viewers open what:**
 - **`.mflow` bundles** open in the memory-side debugger (`/view/memflow/index.html?bundle=...`) and the DRAM views: the timing diagram (`/view/dram-timing/timing.html?bundle=...`), the bank analyzer (`/view/dram-bank/bank_analyzer.html?bundle=...`) and the request swimlanes (`/view/dram-swim/swimlane.html?bundle=...`).
-- **An LPDDR5 Chrome DRAM trace** has no browser view: the `.mflow` views replaced the old ones, and the trace itself retires (step 11). Its **Open in Perfetto** button still works.
+- **A Chrome/Perfetto trace** has no browser view of its own: its **Open in Perfetto** button sends it to Perfetto. (The LPDDR5 controller's Chrome DRAM trace is retired; its views read the `.mflow` record.)
 - **The other viewers** (tile flow, occupancy, floorplan, domain flow) are served as pages that open their own files.
 
 ## Live updates

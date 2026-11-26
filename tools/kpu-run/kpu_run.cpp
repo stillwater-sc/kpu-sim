@@ -130,8 +130,6 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
   --memory-trace <file.json>     its Perfetto trace: a track per component and link, each
                             domain's clock, and a lane per L3 slot
   --memory-counters <file.json>  its counters, for tests/cycle/check_trace.py
-  --memory-dram-trace <file.json>  the LPDDR5 channel's own trace, a track per bank, for
-                            patterns/memory/lpddr5/common/trace_validator.py
   --memory-mflow <dir>      its memory-flow record (.mflow version 4): every burst, DRAM command,
                             request (Load, Store, Fill), store-buffer change and DMA wait, for
                             tools/trace/mflow_check.py and tools/visualization/memflow
@@ -581,8 +579,7 @@ bool inside(const std::string& dir, const std::string& path) {
 // --memory-subsystem: the program's L3 traffic on the cycle core (#541).
 int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast, const platform::DeviceSpecification* device) {
     static const std::set<std::string> kMemory = {"--program", "--deploy", "--memory-subsystem", "--memory-trace",
-                                                  "--memory-counters", "--memory-dram-trace", "--memory-mflow",
-                                                  "--run-dir"};
+                                                  "--memory-counters", "--memory-mflow", "--run-dir"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kMemory.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a --memory-subsystem run\n";
@@ -592,9 +589,9 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
         std::cerr << "kpu-run: --memory-subsystem needs --deploy: the machine it runs on\n";
         return 2;
     }
-    std::string err, trace_path, counters_path, dram_path, mflow_path, run_dir;
+    std::string err, trace_path, counters_path, mflow_path, run_dir;
     if (!arg_required(a, "--memory-trace", trace_path, err) || !arg_required(a, "--memory-counters", counters_path, err) ||
-        !arg_required(a, "--memory-dram-trace", dram_path, err) || !arg_required(a, "--memory-mflow", mflow_path, err) ||
+        !arg_required(a, "--memory-mflow", mflow_path, err) ||
         !arg_required(a, "--run-dir", run_dir, err)) {
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
@@ -602,7 +599,7 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
     std::optional<RunManifest> manifest;
     if (!run_dir.empty()) {
         // One place for every artifact: the directory names them.
-        for (const char* k : {"--memory-trace", "--memory-counters", "--memory-dram-trace", "--memory-mflow"})
+        for (const char* k : {"--memory-trace", "--memory-counters", "--memory-mflow"})
             if (arg_present(a, k)) {
                 std::cerr << "kpu-run: --run-dir names every artifact itself; drop " << k << "\n";
                 return 2;
@@ -622,8 +619,7 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
     // The bundle is removed and rewritten after the run: an artifact written inside it would go too.
     if (!mflow_path.empty())
         for (const auto& [flag, path] : {std::pair<const char*, const std::string*>{"--memory-trace", &trace_path},
-                                         {"--memory-counters", &counters_path},
-                                         {"--memory-dram-trace", &dram_path}})
+                                         {"--memory-counters", &counters_path}})
             if (!path->empty() && inside(mflow_path, *path)) {
                 std::cerr << "kpu-run: " << flag << " " << *path << " is inside the --memory-mflow bundle " << mflow_path
                           << ", which is rewritten whole after the run; put it elsewhere\n";
@@ -649,7 +645,6 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
         sw::kpu::cycle::MemoryRunOptions o;
         o.tracer = trace_path.empty() ? nullptr : &tracer;
         o.counters = counters_path;
-        o.dram_trace = dram_path;
         std::optional<sw::kpu::cycle::MflowRecorder> recorder;
         if (!mflow_path.empty()) {
             recorder.emplace(sw::kpu::cycle::MflowSetup{device->name, o.window, o.window, o.store_buffer_beats,
@@ -724,7 +719,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                                                    "--dflow", "--dflow-limit", "--dflow-values", "--dflow-values-cap",
                                                    "--dflow-lt1", "--dflow-lca",
                                                    "--tile-commands", "--bubbles", "--memory-subsystem",
-                                                   "--memory-trace", "--memory-counters", "--memory-dram-trace",
+                                                   "--memory-trace", "--memory-counters",
                                                    "--memory-mflow", "--run-dir"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
@@ -813,7 +808,7 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
     }
     const platform::DeviceSpecification* device = deployment ? &deployment->devices.front() : nullptr;
     if (has_flag(a, "--memory-subsystem")) return run_memory(a, *ast, device);
-    for (const char* k : {"--memory-trace", "--memory-counters", "--memory-dram-trace", "--memory-mflow", "--run-dir"})
+    for (const char* k : {"--memory-trace", "--memory-counters", "--memory-mflow", "--run-dir"})
         if (arg_present(a, k)) {
             std::cerr << "kpu-run: " << k << " records a --memory-subsystem run\n";
             return 2;

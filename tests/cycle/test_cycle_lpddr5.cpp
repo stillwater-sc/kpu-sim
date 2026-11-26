@@ -124,7 +124,7 @@ TEST_CASE("Every pattern workload runs on the core exactly as on the bare contro
         CAPTURE(w.name);
         const auto items = items_of(w);
         Rig rig(items);
-        rig.ch->enable_dram_trace(true);
+        rig.ch->enable_controller_trace(true);
         REQUIRE(rig.sim.run_until_idle(kLimit));
         REQUIRE(rig.sink->received.size() == items.size());
 

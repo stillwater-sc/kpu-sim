@@ -20,8 +20,6 @@
 #include <unordered_map>
 #include <sw/kpu/models/temporal/memory/controllers/lpddr5_controller.hpp>
 #include <sw/kpu/program/record/memory_flow_record.hpp>
-#include <sw/trace/resource_tracker.hpp>
-#include <sw/trace/trace_exporter.hpp>
 #include "lpddr5_configs.hpp"
 
 namespace fs = std::filesystem;
@@ -80,10 +78,7 @@ public:
     explicit LPDDR5Harness(const LPDDR5MemoryController::Config& config)
         : config_(config)
         , mc_(std::make_unique<LPDDR5MemoryController>(config))
-        , tracker_(std::make_unique<sw::trace::ResourceTracker>())
     {
-        mc_->enable_tracing(true);
-        mc_->set_resource_tracker(tracker_.get());
         mc_->set_command_observer([this](const LPDDR5MemoryController::CommandRecord& r) { observe(r); });
     }
 
@@ -208,40 +203,6 @@ public:
     }
 
     // ========================================================================
-    // Trace Export
-    // ========================================================================
-
-    /// Export trace to Chrome Trace JSON format
-    bool export_trace(const std::string& filename, double clock_ghz = 3.2) {
-        // Finalize resource tracker
-        tracker_->finalize(mc_->current_cycle());
-
-        // Export memory controller trace entries
-        bool success = sw::trace::ChromeTraceExporter::export_traces(
-            filename,
-            mc_->trace_entries(),
-            clock_ghz
-        );
-
-        if (success) {
-            std::cout << "Trace exported to: " << filename << std::endl;
-            std::cout << "  Events: " << mc_->trace_entries().size() << std::endl;
-            std::cout << "  Open with: https://ui.perfetto.dev" << std::endl;
-        }
-
-        return success;
-    }
-
-    /// Export resource utilization to separate file
-    bool export_resources(const std::string& filename, double clock_ghz = 3.2) {
-        tracker_->finalize(mc_->current_cycle());
-        auto tracks = tracker_->get_all_tracks();
-        return sw::trace::ResourceTrackerExporter::export_to_chrome_trace(
-            filename, tracks, clock_ghz
-        );
-    }
-
-    // ========================================================================
     // .mflow record (docs/plans/cycle-mflow-and-debug-server.md §3.5, step 10)
     // ========================================================================
     //
@@ -358,7 +319,6 @@ public:
 protected:
     LPDDR5MemoryController::Config config_;
     std::unique_ptr<LPDDR5MemoryController> mc_;
-    std::unique_ptr<sw::trace::ResourceTracker> tracker_;
 
 private:
     MFR rec_;                                              // requests, bursts and commands so far

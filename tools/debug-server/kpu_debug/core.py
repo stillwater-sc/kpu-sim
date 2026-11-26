@@ -45,8 +45,8 @@ VIEWERS = {
                   "title": "DRAM bank analyzer", "reads": "mflow", "param": "bundle"},
     "dram-swim": {"dir": REPO / "tools" / "visualization" / "dram", "page": "swimlane.html",
                   "title": "DRAM request swimlanes", "reads": "mflow", "param": "bundle"},
-    # A Chrome DRAM trace (dram-trace) has no browser view of its own: the .mflow views replaced
-    # them (step 9), and the trace itself retires (step 11). It still opens in Perfetto.
+    # A Chrome trace has no browser view of its own: it opens in Perfetto. The LPDDR5 controller's
+    # Chrome DRAM trace is retired (step 11); its views read the .mflow record.
 }
 # Shared scripts the viewers load by relative path (../common/mflow.js): served beside them.
 SHARED = {"common": REPO / "tools" / "visualization" / "common"}
@@ -109,8 +109,7 @@ def _bundle_format(d):
 
 
 def _trace_kind(path):
-    """A .json that is a Chrome or Perfetto trace: "dram-trace" for the LPDDR5 controller's (its
-    events name LPDDR5 banks), "trace" for any other; None if it is not a trace."""
+    """"trace" for a .json that is a Chrome or Perfetto trace; None if it is not a trace."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             head = f.read(65536)   # only the prefix: a trace can be hundreds of MiB
@@ -120,7 +119,7 @@ def _trace_kind(path):
         return None
     if '"ph"' not in head:
         return None
-    return "dram-trace" if "LPDDR5" in head else "trace"
+    return "trace"
 
 
 def links(kind, url):

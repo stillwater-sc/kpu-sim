@@ -49,7 +49,7 @@ if(KPU_BUILD_TESTS)
 
     # --memory-subsystem (#541): a program's L3 traffic on the cycle core's memory subsystem.
     # kpu_s1 on a direct link: the core trace and counters answer to check_trace.py, the
-    # channel's trace to the LPDDR5 trace validator; the T4 over its NoC.
+    # .mflow record to mflow_check.py; the T4 over its NoC.
     add_test(NAME csp_gen_memory_s1
         COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 64 --tile 16 --dtype int8
                 --target ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json
@@ -60,7 +60,7 @@ if(KPU_BUILD_TESTS)
     add_test(NAME kpu_run_memory_subsystem_s1
         COMMAND ${CMAKE_COMMAND}
             -DCMD=$<TARGET_FILE:run>
-            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.json$<SEMICOLON>--memory-counters$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.counters.json$<SEMICOLON>--memory-dram-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.lpddr5.json
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--memory-subsystem$<SEMICOLON>--memory-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.json$<SEMICOLON>--memory-counters$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.counters.json$<SEMICOLON>--memory-mflow$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/memory_s1.mflow
             -DEXPECT_CODE=0
             -DMUST_MATCH=on.a.direct.link.*bit.for.bit.*laws:.hold.on.every.row
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
@@ -229,10 +229,11 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.json ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.counters.json)
         set_tests_properties(kpu_run_memory_trace_check PROPERTIES LABELS "program;driver;cycle;memory"
                              FIXTURES_REQUIRED memory_s1_run)
-        add_test(NAME kpu_run_memory_dram_trace_validator
-            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common/trace_validator.py
-                    ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.lpddr5.json)
-        set_tests_properties(kpu_run_memory_dram_trace_validator PROPERTIES LABELS "program;driver;cycle;memory"
+        # The DRAM side's record of the same run (it replaced the LPDDR5 Chrome trace).
+        add_test(NAME kpu_run_memory_mflow_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/mflow_check.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/memory_s1.mflow)
+        set_tests_properties(kpu_run_memory_mflow_check PROPERTIES LABELS "program;driver;cycle;memory"
                              FIXTURES_REQUIRED memory_s1_run)
         # The run directory, and the two bundles: what run.json says is there, and each record
         # passes mflow_check.py (direct link and NoC).

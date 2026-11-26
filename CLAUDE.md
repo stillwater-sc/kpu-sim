@@ -212,7 +212,7 @@ faithfully while computing nothing — which makes them a misleading template. R
 ## Validation Requirements
 
 This section covers validation for **cycle-accurate** simulation, particularly
-memory controller traces and timing invariants.
+the memory side's records and DRAM timing invariants.
 
 ### Core Principle: Validate Before Declaring Complete
 
@@ -233,23 +233,26 @@ Claude Code must follow this workflow for any code that produces artifacts:
 
 ## Validation Tools
 
-### 1. Trace Validator (Python)
+### 1. Memory-flow record checker (Python)
 
-**Location:** `patterns/memory/lpddr5/common/trace_validator.py`
+**Location:** `tools/trace/mflow_check.py`
 
 **Usage:**
 ```bash
-python3 patterns/memory/lpddr5/common/trace_validator.py <trace_file.json>
+python3 tools/trace/mflow_check.py <bundle.mflow> [--summary]
 ```
 
-Add `--json` for machine-readable output. Exit codes are distinct and must be handled
-differently: **1** = invariants violated, so parse the violations and fix the root cause,
-never the symptom; **2** = the trace file could not be read or parsed, so there are no
-violations to parse — fix the trace generation or the path instead.
+The `.mflow` record is what the LPDDR5 patterns (`build/patterns/memory/lpddr5/<name>.mflow`),
+`kpu-memsim --out` and `kpu-run --memory-subsystem --memory-mflow` write. Add `--json` for
+machine-readable output and `--summary` for what the run did (throughput, page outcomes, each
+bank's commands, burst latency). Exit codes are distinct and must be handled differently:
+**1** = invariants violated, so parse the violations and fix the root cause, never the
+symptom; **2** = the record could not be read, so there are no violations to parse — fix the
+recording or the path instead.
 
 **When to Run:**
-- After generating any trace file
-- After modifying trace generation code
+- After generating any record
+- After modifying recording code
 - After modifying memory controller behavior
 
 ### 2. C++ Test Harness
@@ -276,9 +279,10 @@ presets are `default`, `unit`, `integration`, `performance` (and `windows-msvc`)
 
 **Primary Location:** `patterns/memory/lpddr5/INVARIANTS.md`
 
-Read `INVARIANTS.md` before generating trace-related code. To add an invariant, use the
-`add-invariant` skill; for the trace generate→validate→fix loop and the known LPDDR5 trace
-bugs, use `/trace-check` and the `lpddr5-trace-debug` skill.
+Read `INVARIANTS.md` before generating recording or controller code; it maps each invariant
+to the `mflow_check.py` check that enforces it. To add an invariant, use the `add-invariant`
+skill; for the record generate→check→fix loop and the known LPDDR5 bug classes, use
+`/trace-check` and the `lpddr5-trace-debug` skill.
 
 ## Session Logging
 

@@ -1,43 +1,28 @@
-# Trace file inventory
+# LPDDR5 pattern records
 
-All 15 trace files generated across all levels:
+Each LPDDR5 pattern (`patterns/memory/lpddr5/`) writes its run as a `.mflow` bundle. Run on its
+own, a pattern writes it here, under its level; under CTest it writes it to
+`build/patterns/memory/lpddr5/<name>.mflow` instead. The bundles are generated, not committed
+(`.gitignore`).
 
-  | Level | Pattern      | Trace File                                                                 |
-  |-------|--------------|----------------------------------------------------------------------------|
-  | 1     | Single Bank  | page_hits_trace.json, page_conflicts_trace.json, mixed_rw_trace.json       |
-  | 2     | Two Bank     | same_group_trace.json, diff_groups_trace.json                              |
-  | 3     | Three Bank   | same_group_trace.json, mixed_groups_trace.json                             |
-  | 4     | Four Bank    | full_group_trace.json, across_groups_trace.json, page_hit_burst_trace.json |
-  | 5     | Dual Channel | independent_trace.json, interleaved_trace.json                             |
-  | 6     | Complex      | strided_trace.json, random_trace.json, tile_load_trace.json                |
+| Level | Pattern      | Records                                                  |
+|-------|--------------|----------------------------------------------------------|
+| 1     | Single Bank  | `single-bank/{page_hits,page_conflicts,mixed_rw}.mflow`   |
+| 2     | Two Bank     | `two-bank/{same_group,diff_groups}.mflow`                 |
+| 3     | Three Bank   | `three-bank/{same_group,mixed_groups}.mflow`              |
+| 4     | Four Bank    | `four-bank/{full_group,across_groups,page_hit_burst}.mflow` |
+| 5     | Dual Channel | `dual-channel/{independent,interleaved}.mflow`            |
+| 6     | Bandwidth    | `bandwidth/{max_bandwidth,page_burst}.mflow`              |
+| 7     | Complex      | `complex/{strided,random,tile_load,stream,multi_dma}.mflow` |
 
-Traces are in traces/memory/lpddr5/<level>/.
+Check one, and see what it did:
 
-## Directory structure
+```bash
+python3 tools/trace/mflow_check.py traces/memory/lpddr5/dual-channel/interleaved.mflow --summary
+```
 
-traces/memory/lpddr5/
-├── complex
-│   ├── random_trace.json
-│   ├── strided_trace.json
-│   └── tile_load_trace.json
-├── dual-channel
-│   ├── independent_trace.json
-│   └── interleaved_trace.json
-├── four-bank
-│   ├── across_groups_trace.json
-│   ├── full_group_trace.json
-│   └── page_hit_burst_trace.json
-├── inventory.md
-├── single-bank
-│   ├── mixed_rw_trace.json
-│   ├── page_conflicts_trace.json
-│   └── page_hits_trace.json
-├── three-bank
-│   ├── mixed_groups_trace.json
-│   └── same_group_trace.json
-└── two-bank
-    ├── diff_groups_trace.json
-    └── same_group_trace.json
+Open one in the DRAM views (`tools/visualization/dram/`) through the debug server, or pack a
+view with it: `python3 tools/visualization/dram/pack.py timing <bundle> -o timing.html`.
 
-7 directories, 16 files
-
+The Chrome-trace JSON these patterns used to write (`*_trace.json`) is retired
+(`docs/plans/cycle-mflow-and-debug-server.md` step 11).
