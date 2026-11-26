@@ -413,6 +413,26 @@ TEST_CASE("The Streamer's program is checked before anything runs", "[cycle][str
     CHECK_NOTHROW(check_feeds({first, second}, two));
     CHECK_THROWS_WITH(check_feeds({second, first}, two),
                       ContainsSubstring("slot 0: read 0 is of A[1,0,0] by the commands, of A[0,0,0] by the L2"));
+    // Each slot's order can match while the order across slots cannot complete: the first command
+    // needs B1, whose Move waits behind A1's, which waits for A0's Release, which waits for the
+    // first command (CodeRabbit, #593).
+    const L2Program three{l2_move(0, kTileA, kA, kRow, 4), l2_move(1, kTileB, kB, kRow, 4), l2_feed(0, kTileA, 4),
+                          l2_feed(1, kTileB, 4), l2_release(0, kTileA), l2_release(1, kTileB),
+                          l2_move(0, a1, kA, kRow, 4), l2_move(2, b1, kB, kRow, 4), l2_feed(0, a1, 4),
+                          l2_feed(2, b1, 4), l2_release(0, a1), l2_release(2, b1)};
+    const StreamerCommand x{{0, kTileA, 0, 4}, {2, b1, 0, 4}, 16, true, true};
+    const StreamerCommand y{{0, a1, 0, 4}, {1, kTileB, 0, 4}, 16, true, true};
+    CHECK_THROWS_WITH(check_feeds({x, y}, three),
+                      ContainsSubstring("the schedule cannot complete: the Streamer waits at command 0") &&
+                          ContainsSubstring("the BlockMover at action 6 (Move A[1,0,0] in slot 0)"));
+    const StreamerCommand x_ok{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true};
+    const StreamerCommand y_ok{{0, a1, 0, 4}, {2, b1, 0, 4}, 16, true, true};
+    CHECK_NOTHROW(check_feeds({x_ok, y_ok}, three));
+    // A Writeback is a consumer the Release waits for, as the L2 counts it.
+    const L2Program wb{l2_move(0, kTileA, kA, kRow, 4), l2_move(1, kTileB, kB, kRow, 4), l2_feed(0, kTileA, 4),
+                       l2_feed(1, kTileB, 4), l2_writeback(0, kTileA, 0x80000, kRow, 4), l2_release(0, kTileA),
+                       l2_release(1, kTileB)};
+    CHECK_NOTHROW(check_feeds({first}, wb));
     CHECK_THROWS_WITH(validate_l2_program({l2_move(0, kTileA, 0, 16, 4), l2_feed(0, kTileA, 8)}, 2, 16, 16, "l2"),
                       ContainsSubstring("8 rows, but its Move wrote 4"));
     CHECK_THROWS_WITH(validate_l2_program({l2_move(0, kTileA, 0, 16, 4), l2_feed(0, kTileB, 4)}, 2, 16, 16, "l2"),

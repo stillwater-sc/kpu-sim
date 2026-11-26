@@ -405,11 +405,19 @@ private:
     std::vector<Link<L1Element>*> a_out_, b_out_;
 };
 
-// A Streamer program and the L2's agree: in each slot, the commands read the tiles the L2 program's
-// Feeds name, in the same order and with the same rows (the order across tiles too: a command that
-// reads a slot's next tile before its current one would wait for a Move that waits for it,
-// CodeRabbit, #593). The L2 frees a slot after its Feeds, so a command past them would find the slot
-// gone. Raises std::invalid_argument naming the slot and the first read that differs.
+// A Streamer program and the L2's agree, and together they can run to the end (CodeRabbit, #593):
+//   1. In each slot, the commands read the tiles the L2 program's Feeds name, in the same order and
+//      with the same rows. The L2 frees a slot after its Feeds, so a command past them would find
+//      the slot gone.
+//   2. The schedule completes. Order within each slot is not enough: a command waits for both its
+//      operands, so one that needs a tile whose Move is queued behind another slot's Release, which
+//      waits for this very command, never fires. The check steps the protocol without time, as the
+//      components execute it: the BlockMover's Moves and Writebacks in program order (a Move waits
+//      for its slot to be free), the L2's Releases in program order (each waits for its residency's
+//      consumers), and the commands in order (each waits for both operands' residencies, with a
+//      Feed left on each). Whatever cannot proceed when nothing else can is a deadlock.
+// Raises std::invalid_argument naming the slot and the first read that differs, or where each of
+// the three is stuck.
 inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
     using Read = std::pair<std::string, std::uint32_t>;   // the tile, its rows
     std::map<std::uint32_t, std::vector<Read>> feeds, reads;
@@ -438,6 +446,81 @@ inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
         if (f.size() != r.size())
             throw std::invalid_argument(slot + "the commands read it " + std::to_string(r.size()) +
                                         " times, the L2 program's Feeds " + std::to_string(f.size()));
+    }
+
+    // 2. Step the protocol to its end, or to where nothing can proceed.
+    struct Residency {
+        TileID tile;
+        std::uint32_t feeds = 0, consumers = 0;   // Feeds left to admit, consumers left before the Release
+    };
+    std::vector<std::size_t> mover, releases;    // the program's indices, in order
+    std::map<std::size_t, Residency> of_move;    // each Move's residency, from the program
+    std::map<std::uint32_t, std::size_t> last_move;
+    for (std::size_t i = 0; i < l2.size(); ++i) {
+        const L2Action& a = l2[i];
+        if (a.kind == L2Action::Kind::Move) {
+            of_move[i] = Residency{a.tile, 0, 0};
+            last_move[a.slot] = i;
+        }
+        if (a.kind == L2Action::Kind::Move || a.kind == L2Action::Kind::Writeback) mover.push_back(i);
+        if (a.kind == L2Action::Kind::Release) releases.push_back(i);
+        if ((a.kind == L2Action::Kind::Feed || a.kind == L2Action::Kind::Writeback) && last_move.count(a.slot)) {
+            ++of_move[last_move[a.slot]].consumers;
+            if (a.kind == L2Action::Kind::Feed) ++of_move[last_move[a.slot]].feeds;
+        }
+    }
+    std::map<std::uint32_t, Residency> live;   // by slot
+    std::size_t m = 0, r = 0, c = 0;
+    for (bool progress = true; progress;) {
+        progress = false;
+        while (m < mover.size()) {   // the BlockMover
+            const L2Action& a = l2[mover[m]];
+            if (a.kind == L2Action::Kind::Move) {
+                if (live.count(a.slot)) break;   // waits for the slot's credit
+                live[a.slot] = of_move[mover[m]];
+            } else {   // a Writeback: its Move is before it in the mover's order
+                if (!live.count(a.slot)) break;
+                --live[a.slot].consumers;
+            }
+            ++m;
+            progress = true;
+        }
+        while (r < releases.size()) {   // the L2's Releases
+            const L2Action& a = l2[releases[r]];
+            const auto it = live.find(a.slot);
+            if (it == live.end() || !(it->second.tile == a.tile) || it->second.consumers != 0) break;
+            live.erase(it);
+            ++r;
+            progress = true;
+        }
+        while (c < commands.size()) {   // the Streamer
+            const StreamerCommand& k = commands[c];
+            const auto ready = [&](const StreamerCommand::Operand& o) {
+                const auto it = live.find(o.slot);
+                return it != live.end() && it->second.tile == o.tile && it->second.feeds > 0;
+            };
+            if (!ready(k.a) || !ready(k.b)) break;
+            for (const StreamerCommand::Operand* o : {&k.a, &k.b}) {
+                --live[o->slot].feeds;
+                --live[o->slot].consumers;
+            }
+            ++c;
+            progress = true;
+        }
+    }
+    if (c < commands.size() || m < mover.size() || r < releases.size()) {
+        const auto at = [&](const std::vector<std::size_t>& v, std::size_t i) {
+            if (i == v.size()) return std::string("done");
+            const L2Action& a = l2[v[i]];
+            return "action " + std::to_string(v[i]) + " (" + to_string(a.kind) + " " + a.tile.to_string() +
+                   " in slot " + std::to_string(a.slot) + ")";
+        };
+        throw std::invalid_argument(
+            "check_feeds: the schedule cannot complete: the Streamer waits at " +
+            (c == commands.size() ? std::string("its end")
+                                  : "command " + std::to_string(c) + " (A " + commands[c].a.tile.to_string() + ", B " +
+                                        commands[c].b.tile.to_string() + ")") +
+            ", the BlockMover at " + at(mover, m) + ", the L2's Releases at " + at(releases, r));
     }
 }
 
