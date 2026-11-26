@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The debug pattern, record to browser, steps 1–7** (#562–#568; epic #532,
+  `docs/plans/cycle-mflow-and-debug-server.md`). A cycle-core run is recorded, checked, drawn and served
+  by the same tools as the memory side's `kpu-memsim` runs.
+  - **1, events and the `.mflow` recorder** (#561): the DMA engine and the LPDDR5 channel report to a
+    `MemoryEvents` sink, null by default; `cycle/record/mflow_recorder.hpp` turns the events into a
+    `MemoryFlowRecord`. Recording changes nothing (the same run with and without it is identical), and the
+    record's totals equal the counters.
+  - **2, record version 4** (#574): the manifest names its source and a write window; a request carries its
+    kind (Load, Store, Fill), program action and L3 slot; a `waits` table records why each DMA engine was held
+    up, and when. Version 3 still reads.
+  - **3, `kpu-run --memory-mflow` and `--run-dir`** (#575): a run directory holds the summary, counters,
+    Perfetto trace, `.mflow` bundle and `run.json` (command, build, commit, device, status, the run's counts),
+    written atomically; `tools/kpu-run/check_run_dir.py` checks one.
+  - **4, `mflow_check.py` M7–M11 and the bus turnarounds** (#578): waits (M7), the record against its run
+    (M8), and `trace_validator.py`'s transaction rules on the record: command ownership (M9), order (M10),
+    refresh (M11). M5 adds tWTR and tRTW. M10 found the controller bug fixed in #577.
+  - **5, the shared reader `tools/visualization/common/mflow.js`** (#580): versions 3 and 4, from a folder,
+    an embedding or a server URL (`?bundle=`, same origin only); `pack.py` inlines it.
+  - **6, the memory-side debugger draws version 4** (#581): a waits lane per engine by cause, the read and
+    write windows apart, Fills, and each request's action and slot.
+  - **7, the read-only debug server `tools/debug-server/`** (#582): runs and their viewers to a browser on
+    127.0.0.1, reached through an SSH tunnel; files confined to the root, Range requests, read-only.
+
 - **The memory subsystem on the cycle core, Phase 1 steps 1b–1e** (#538–#541; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §4). DRAM, the DMA engine, the NoC and the L3 tile, built
   bottom-up on the cycle core and checked bit for bit against L-B's data.
@@ -171,6 +194,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The LPDDR5 controller's starvation override thrashed a row an older request waited on** (#576, #577). A
+  starved request closed a row whose pending hit was older; the older request reopened it at once, and the
+  starved one starved again: 16 ACTIVATE/PRECHARGE pairs for one burst in `kpu-memsim`'s T4 run. A starved
+  request now closes a row only from younger pending hits. Found by `mflow_check.py`'s M10. A related gap,
+  tWTR_L not enforced across an intervening read, is unreachable with today's timings and filed as #579.
+
 - **The `kpu` package no longer swallows stderr** (#502). Its NNPACK-warning filter pointed fd 2 at a pipe and
   read it only at exit, writing what it read back into the same pipe. So everything a program importing `kpu` wrote
   to stderr was lost, tracebacks included, and a program that wrote more than the pipe buffer blocked forever. A
@@ -289,6 +318,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `README.md` and `docs/README.md` now point to it first.
 
 ### Removed
+
+- **`tools/trace/serve-trace.py`** (#582): replaced by the debug server, which also serves the LPDDR5 views
+  until the `.mflow` DRAM views replace them (step 9).
 
 - **The `examples/compiler/l3_*` analyzers and the L3 scheduler behind them** (#501). The four
   tools (`l3_overfetch_analyzer`, `l3_comprehensive_analysis`, `l3_focused_analysis`,
