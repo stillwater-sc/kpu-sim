@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **12, the guide** (#573): `docs/02-simulation/debugging-a-cycle-core-run.md`, run, check, serve and
     view.
 
-- **The compute subsystem on the cycle core, Phase 2 steps 2a–2b** (#542, #543; epic #532,
+- **The compute subsystem on the cycle core, Phase 2 steps 2a–2c** (#542–#544; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §5).
   - **2a, the L2 and the BlockMover** (#542, #592): `cycle/compute/l2.hpp`, `block_mover.hpp` and
     `l2_program.hpp`.
@@ -71,6 +71,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       this configuration keeps.
     - The L2 gains the Streamer's reader port, sharing the banks' ports with the BlockMover's, and a `Feed`
       action, which counts as a consumer before a Release.
+  - **2c, the PE array** (#544): `cycle/compute/pe_array.hpp`, R × C registered MAC PEs, output-stationary,
+    as the RTL builds them (embodied-ai-soc-generator `b57c881`). It is sized from the deployment's
+    `fabric.pe_rows`/`pe_cols`.
+    - A moves east with `valid`, `first` and `last`; B moves south. `first` overwrites the accumulator, and
+      on `last` the result launches north. A launch while a result passes is a north collision, an `L1Fault`.
+    - The RTL's clocks are measured from the array's log, never coded: PE(i,j) multiplies element k at
+      s+1+i+j+k, column j carries row i's result at s+K+j+2i, and row i is whole at the result buffers at
+      s+K+C+2i. On the whole path from L3 through the Streamer, the int32 results equal A·B exactly.
+    - A tile on the array's corner launches padded results in the columns past it, as the RTL does. Results
+      2R−1 clocks apart never collide, and 2R−2 apart collide.
 - **The memory subsystem on the cycle core, Phase 1 steps 1b–1e** (#538–#541; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §4). DRAM, the DMA engine, the NoC and the L3 tile, built
   bottom-up on the cycle core and checked bit for bit against L-B's data.
