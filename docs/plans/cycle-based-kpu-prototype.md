@@ -172,7 +172,7 @@ embodied-ai-soc-generator `b57c881`. Here every rule is **built as state**, not 
 |---|---|
 | **BlockMover** | L3 → L2 by rows, at its bus width per beat, strided, under the L2 slot's credit. Writeback runs L2 → L3. |
 | **L2** | Banks × rows, with read and write ports per bank, a read latency, and its own clock (250 MHz). Slots are in the FREE, OWNED, READY and READING states (#387's `SlotPool`, reused). |
-| **Streamer** | A command queue. An OS COMPUTE issues one A row and one B row per clock to L2, and loads the returning rows into the L1 lane buffers. It signals `completed` when its last read lands. |
+| **Streamer** | A command queue. An OS COMPUTE issues one A row and one B row per clock to L2, and loads the returning rows into the L1 lane buffers. It signals `completed` when its last read lands. The rows return through a read pipeline D clocks deep, the RTL's fixed read delay. The L2's latency is not fixed, so a row back early waits, and a row not back by its load is an `L1Fault`. The least D a configuration keeps is measured (step 2b: 26 clocks from 1 GHz to the 250 MHz L2). |
 | **L1 lane buffers** | One per array lane, holding one block, with one credit (`left ≤ 1`). They stream one element per clock with the `first` and `last` markers. A load into a buffer without its credit is a fault. |
 | **PE array** | R × C PEs, each a registered MAC. A moves east, B moves south, and on `last` the result launches north. A north collision is a fault. |
 | **North result FIFOs** | One per column. A row leaves when every column has its element. |

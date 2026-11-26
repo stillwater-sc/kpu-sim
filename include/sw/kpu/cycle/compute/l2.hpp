@@ -3,7 +3,7 @@
 // include/sw/kpu/cycle/compute/l2.hpp
 // A compute tile's L2 on the cycle core (#542; docs/plans/cycle-based-kpu-prototype.md §5.1, step
 // 2a): banks of rows, read and write ports per bank, a read latency, in its own clock domain (250
-// MHz by default). It holds the bytes it was written.
+// MHz by default). It holds the bytes it was written. Step 2b (#543) adds the Streamer's reads.
 //
 // ROWS AND BANKS. The L2 is `slots` x `rows_per_slot` rows of `row_bytes`, numbered slot-major; row
 // n is in bank n mod `banks`, at index n / `banks` in it (docs/plans/banked-l2-at-lca.md §3: slot
@@ -12,20 +12,27 @@
 // writes each: one whose bank has no port left this clock waits, and so does every request behind
 // it (a stall, counted on its bank).
 //
+// TWO READERS: the BlockMover's Writebacks and the Streamer's commands (connect_streamer), each with
+// its own request and data links, served in its own order. They share the banks' read ports: each
+// clock the readers take turns at the ports, the first in turn alternating clock by clock.
+//
 // THE READ LATENCY is state, not a formula: a read served at clock c is in the read pipeline until
 // clock c + read_latency, when its row leaves on the data link. While a row cannot leave (the link
 // has no credit) it waits, and no new read is served: the pipeline never holds more than a bank's
 // ports times the latency. A read is IN FLIGHT from the clock it is served to the clock its row
 // leaves, and each bank counts its reads in flight every clock: their integral and their maximum
-// answer #495's question (how many requests must be outstanding to keep up) by measurement.
+// answer #495's question (how many requests must be outstanding to keep up) by measurement. Each
+// reader has its own pipeline, held only by its own data link.
 //
 // SLOTS follow #387's protocol (timing/slot_pool.hpp, l2_program.hpp): a Move's first row ACQUIREs
-// the slot, its last SIGNALs it READY; a Writeback's first read TAKEs it (READING) and its last row's
-// departure is DONE; a Release frees it and pushes its credit back to the BlockMover. A row of
+// the slot, its last SIGNALs it READY and sends the Streamer the tile-ready token (SlotReady); a
+// consumer's first read (a Writeback's, or a Streamer command's of one operand) TAKEs it (READING)
+// and its last row's departure is DONE; a Release frees it and pushes its credit back to the
+// BlockMover. A row of
 // another tile into a live slot, or a transition from the wrong state, is a SlotFault. A read waits,
 // with no fault, until its slot holds its tile, READY: the tile-ready token. The L2 executes the
 // program's Releases in order, one at a time; each waits until its slot is READY with its tile and
-// every Writeback of that tile before it in the program is done.
+// every consumer (Writeback and Feed) of that tile before it in the program is done.
 //
 // COUNTERS. A tile is an item: it arrives when its slot is ACQUIREd and completes when its Release
 // frees it, so the occupancy is the live slots. The L2 is busy in a clock it moves anything (a row
@@ -84,50 +91,69 @@ public:
                                         ": slots, rows, banks, row bytes, the read latency and the ports must be positive");
         validate_l2_program(program, cfg.slots, cfg.rows_per_slot, cfg.row_bytes, "cycle::L2 " + this->name());
         // Each Release is bound to the Move before it into its slot, and waits for that tile's
-        // Writebacks before it in the program.
+        // consumers before it in the program.
+        // Each Move's Feeds are what its tile-ready token admits.
         std::vector<std::uint32_t> consumers(cfg.slots, 0);
+        feeds_.assign(cfg.slots, {});
         for (std::size_t i = 0; i < program.size(); ++i) {
             const L2Action& a = program[i];
-            if (a.kind == L2Action::Kind::Move) consumers[a.slot] = 0;
-            else if (a.kind == L2Action::Kind::Writeback) ++consumers[a.slot];
+            if (a.kind == L2Action::Kind::Move) {
+                consumers[a.slot] = 0;
+                feeds_[a.slot].push_back(0);
+            } else if (a.kind == L2Action::Kind::Writeback || a.kind == L2Action::Kind::Feed) {
+                ++consumers[a.slot];
+                if (a.kind == L2Action::Kind::Feed) ++feeds_[a.slot].back();
+            }
             else releases_.push_back({i, a.slot, a.tile, consumers[a.slot]});
         }
         clear();
     }
 
-    // writes: a Move's rows; reads: a Writeback's row requests; data: their rows back; credits: freed slots.
+    // The BlockMover's side. writes: a Move's rows; reads: a Writeback's row requests; data: their
+    // rows back; credits: freed slots.
     void connect(Link<L2RowWrite>& writes, Link<L2RowRead>& reads, Link<L2RowData>& data, Link<SlotCredit>& credits) {
         writes_ = &writes;
-        reads_ = &reads;
-        data_ = &data;
+        readers_[0].reads = &reads;
+        readers_[0].data = &data;
         credits_ = &credits;
+    }
+    // The Streamer's side (#543). reads: its commands' row requests; data: their rows back; ready:
+    // the tile-ready tokens.
+    void connect_streamer(Link<L2RowRead>& reads, Link<L2RowData>& data, Link<SlotReady>& ready) {
+        readers_[1].reads = &reads;
+        readers_[1].data = &data;
+        ready_ = &ready;
     }
 
     void evaluate(Cycle now) override {
-        if (!writes_ || !reads_ || !data_ || !credits_) throw std::logic_error(where(now) + ": not connected");
+        if (!writes_ || !readers_[0].reads || !credits_) throw std::logic_error(where(now) + ": not connected");
         std::fill(reads_now_.begin(), reads_now_.end(), 0);
         std::fill(writes_now_.begin(), writes_now_.end(), 0);
         bool moved = false;
         std::optional<Stall> wait;
         const auto waiting = [&](Stall s) { if (!wait) wait = s; };
 
-        // Rows whose latency is over leave, in order, while the data link has a credit.
-        bool held = false;
-        while (!pipe_.empty() && pipe_.front().ready_at <= now) {
-            if (!data_->can_push(now)) {
-                held = true;
-                waiting(Stall::NoCredit);
-                break;
+        // Each reader's rows whose latency is over leave, in order, while its data link has a credit.
+        for (Reader& rd : readers_) {
+            rd.held = false;
+            if (!rd.reads) continue;
+            while (!rd.pipe.empty() && rd.pipe.front().ready_at <= now) {
+                if (!rd.data->can_push(now)) {
+                    rd.held = true;
+                    waiting(Stall::NoCredit);
+                    break;
+                }
+                InFlight r = std::move(rd.pipe.front());
+                rd.pipe.pop_front();
+                --in_flight_[r.bank];
+                --rd.in_flight[r.bank];
+                if (r.last) {
+                    pool_.done(r.data.slot, r.data.tile);
+                    ++consumers_done_[r.data.slot];
+                }
+                rd.data->push(now, std::move(r.data));
+                moved = true;
             }
-            InFlight r = std::move(pipe_.front());
-            pipe_.pop_front();
-            --in_flight_[r.bank];
-            if (r.last) {
-                pool_.done(r.data.slot, r.data.tile);
-                ++consumers_done_[r.data.slot];
-            }
-            data_->push(now, std::move(r.data));
-            moved = true;
         }
 
         // Writes, in arrival order, while the head's bank has a write port this clock.
@@ -146,36 +172,21 @@ public:
             moved = true;
         }
 
-        // Reads, in arrival order, while the head's slot holds its tile and its bank has a read port;
-        // none while a row is held at the pipeline's end.
-        while (!held && reads_->can_pop(now)) {
-            const L2RowRead& r = reads_->peek(now);
-            check_row(now, r.slot, r.row, "the read of " + r.tile.to_string());
-            if (!holds(r.slot, r.tile)) {
-                waiting(Stall::NoData);   // the tile-ready token
-                break;
-            }
-            if (r.row >= slots_[r.slot].rows)
-                throw std::logic_error(where(now) + ": the read of " + r.tile.to_string() + " row " + std::to_string(r.row) +
-                                       " in slot " + std::to_string(r.slot) + ", whose Move wrote " +
-                                       std::to_string(slots_[r.slot].rows) + " rows");
-            const std::uint32_t b = bank(r.slot, r.row);
-            if (reads_now_[b] == config_.read_ports) {
-                ++banks_[b].stalls;
-                waiting(Stall::BankBusy);
-                break;
-            }
-            const L2RowRead req = reads_->pop(now);
-            if (req.first) pool_.take(req.slot, req.tile);
-            const std::size_t at = offset(req.slot, req.row);
-            pipe_.push_back({now + config_.read_latency, b, req.last,
-                             L2RowData{req.id, req.slot, req.row, req.tile,
-                                       {storage_[b].begin() + at, storage_[b].begin() + at + config_.row_bytes}}});
-            ++in_flight_[b];
-            ++reads_now_[b];
-            ++banks_[b].reads;
+        // Each reader's reads, in its arrival order, while the head's slot holds its tile and its bank
+        // has a read port; none while a row is held at the end of its pipeline. The readers take
+        // turns at the ports, the first alternating clock by clock.
+        for (std::size_t turn = 0; turn < readers_.size(); ++turn) {
+            Reader& rd = readers_[(now + turn) % readers_.size()];
+            if (rd.reads) serve(now, rd, moved, waiting);
+        }
+
+        // Tile-ready tokens to the Streamer, in order, while its link has a credit.
+        while (!tokens_.empty() && ready_->can_push(now)) {
+            ready_->push(now, tokens_.front());
+            tokens_.pop_front();
             moved = true;
         }
+        if (!tokens_.empty()) waiting(Stall::NoCredit);
 
         // The head Release.
         if (head_ < releases_.size()) {
@@ -203,31 +214,48 @@ public:
             banks_[b].max_in_flight = std::max<std::uint64_t>(banks_[b].max_in_flight, in_flight_[b]);
         }
         // Reads waiting out their latency are work under way, not a stall.
-        if (moved || (!held && !pipe_.empty())) counters().busy();
+        bool under_way = false;
+        for (const Reader& rd : readers_) under_way = under_way || (!rd.held && !rd.pipe.empty());
+        if (moved || under_way) counters().busy();
         else if (wait) counters().stall(*wait);
     }
 
-    [[nodiscard]] bool idle() const override { return head_ == releases_.size() && pipe_.empty(); }
+    [[nodiscard]] bool idle() const override {
+        bool empty = tokens_.empty();
+        for (const Reader& rd : readers_) empty = empty && rd.pipe.empty();
+        return head_ == releases_.size() && empty;
+    }
 
     // Every clock: no bank past its ports, every slot's rows agree with its state, the reads in
-    // flight agree with the pipeline and stay within the ports times the latency, and the counters'
-    // tiles are the live slots.
+    // flight agree with the pipelines and stay within each reader's ports times the latency, and
+    // the counters' tiles are the live slots.
     void check(Cycle now) const override {
-        std::size_t in_flight = 0;
+        std::size_t in_flight = 0, piped = 0;
+        for (const Reader& rd : readers_) piped += rd.pipe.size();
         for (std::uint32_t b = 0; b < config_.banks; ++b) {
+            std::uint64_t by_reader = 0;
+            for (std::size_t i = 0; i < readers_.size(); ++i) {
+                const std::uint64_t n = readers_[i].in_flight[b];
+                if (n > std::uint64_t(config_.read_ports) * config_.read_latency)
+                    throw std::logic_error(where(now) + ": bank " + std::to_string(b) + " has " + std::to_string(n) +
+                                           " reads of reader " + std::to_string(i) +
+                                           " in flight, past its ports times the latency");
+                by_reader += n;
+            }
+            if (by_reader != in_flight_[b])
+                throw std::logic_error(where(now) + ": bank " + std::to_string(b) + " has " +
+                                       std::to_string(in_flight_[b]) + " reads in flight, its readers " +
+                                       std::to_string(by_reader));
             if (reads_now_[b] > config_.read_ports || writes_now_[b] > config_.write_ports)
                 throw std::logic_error(where(now) + ": bank " + std::to_string(b) + " served " +
                                        std::to_string(reads_now_[b]) + " reads and " + std::to_string(writes_now_[b]) +
                                        " writes, past its " + std::to_string(config_.read_ports) + " and " +
                                        std::to_string(config_.write_ports) + " ports");
-            if (in_flight_[b] > std::uint64_t(config_.read_ports) * config_.read_latency)
-                throw std::logic_error(where(now) + ": bank " + std::to_string(b) + " has " + std::to_string(in_flight_[b]) +
-                                       " reads in flight, past its ports times the latency");
             in_flight += in_flight_[b];
         }
-        if (in_flight != pipe_.size())
+        if (in_flight != piped)
             throw std::logic_error(where(now) + ": " + std::to_string(in_flight) + " reads in flight by bank, " +
-                                   std::to_string(pipe_.size()) + " in the pipeline");
+                                   std::to_string(piped) + " in the pipelines");
         std::uint32_t live = 0;
         for (std::uint32_t s = 0; s < config_.slots; ++s) {
             const Slot& sl = slots_[s];
@@ -254,11 +282,13 @@ public:
             const Release& c = releases_[head_];
             d = "Release " + std::to_string(head_ + 1) + " of " + std::to_string(releases_.size()) + " (slot " +
                 std::to_string(c.slot) + ", " + c.tile.to_string() + ": " + std::to_string(consumers_done_[c.slot]) +
-                " of " + std::to_string(c.consumers) + " Writebacks done)";
+                " of " + std::to_string(c.consumers) + " consumers done)";
         } else {
             d = "all " + std::to_string(releases_.size()) + " Releases done";
         }
-        d += "; " + std::to_string(pipe_.size()) + " reads in flight; slots:";
+        std::size_t piped = 0;
+        for (const Reader& rd : readers_) piped += rd.pipe.size();
+        d += "; " + std::to_string(piped) + " reads in flight; slots:";
         for (std::uint32_t s = 0; s < config_.slots; ++s) {
             d += " " + std::to_string(s) + " " + sw::kpu::timing::SlotPool::name(pool_.state(s));
             if (pool_.state(s) != State::Free)
@@ -272,6 +302,8 @@ public:
     [[nodiscard]] const Config& config() const { return config_; }
     [[nodiscard]] State state(std::uint32_t slot) const { return pool_.state(slot); }
     [[nodiscard]] bool live(std::uint32_t slot) const { return state(slot) != State::Free; }
+    // The consumers reading the slot now (#387's reader count).
+    [[nodiscard]] std::uint32_t readers(std::uint32_t slot) const { return pool_.readers(slot); }
     // The bank a slot's row is in, and its index there.
     [[nodiscard]] std::uint32_t bank(std::uint32_t slot, std::uint32_t row) const {
         return static_cast<std::uint32_t>(global(slot, row) % config_.banks);
@@ -295,7 +327,7 @@ private:
         std::size_t ticket;
         std::uint32_t slot;
         TileID tile;
-        std::uint32_t consumers;   // the tile's Writebacks before the Release
+        std::uint32_t consumers;   // the tile's Writebacks and Feeds before the Release
     };
     struct Slot {
         TileID tile{};
@@ -309,6 +341,48 @@ private:
         bool last;
         L2RowData data;
     };
+    // One reader's links, its served reads in order (their ready clocks rise), and its reads in
+    // flight by bank.
+    struct Reader {
+        Link<L2RowRead>* reads = nullptr;
+        Link<L2RowData>* data = nullptr;
+        std::deque<InFlight> pipe;
+        std::vector<std::uint64_t> in_flight;
+        bool held = false;   // its pipeline's head cannot leave this clock
+    };
+
+    template <class Waiting>
+    void serve(Cycle now, Reader& rd, bool& moved, Waiting&& waiting) {
+        while (!rd.held && rd.reads->can_pop(now)) {
+            const L2RowRead& r = rd.reads->peek(now);
+            check_row(now, r.slot, r.row, "the read of " + r.tile.to_string());
+            if (!holds(r.slot, r.tile)) {
+                waiting(Stall::NoData);   // the tile-ready token
+                return;
+            }
+            if (r.row >= slots_[r.slot].rows)
+                throw std::logic_error(where(now) + ": the read of " + r.tile.to_string() + " row " + std::to_string(r.row) +
+                                       " in slot " + std::to_string(r.slot) + ", whose Move wrote " +
+                                       std::to_string(slots_[r.slot].rows) + " rows");
+            const std::uint32_t b = bank(r.slot, r.row);
+            if (reads_now_[b] == config_.read_ports) {
+                ++banks_[b].stalls;
+                waiting(Stall::BankBusy);
+                return;
+            }
+            const L2RowRead req = rd.reads->pop(now);
+            if (req.first) pool_.take(req.slot, req.tile);
+            const std::size_t at = offset(req.slot, req.row);
+            rd.pipe.push_back({now + config_.read_latency, b, req.last,
+                               L2RowData{req.id, req.slot, req.row, req.tile,
+                                         {storage_[b].begin() + at, storage_[b].begin() + at + config_.row_bytes}}});
+            ++in_flight_[b];
+            ++rd.in_flight[b];
+            ++reads_now_[b];
+            ++banks_[b].reads;
+            moved = true;
+        }
+    }
 
     [[nodiscard]] std::uint64_t global(std::uint32_t slot, std::uint32_t row) const {
         return std::uint64_t(slot) * config_.rows_per_slot + row;
@@ -350,7 +424,12 @@ private:
         const std::uint32_t b = bank(w.slot, w.row);
         std::copy(w.bytes.begin(), w.bytes.end(), storage_[b].begin() + offset(w.slot, w.row));
         s.landed[w.row] = true;
-        if (++s.written == s.rows) pool_.signal(w.slot, w.tile);   // OWNED -> READY: the tile-ready token
+        if (++s.written == s.rows) {
+            pool_.signal(w.slot, w.tile);   // OWNED -> READY: the tile-ready token
+            // The token for this residency's Feeds, the slot's next Move's in the program.
+            const std::uint32_t feeds = feeds_[w.slot].at(moves_[w.slot]++);
+            if (ready_ && feeds > 0) tokens_.push_back(SlotReady{++token_id_, w.slot, w.tile, feeds});
+        }
     }
 
     void clear() {
@@ -364,9 +443,15 @@ private:
         in_flight_.assign(config_.banks, 0);
         reads_now_.assign(config_.banks, 0);
         writes_now_.assign(config_.banks, 0);
-        pipe_.clear();
+        for (Reader& rd : readers_) {
+            rd.pipe.clear();
+            rd.in_flight.assign(config_.banks, 0);
+            rd.held = false;
+        }
+        tokens_.clear();
+        moves_.assign(config_.slots, 0);
         head_ = 0;
-        credit_id_ = 0;
+        credit_id_ = token_id_ = 0;
     }
 
     Config config_;
@@ -378,13 +463,15 @@ private:
     std::vector<BankStats> banks_;
     std::vector<std::uint64_t> in_flight_;             // by bank
     std::vector<std::uint32_t> reads_now_, writes_now_;   // this clock's accesses, by bank
-    std::deque<InFlight> pipe_;                        // served reads, in order: their ready clocks rise
+    std::vector<Reader> readers_ = std::vector<Reader>(2);   // 0: the BlockMover's, 1: the Streamer's
+    std::deque<SlotReady> tokens_;                     // tile-ready tokens not yet sent
+    std::vector<std::vector<std::uint32_t>> feeds_;    // by slot: each of its Moves' Feeds, in order
+    std::vector<std::size_t> moves_;                   // by slot: its Moves signalled READY so far
     std::size_t head_ = 0;
-    std::uint64_t credit_id_ = 0;
+    std::uint64_t credit_id_ = 0, token_id_ = 0;
     Link<L2RowWrite>* writes_ = nullptr;
-    Link<L2RowRead>* reads_ = nullptr;
-    Link<L2RowData>* data_ = nullptr;
     Link<SlotCredit>* credits_ = nullptr;
+    Link<SlotReady>* ready_ = nullptr;
 };
 
 }  // namespace sw::kpu::cycle
