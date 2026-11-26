@@ -10,13 +10,21 @@
 //   Writeback  L2 -> L3: the slot's rows, back to `l3_address`, `l3_pitch` apart
 //   Feed       L2 -> L1: one Streamer command's reads of `rows` of the slot's rows, as one operand
 //              (streamer.hpp); a command reads each of its two operands as a Feed of its own
-//   Release    frees the slot: its credit returns to the BlockMover for the next Move into it
+//   Result     the result path's rows into the slot (#545, step 2d): `rows` rows of a Streamer
+//              command's result tile, written by the Combiner (combiner.hpp)
+//   Release    frees the slot: its credit returns to the slot's next producer, the BlockMover for a
+//              Move into it, the Streamer for a Result
 // The BlockMover executes the Moves and Writebacks, in order, and the Streamer its commands; the L2
-// executes the Releases, each bound to the Move before it into its slot, after every Writeback and
-// Feed of that tile before it: the tile's CONSUMERS.
+// executes the Releases, each bound to the PRODUCER before it into its slot (a Move or a Result),
+// after every Writeback and Feed of that tile before it: the tile's CONSUMERS.
+//
+// A slot's credit is held by its next producer: the BlockMover's for a Move, the Streamer's for a
+// Result (it spends it when the command that produces the tile starts: the RTL's ACQUIRE as the
+// COMPUTE starts). At the start each slot's credit is its first producer's; a slot no producer
+// names is the BlockMover's.
 //
 // THE SLOT PROTOCOL is #387's (timing/slot_pool.hpp): a Move's first row ACQUIREs its slot (FREE ->
-// OWNED), its last SIGNALs it (READY); a consumer's first read TAKEs it (READING), its last row's
+// OWNED), its last SIGNALs it (READY), and a Result's rows do the same; a consumer's first read TAKEs it (READING), its last row's
 // data DONE (consumers may overlap: the slot counts its readers); a Release frees it (READY -> FREE).
 // A transition from the wrong state is a SlotFault.
 //
@@ -36,13 +44,13 @@ namespace sw::kpu::cycle {
 using TileID = sw::kpu::timing::TileID;
 
 struct L2Action {
-    enum class Kind : std::uint8_t { Move, Writeback, Feed, Release };
+    enum class Kind : std::uint8_t { Move, Writeback, Feed, Result, Release };
     Kind kind = Kind::Move;
     std::uint32_t slot = 0;
     TileID tile{};
     std::uint64_t l3_address = 0;   // Move: the source's first row; Writeback: the destination's
     std::uint32_t l3_pitch = 0;     // bytes from one row to the next in L3 (at least the row size)
-    std::uint32_t rows = 0;         // Move, Writeback and Feed
+    std::uint32_t rows = 0;         // Move, Writeback, Feed and Result
 };
 using L2Program = std::vector<L2Action>;
 
@@ -58,6 +66,10 @@ inline L2Action l2_writeback(std::uint32_t slot, TileID tile, std::uint64_t l3_a
 inline L2Action l2_feed(std::uint32_t slot, TileID tile, std::uint32_t rows) {
     return {L2Action::Kind::Feed, slot, tile, 0, 0, rows};
 }
+// `rows`: the result tile's rows (the command's h).
+inline L2Action l2_result(std::uint32_t slot, TileID tile, std::uint32_t rows) {
+    return {L2Action::Kind::Result, slot, tile, 0, 0, rows};
+}
 inline L2Action l2_release(std::uint32_t slot, TileID tile) { return {L2Action::Kind::Release, slot, tile, 0, 0, 0}; }
 
 inline const char* to_string(L2Action::Kind k) {
@@ -65,6 +77,7 @@ inline const char* to_string(L2Action::Kind k) {
         case L2Action::Kind::Move: return "Move";
         case L2Action::Kind::Writeback: return "Writeback";
         case L2Action::Kind::Feed: return "Feed";
+        case L2Action::Kind::Result: return "Result";
         case L2Action::Kind::Release: return "Release";
     }
     return "?";
@@ -91,12 +104,14 @@ inline void validate_l2_program(const L2Program& p, std::uint32_t slots, std::ui
             if (a.rows > 1 && a.l3_pitch < row_bytes)
                 throw std::invalid_argument(at + ": pitch " + std::to_string(a.l3_pitch) + " is under the row's " +
                                             std::to_string(row_bytes) + " bytes, so its rows overlap in L3");
-        } else if (a.kind == L2Action::Kind::Feed && (a.rows == 0 || a.rows > rows_per_slot)) {
+        } else if ((a.kind == L2Action::Kind::Feed || a.kind == L2Action::Kind::Result) &&
+                   (a.rows == 0 || a.rows > rows_per_slot)) {
             throw std::invalid_argument(at + ": " + std::to_string(a.rows) + " rows, a slot holds 1 to " +
                                         std::to_string(rows_per_slot));
         }
         switch (a.kind) {
             case L2Action::Kind::Move:
+            case L2Action::Kind::Result:
                 if (held[a.slot])
                     throw std::invalid_argument(at + ": the slot still holds " + tile[a.slot].to_string() +
                                                 " (no Release before this Move)");
@@ -117,6 +132,16 @@ inline void validate_l2_program(const L2Program& p, std::uint32_t slots, std::ui
                 break;
         }
     }
+}
+
+// A producer: it fills a slot (FREE -> OWNED -> READY).
+inline bool is_producer(L2Action::Kind k) { return k == L2Action::Kind::Move || k == L2Action::Kind::Result; }
+
+// Whether slot `slot`'s credit is the Streamer's at the start: its first producer is a Result.
+inline bool streamer_holds_at_start(const L2Program& p, std::uint32_t slot) {
+    for (const L2Action& a : p)
+        if (a.slot == slot && is_producer(a.kind)) return a.kind == L2Action::Kind::Result;
+    return false;
 }
 
 // --- what moves between the BlockMover and the L2 (a 1 GHz to 250 MHz crossing each way) ----------

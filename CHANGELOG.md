@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **12, the guide** (#573): `docs/02-simulation/debugging-a-cycle-core-run.md`, run, check, serve and
     view.
 
-- **The compute subsystem on the cycle core, Phase 2 steps 2a–2c** (#542–#544; epic #532,
+- **The compute subsystem on the cycle core, Phase 2 steps 2a–2d** (#542–#545; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §5).
   - **2a, the L2 and the BlockMover** (#542, #592): `cycle/compute/l2.hpp`, `block_mover.hpp` and
     `l2_program.hpp`.
@@ -81,6 +81,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       s+K+C+2i. On the whole path from L3 through the Streamer, the int32 results equal A·B exactly.
     - A tile on the array's corner launches padded results in the columns past it, as the RTL does. Results
       2R−1 clocks apart never collide, and 2R−2 apart collide.
+  - **2d, the north result FIFOs and the Combiner** (#545): `cycle/compute/combiner.hpp`, as the RTL's result
+    path (`result_path.py`). The compute subsystem now runs from L3 to L3, and C in L3 equals the int8
+    operands' product, int32 exact.
+    - One FIFO a column; a row leaves when every column of its tile has its element, at s+K+C+2i, measured.
+      Padded results are dropped. A FIFO past its depth, or a result with no tile to write, is an `L1Fault`.
+    - The Combiner writes each row into the result's L2 slot (an L2 `Result` action), applying the tile's
+      epilogue (bias, then ReLU). `result` is its last row, after `completed` (early release).
+    - The Streamer holds the result slots' credits and spends one as a producing command starts (the RTL's
+      ACQUIRE). The L2 routes each Release's credit to the slot's next producer, and the rig checks every
+      cycle that no two hold one and neither while the slot is live.
+    - The RTL's drain rule (a countdown of K + 2R − 2): back-to-back commands run with no bubble, and
+      one-element reductions are held 2R − 1 apart; a forced 2R − 2 collides.
 - **The memory subsystem on the cycle core, Phase 1 steps 1b–1e** (#538–#541; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §4). DRAM, the DMA engine, the NoC and the L3 tile, built
   bottom-up on the cycle core and checked bit for bit against L-B's data.
