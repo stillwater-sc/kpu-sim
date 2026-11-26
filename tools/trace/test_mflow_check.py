@@ -185,6 +185,28 @@ class MflowCheckSelfTest(unittest.TestCase):
         self.b.save_manifest()
         self.assertFails("M1", "reads in flight")
 
+    def test_m1_a_burst_of_no_engine_where_engines_are(self):
+        # Bursts of no engine are only a DRAM-only record's (an LPDDR5 pattern's): beside engines,
+        # one is a burst nobody posted.
+        self.b.set("bursts", "engine", 0, 0xFFFFFFFF)
+        self.assertFails("M1", "which has no dma station")
+
+    def test_m1_a_dram_only_record_has_no_window_to_hold(self):
+        NONE = 0xFFFFFFFF
+        for t in ("bursts", "requests"):
+            for i in range(self.b.rows(t)):
+                self.b.set(t, "engine", i, NONE)
+        m = self.b.manifest
+        m["stations"] = [x for x in m["stations"] if x["kind"] not in ("dma", "dmabuf", "dmawait", "port")]
+        for t in ("buffers", "ports", "waits"):
+            if t in m["tables"]:
+                m["tables"][t]["rows"] = 0
+        m["arbitration"] = "fixed"
+        self.b.save_manifest()
+        code, report = run(self.b.dir)
+        self.assertIn(code, (0, 1))
+        self.assertNotIn("M1", {v["invariant"] for v in report["violations"]}, report["violations"][:3])
+
     def test_m2_store_buffer_over_capacity(self):
         for s in self.b.manifest["stations"]:
             if s["kind"] == "dmabuf":

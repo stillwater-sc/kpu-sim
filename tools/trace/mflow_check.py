@@ -19,7 +19,8 @@ Invariants:
                         the open row; a PRE closes the open row; a REF finds the bank closed. A
                         RD/WR also names its burst's bank and row, and moves its direction.
     TF11 data bus       a channel's data bus never carries two bursts at once
-    M1   window         an engine never has more than W bursts in flight; one with a write window
+    M1   window         an engine never has more than W bursts in flight (a record with no dma
+                        station, an LPDDR5 pattern's, has bursts of no engine); one with a write window
                         too (version 4) never more than `window` reads nor `write_window` writes
     M2   store buffer   a store buffer never holds more than its capacity, nor stages more than
                         it holds
@@ -432,6 +433,10 @@ def check(rec, run=None):
     for i in range(nb):
         flights.setdefault(B["engine"][i], []).append((B["t_submit"][i], B["t_done"][i]))
     for e, iv in flights.items():
+        # A record with no DMA engine at all (an LPDDR5 pattern drives the controller directly)
+        # has bursts of no engine, and no window to hold them to.
+        if e == NONE and not window:
+            continue
         if e not in window:
             r.fail("M1", f"bursts name engine {e}, which has no dma station")
             continue
@@ -449,6 +454,8 @@ def check(rec, run=None):
                 if bool(B["is_load"][i]) == load:
                     by.setdefault(B["engine"][i], []).append((B["t_submit"][i], B["t_done"][i]))
             for e, iv in by.items():
+                if e == NONE and not window:
+                    continue
                 over = _peak_over(iv, cap)
                 if over:
                     r.fail("M1", f"dma[{e}]: {over[1]} {what} in flight at cycle {int(over[0])}, over its "

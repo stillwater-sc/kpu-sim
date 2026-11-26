@@ -286,9 +286,9 @@ int main(int argc, char* argv[]) {
         harness.run_until_complete();
 
         if (trace_file.empty()) {
-            trace_file = make_trace_path("four-bank", "across_groups_trace.json");
+            trace_file = make_trace_path("four-bank", "across_groups.mflow");
         }
-        harness.export_trace(trace_file);
+        if (!harness.export_mflow(trace_file)) return 2;
     }
 
     std::cout << "\n================================================" << std::endl;

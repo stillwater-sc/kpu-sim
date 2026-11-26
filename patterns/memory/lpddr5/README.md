@@ -64,25 +64,29 @@ lpddr5/
 # Build all patterns
 cmake --preset release && cmake --build --preset release
 
-# Run individual pattern
-./build/patterns/memory/lpddr5/single-bank/page-hits
+# Run individual pattern (each binary is lpddr5_<name>)
+./build/patterns/memory/lpddr5/lpddr5_page_hits
 
 # With multi-fidelity comparison
-./build/patterns/memory/lpddr5/single-bank/page-hits --fidelity
+./build/patterns/memory/lpddr5/lpddr5_page_hits --fidelity
 
-# Export trace for visualization
-./build/patterns/memory/lpddr5/single-bank/page-hits --trace output.json
+# Record the run as a .mflow bundle (a directory), and check it
+./build/patterns/memory/lpddr5/lpddr5_page_hits --trace runs/page_hits.mflow
+python3 tools/trace/mflow_check.py runs/page_hits.mflow
 ```
+
+Without `--trace`, a pattern writes its bundle under `traces/memory/lpddr5/<level>/<name>.mflow`;
+`--no-trace` writes none. CTest runs every pattern and checks its bundle (`ctest -L lpddr5`).
 
 ## Visualization
 
-Traces export to Chrome Trace format for Perfetto:
+A pattern's `.mflow` record (`docs/plans/cycle-mflow-and-debug-server.md` step 10) is the one
+the cycle core and `kpu-memsim` write, with `source` `lpddr5-pattern`: each request and its
+burst, and every command that served it (ACT, RD, WR, PRE, REF) with its row, its data-bus
+window and the page outcome, on the controller's own clock ticks. The pattern drives the
+controller directly, so the record has no DMA engine, store buffer, wait or port.
 
-1. Run pattern with `--trace` option
-2. Open https://ui.perfetto.dev
-3. Drag and drop the JSON file
-
-The trace shows:
-- Bank state timeline (IDLE, ACTIVATING, ACTIVE, READING, etc.)
-- Data bus activity (READ_BURST, WRITE_BURST, TURNAROUND)
-- Command bus activity (ACT, RD, WR, PRE)
+- `mflow_check.py` checks it against the invariants (TF10, TF11, M1-M11; `INVARIANTS.md`).
+- The memory-side debugger (`tools/visualization/memflow/`) and the DRAM views
+  (`tools/visualization/dram/`) draw it: open the bundle's folder, or serve it with
+  `tools/debug-server/kpu_debug_server.py`.
