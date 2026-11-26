@@ -242,6 +242,16 @@ process.stdout.write(JSON.stringify([[...conflictActs(R, X.channels[0]).entries(
         self.assertEqual(sh, [["closed", 0.25], ["activating", 0.25], ["open", 0.5], ["precharging", 0], ["refreshing", 0]])
         self.assertEqual([f for _, f in none], [0, 0, 0, 0, 0])
 
+    def test_the_analyzer_is_operable_from_the_keyboard(self):
+        # Every control the mouse uses is focusable, Enter and Space operate it, its state is in
+        # ARIA, and a rebuild of the table gives focus back to the same control.
+        page = self.pages["bank_analyzer.html"]
+        for needle in ('tabindex="0" ` +\n    `aria-sort=', 'tabindex="0" aria-expanded=', 'tabindex="0" aria-selected=',
+                       '(e.key === "Enter" || e.key === " ") && operate(e.target)', "if (had) { const el = $(\"banks\").querySelector(had); if (el) el.focus(); }",
+                       '<canvas id="cv" height="300" tabindex="0"', 'e.key !== "ArrowUp" && e.key !== "ArrowDown"'):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, page)
+
     def test_the_analyzers_link_names_a_bank_and_is_clamped(self):
         got = self.analyzer("function viewFromQuery(search, end) {", body="""
 process.stdout.write(JSON.stringify([viewFromQuery("?ch=mc0/ch1&bank=bg2/ba3&t=99&zoom=10", 50), viewFromQuery("?zoom=1&t=", 50)]));""")

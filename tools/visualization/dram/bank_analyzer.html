@@ -85,6 +85,7 @@ table.t th { color: var(--ink-3); font-weight: 400; position: sticky; top: 0; ba
 table.t th.on { color: var(--ink); font-weight: 600; }
 table.t tr.grp td { color: var(--ink-2); font-weight: 600; cursor: pointer; background: var(--lane); }
 table.t tr.bank { cursor: pointer; }
+table.t th:focus-visible, table.t tr:focus-visible, canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 table.t tr.bank.sel td { background: var(--lane); color: var(--accent); font-weight: 600; }
 .bar { display: inline-flex; width: 120px; height: 10px; border-radius: 2px; overflow: hidden; vertical-align: -1px; background: var(--lane); }
 .bar i { display: block; height: 100%; }
@@ -123,7 +124,7 @@ a { color: var(--accent); }
 
   <section class="panel" id="lanes" hidden>
     <h2>Each bank's state over the run (drag or wheel to zoom in; click a lane to select its bank)</h2>
-    <canvas id="cv" height="300"></canvas>
+    <canvas id="cv" height="300" tabindex="0" aria-label="bank lanes: up and down select a bank"></canvas>
     <div class="legend" id="legend"></div>
   </section>
 
@@ -284,7 +285,9 @@ function setChannel(i, redraw = true) {
 
 // ------------------------------------------------------------------ the table
 function renderTable() {
-  const head = "<tr>" + COLUMNS.map(c => `<th data-k="${c[0]}" class="${c[0] === sortKey ? "on" : ""}">${esc(c[1])}</th>`).join("") +
+  // Every control is a focusable element that Enter and Space operate (keyboard, as the mouse).
+  const head = "<tr>" + COLUMNS.map(c => `<th data-k="${c[0]}" class="${c[0] === sortKey ? "on" : ""}" tabindex="0" ` +
+    `aria-sort="${c[0] === sortKey ? (c[0] === "bank" ? "ascending" : "descending") : "none"}">${esc(c[1])}</th>`).join("") +
     "<th>outcomes</th><th title=\"activating, row open, precharging, refreshing; closed is blank\">state time</th></tr>";
   const cells = s => COLUMNS.slice(1).map(c => {
     const v = c[0] === "hitRate" ? pct(s.hitRate) : c[0] === "meanOpen" ? (s.meanOpen === null ? "-" : Math.round(s.meanOpen))
@@ -301,22 +304,38 @@ function renderTable() {
   const showIdle = $("idle").checked;
   let h = head;
   for (const g of G) {
-    h += `<tr class="grp" data-g="${g.group}"><td>${folded.has(g.group) ? "▸" : "▾"} bg${g.group}</td>${cells(g.total)}<td>${outBar(g.total)}</td><td>${stBar(g.total)}</td></tr>`;
+    h += `<tr class="grp" data-g="${g.group}" tabindex="0" aria-expanded="${folded.has(g.group) ? "false" : "true"}"><td>${folded.has(g.group) ? "▸" : "▾"} bg${g.group}</td>${cells(g.total)}<td>${outBar(g.total)}</td><td>${stBar(g.total)}</td></tr>`;
     if (folded.has(g.group)) continue;
     for (const { bank, s } of sortBanks(g.banks, sortKey)) {
       if (!showIdle && !s.bursts && !s.cmds[0]) continue;
-      h += `<tr class="bank${bank === selBank ? " sel" : ""}" data-b="${esc(bank.key)}"><td>${esc(bank.key)}</td>${cells(s)}<td>${outBar(s)}</td><td>${stBar(s)}</td></tr>`;
+      h += `<tr class="bank${bank === selBank ? " sel" : ""}" data-b="${esc(bank.key)}" tabindex="0" aria-selected="${bank === selBank}"><td>${esc(bank.key)}</td>${cells(s)}<td>${outBar(s)}</td><td>${stBar(s)}</td></tr>`;
     }
   }
+  // The rebuild replaces every control: the one that had focus gets it back.
+  const had = document.activeElement && $("banks").contains(document.activeElement) ? controlKey(document.activeElement) : null;
   $("banks").innerHTML = h;
+  if (had) { const el = $("banks").querySelector(had); if (el) el.focus(); }
 }
-$("banks").addEventListener("click", e => {
-  const th = e.target.closest("th[data-k]");
-  if (th) { sortKey = th.dataset.k; renderTable(); return; }
-  const g = e.target.closest("tr.grp");
-  if (g) { const n = Number(g.dataset.g); if (folded.has(n)) folded.delete(n); else folded.add(n); renderTable(); draw(); return; }
-  const b = e.target.closest("tr.bank");
-  if (b) selectBank(chan.banks.find(x => x.key === b.dataset.b) || null);
+// A control's identity across rebuilds: a selector for the same heading, group or bank.
+function controlKey(el) {
+  const c = el.closest("th[data-k], tr.grp, tr.bank");
+  if (!c) return null;
+  if (c.matches("th")) return `th[data-k="${CSS.escape(c.dataset.k)}"]`;
+  if (c.matches("tr.grp")) return `tr.grp[data-g="${CSS.escape(c.dataset.g)}"]`;
+  return `tr.bank[data-b="${CSS.escape(c.dataset.b)}"]`;
+}
+function operate(target) {
+  const th = target.closest("th[data-k]");
+  if (th) { sortKey = th.dataset.k; renderTable(); return true; }
+  const g = target.closest("tr.grp");
+  if (g) { const n = Number(g.dataset.g); if (folded.has(n)) folded.delete(n); else folded.add(n); renderTable(); draw(); return true; }
+  const b = target.closest("tr.bank");
+  if (b) { selectBank(chan.banks.find(x => x.key === b.dataset.b) || null); return true; }
+  return false;
+}
+$("banks").addEventListener("click", e => operate(e.target));
+$("banks").addEventListener("keydown", e => {
+  if ((e.key === "Enter" || e.key === " ") && operate(e.target)) e.preventDefault();
 });
 
 // ------------------------------------------------------------------ the selected bank
@@ -432,6 +451,15 @@ cv.addEventListener("wheel", e => {
   const t = viewA + (e.offsetX - LABEL_W) * (viewB - viewA) / (cv.clientWidth - LABEL_W), f = Math.exp(e.deltaY * 0.0015);
   setView(t - (t - viewA) * f, t + (viewB - t) * f); draw();
 }, { passive: false });
+// The lanes from the keyboard: up and down move the selection to the bank above or below.
+cv.addEventListener("keydown", e => {
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  e.preventDefault();
+  if (!lanes.length) return;
+  const k = lanes.findIndex(l => l.bank === selBank);
+  const n = k < 0 ? 0 : Math.max(0, Math.min(lanes.length - 1, k + (e.key === "ArrowDown" ? 1 : -1)));
+  selectBank(lanes[n].bank);
+});
 $("chan").addEventListener("change", e => setChannel(Number(e.target.value)));
 $("whole").addEventListener("click", () => { setView(0, X.end); draw(); });
 $("zoomOut").addEventListener("click", () => { const c = (viewA + viewB) / 2, s = (viewB - viewA) * 2; setView(c - s / 2, c + s / 2); draw(); });
