@@ -184,6 +184,18 @@ From the program's Move, Feed, Call, Drain and Writeback actions, mapped onto th
 Streamer's command queues. The L3s start with A and B in the slots the program places them in. That
 state is Phase 1's verified result, or the same state loaded directly.
 
+As built in step 2e (`cycle/compute/csp_compute_program.hpp`):
+- **The L3 is loaded directly, in the L2's lane layout.** An A tile is one row per lane, and a B tile
+  one row per column, each padded to the L2's row. Phase 1 packs tiles densely, row-major. The
+  transform between the two layouts, B's transpose among it, belongs on the BlockMover's write into
+  L2, and the join (step 3) has to build it.
+- **Each L3 slot holds one residency over the run.** A program that reuses a slot needs its Loads
+  run in time, which is also the join's work. So the 64³ runs with `l3 = 96`.
+- **A chain ends at its last call,** since the RTL's `last` launches its results north at once. A
+  deferred Drain (`store … late`) is the same L2 Result, in program order.
+- **A call needs A and B in two L2 slots.** The Streamer reads both in the same clocks, while the CSP
+  feeds each tile into L1 whole. So `l2 = 2`, and `l2 = 3` with late stores, are refused.
+
 ### 5.3 Ladder
 
 1. **One PE:** one MAC per clock, and `first`/`last` handled.

@@ -264,3 +264,13 @@ kpu_set_target_options(test_cycle_combiner)
 set_target_properties(test_cycle_combiner PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_combiner COMMAND test_cycle_combiner)
 set_tests_properties(test_cycle_combiner PROPERTIES LABELS "cycle;combiner;compute;v0.10")
+
+# Step 2e (#546): the compute subsystem orchestrated by a CSP program, L3 -> array -> L3.
+add_executable(test_cycle_compute_csp test_cycle_compute_csp.cpp)
+target_link_libraries(test_cycle_compute_csp PRIVATE Catch2::Catch2WithMain kpu_program)
+target_include_directories(test_cycle_compute_csp PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_cycle_compute_csp PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+kpu_set_target_options(test_cycle_compute_csp)
+set_target_properties(test_cycle_compute_csp PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_compute_csp COMMAND test_cycle_compute_csp)
+set_tests_properties(test_cycle_compute_csp PROPERTIES LABELS "cycle;csp;compute;v0.10")
