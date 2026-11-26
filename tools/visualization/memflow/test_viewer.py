@@ -90,10 +90,12 @@ class ViewerSmokeTest(unittest.TestCase):
         self.assertGreater(m["ceiling_bytes_per_cycle"], 0)
         self.assertGreater(m["burst_bytes"], 0)
         kinds = {s["kind"] for s in m["stations"]}
-        # Every memory side has banks, buses, engines and store buffers; port stubs only when the
-        # NoC is stubbed (kpu-memsim). A cycle-core bundle has none, and the page draws no port rows;
-        # it has a dmawait station per engine (version 4), which the page does not draw yet.
-        self.assertLessEqual({"dram_bank", "dram_bus", "dma", "dmabuf"}, kinds)
+        # Every memory side has banks and buses, and engines with store buffers unless it is an LPDDR5
+        # pattern's (it drives the controller directly); port stubs only when the NoC is stubbed
+        # (kpu-memsim). A cycle-core bundle has none, and the page draws no port rows; it has a
+        # dmawait station per engine (version 4), which the page does not draw yet.
+        self.assertLessEqual({"dram_bank", "dram_bus"} if m.get("source") == "lpddr5-pattern"
+                             else {"dram_bank", "dram_bus", "dma", "dmabuf"}, kinds)
         self.assertLessEqual(kinds, {"dram_bank", "dram_bus", "dma", "dmabuf", "port", "dmawait"})
 
     def read(self, bundle, extra=""):

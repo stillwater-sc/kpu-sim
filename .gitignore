@@ -84,3 +84,6 @@ tests/benchmarks/baselines/
 examples/**/*.log
 examples/compiler/hardware_design_space.csv
 examples/compiler/hardware_design_space_visualization.png
+
+# LPDDR5 pattern runs' default .mflow bundles (patterns/memory/lpddr5, --trace)
+traces/memory/lpddr5/**/*.mflow/

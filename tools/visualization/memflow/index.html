@@ -660,7 +660,10 @@ function drawObs() {
     const peak = stepMax(b.held);
     if (peak > b.cap) out.push(["crit", "dmabuf[" + b.e + "] held " + peak + " slots, over its " + b.cap]);
   }
-  if (D.writeWindow) {
+  if (!D.engines.length) {
+    // An LPDDR5 pattern drives the controller directly: no engine, so no window to fill.
+    out.push(["", "no DMA engine: the requests went straight to the memory controller (" + (R.m.source || "?") + ")"]);
+  } else if (D.writeWindow) {
     for (const e of D.engines) {
       const r = stepMax(e.reads), wr = stepMax(e.writes);
       if (r > D.window) out.push(["crit", "dma[" + e.e + "] had " + r + " reads in flight, over its window of " + D.window]);
@@ -687,7 +690,7 @@ function drawObs() {
   if (worst.length) out.push(["", "most conflicts: " + worst.map(([c, l, n]) => l + " " + c + "/" + n).join(", ")]);
   let worstLat = 0, worstReq = -1;
   for (let i = 0; i < Q.rows; i++) { const l = Q.t_retired[i] - Q.t_offered[i]; if (l > worstLat) { worstLat = l; worstReq = i; } }
-  if (worstReq >= 0) out.push(["", "longest request: #" + worstReq + " (" + (Q.is_load[worstReq] ? "load" : "store") + ", engine " + Q.engine[worstReq] + ") took " + fmt(worstLat) + " cycles"]);
+  if (worstReq >= 0) out.push(["", "longest request: #" + worstReq + " (" + (Q.is_load[worstReq] ? "load" : "store") + (Q.engine[worstReq] === NONE ? "" : ", engine " + Q.engine[worstReq]) + ") took " + fmt(worstLat) + " cycles"]);
   $("obs").innerHTML = out.map(([s, t]) => "<li" + (s ? " style=\"color:var(--" + (s === "crit" ? "crit" : "ink") + ")\"" : "") + ">" + (s === "warn" ? "⚠ " : s === "crit" ? "✖ " : "") + esc(t) + "</li>").join("");
 }
 

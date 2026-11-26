@@ -43,12 +43,26 @@ function(add_lpddr5_pattern NAME SOURCE_FILE FOLDER_LEVEL)
         lpddr5_pattern_common
         kpu_memory_components
         kpu_trace
+        kpu_program            # the .mflow writer (the harness records the run)
     )
     set_target_properties(lpddr5_${NAME} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/patterns/memory/lpddr5
         FOLDER "Patterns/Memory/LPDDR5/${FOLDER_LEVEL}"
     )
+    # The pattern runs (its own checks), writes its run as a .mflow bundle, and mflow_check.py
+    # checks the bundle (docs/plans/cycle-mflow-and-debug-server.md step 10).
+    set(_bundle ${CMAKE_BINARY_DIR}/patterns/memory/lpddr5/${NAME}.mflow)
+    add_test(NAME lpddr5_${NAME} COMMAND lpddr5_${NAME} --trace ${_bundle})
+    set_tests_properties(lpddr5_${NAME} PROPERTIES LABELS "patterns;lpddr5;mflow"
+                         FIXTURES_SETUP lpddr5_${NAME}_mflow)
+    if(KPU_PYTHON3)
+        add_test(NAME lpddr5_${NAME}_mflow_check
+            COMMAND ${KPU_PYTHON3} ${PROJECT_SOURCE_DIR}/tools/trace/mflow_check.py ${_bundle})
+        set_tests_properties(lpddr5_${NAME}_mflow_check PROPERTIES LABELS "patterns;lpddr5;mflow"
+                             FIXTURES_REQUIRED lpddr5_${NAME}_mflow)
+    endif()
 endfunction()
+find_program(KPU_PYTHON3 NAMES python3 python)
 
 # -----------------------------------------------------------------------------
 # Level 1: Single Bank Patterns
@@ -86,6 +100,14 @@ add_lpddr5_pattern(page_hit_burst four-bank/page_hit_burst.cpp "Level 4 - Four B
 
 add_lpddr5_pattern(independent dual-channel/independent.cpp "Level 5 - Dual Channel")
 add_lpddr5_pattern(interleaved dual-channel/interleaved.cpp "Level 5 - Dual Channel")
+# The memory-side debugger reads a pattern's bundle too: no engine, two channels.
+if(KPU_PYTHON3)
+    add_test(NAME lpddr5_interleaved_viewer
+        COMMAND ${KPU_PYTHON3} ${PROJECT_SOURCE_DIR}/tools/visualization/memflow/test_viewer.py
+                ${CMAKE_BINARY_DIR}/patterns/memory/lpddr5/interleaved.mflow)
+    set_tests_properties(lpddr5_interleaved_viewer PROPERTIES LABELS "patterns;lpddr5;mflow;viewer"
+                         FIXTURES_REQUIRED lpddr5_interleaved_mflow)
+endif()
 
 # -----------------------------------------------------------------------------
 # Level 6: Complex Patterns
