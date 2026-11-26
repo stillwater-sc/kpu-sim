@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory Request Swimlanes</title>
+<!--
+  tools/visualization/dram/swimlane.html -- each memory request as a pipeline
+  (docs/plans/cycle-mflow-and-debug-server.md §3.5, step 9c).
+
+  One lane per request of a .mflow record, grouped by DMA engine, in the record's executor cycles:
+    request  offered -> credit (waiting for its credit) -> first burst -> last burst (bursting)
+             -> retired (draining)
+    burst    posted -> granted (the controller's grant) -> first command (queued) -> data
+             (the bank: ACT and CAS latency) -> data end (the bus) -> done (returned)
+  Each engine's lane of waits (why it did not advance, from the record's waits table) sits above
+  its requests. Select a request to open its bursts, each as a pipeline of its own; the inspector
+  names the program action (ticket) and the L3 slot the request executes, as the record states.
+
+  Everything comes from the record, through ../common/mflow.js. Nothing is inferred.
+
+  Open this file and choose the bundle's folder (or drop its files), or open it as
+  swimlane.html?bundle=<url of the bundle's directory> from a server; pack.py embeds a bundle. A
+  view can be shared as a link: ?req=<n>&t=<cycle>&zoom=<cycles shown>.
+
+  SPDX-License-Identifier: MIT
+  Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
+-->
+<style>
+:root {
+  --bg: #f4f5f6; --panel: #fcfcfb; --ink: #15181c; --ink-2: #4a5059; --ink-3: #7b828c;
+  --line: #d9dce0; --grid: #e8eaed; --lane: #f0f2f4; --accent: #2a5db0; --crit: #d03b3b;
+  --load: #2a78d6; --store: #d9822b; --fill: #1f9e89;
+  --s0: #b9bfc7; --s1: #8e5bd0; --s2: #2f9e6e; --s3: #2a78d6; --s4: #6b7d2e;
+  --w0: #8e5bd0; --w1: #2a9d8f; --w2: #c2185b; --w3: #5a6acf; --w4: #b8860b; --w5: #6b7d2e;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --lane: #1f2226; --accent: #7aa7ea; --crit: #ef6b6b;
+    --load: #3987e5; --store: #ec9a45; --fill: #3cc4ad;
+    --s0: #4a5059; --s1: #a97ee6; --s2: #3fbf86; --s3: #3987e5; --s4: #9bb04f;
+    --w0: #a97ee6; --w1: #49c0b1; --w2: #ec5a92; --w3: #8794e8; --w4: #d9ac3a; --w5: #9bb04f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+    --bg: #121416; --panel: #1a1c1f; --ink: #eef0f2; --ink-2: #b9bfc7; --ink-3: #8a919b;
+    --line: #2e3237; --grid: #25292d; --lane: #1f2226; --accent: #7aa7ea; --crit: #ef6b6b;
+    --load: #3987e5; --store: #ec9a45; --fill: #3cc4ad;
+    --s0: #4a5059; --s1: #a97ee6; --s2: #3fbf86; --s3: #3987e5; --s4: #9bb04f;
+    --w0: #a97ee6; --w1: #49c0b1; --w2: #ec5a92; --w3: #8794e8; --w4: #d9ac3a; --w5: #9bb04f;
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); }
+.wrap { max-width: 1500px; margin: 0 auto; padding: 18px 16px 60px; display: grid; gap: 16px; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 13px; margin: 0; color: var(--ink-2); font-weight: 600; }
+.sub { color: var(--ink-2); max-width: 95ch; margin: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .row2 { grid-template-columns: minmax(0, 1fr); } }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 12px var(--font-data); border: 1px solid var(--line); border-radius: 4px; padding: 2px 7px; color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+.load { border: 2px dashed var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 10px; }
+.load.drag { border-color: var(--accent); }
+.transport { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; position: sticky; top: 0; z-index: 4; background: var(--bg); padding: 8px 0; border-bottom: 1px solid var(--line); }
+button, select { font: 13px var(--font-ui); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--ink-3); }
+label { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 5px; align-items: center; }
+.clock { font: 13px var(--font-data); }
+canvas { display: block; width: 100%; touch-action: none; }
+canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.scroll { overflow: auto; max-height: 640px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; border: 1px solid var(--line); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font: 12px var(--font-data); }
+.kv span:nth-of-type(odd) { color: var(--ink-3); }
+.kv .h { grid-column: 1 / -1; color: var(--ink-2); font: 600 12px var(--font-ui); margin-top: 6px; }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; font: 12px var(--font-data); box-shadow: 0 4px 16px rgba(0,0,0,.18); max-width: 420px; white-space: pre; }
+.note { font-size: 12px; color: var(--ink-3); }
+code { font: 12px var(--font-data); }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Memory request swimlanes</h1>
+    <p class="sub">Each request of a <code>.mflow</code> record (<code>kpu-run --memory-mflow</code>, <code>kpu-memsim --out</code>)
+      as a pipeline, per DMA engine, with the engine's waits above it. Select a request to open its bursts.</p>
+  </header>
+
+  <section class="load" id="load">
+    <div><label>Bundle folder <input type="file" id="pick" webkitdirectory multiple></label></div>
+    <p class="note">Or drop the bundle's files here. Served by the debug server, the page reads <code>?bundle=</code>.</p>
+    <p class="note" id="loadMsg"></p>
+  </section>
+<!--MFLOW_EMBED-->
+
+  <section class="panel" id="summary" hidden><div class="chips" id="chips"></div></section>
+
+  <div class="transport" id="transport" hidden>
+    <select id="engine" aria-label="engine"></select>
+    <label><input type="checkbox" id="kLoad" checked> loads</label>
+    <label><input type="checkbox" id="kStore" checked> stores</label>
+    <label><input type="checkbox" id="kFill" checked> fills</label>
+    <button id="zoomIn">Zoom in</button>
+    <button id="zoomOut">Zoom out</button>
+    <button id="whole">Whole run</button>
+    <span class="clock" id="clock"></span>
+  </div>
+
+  <section class="panel" id="lanes" hidden>
+    <h2>Requests (drag or wheel to zoom in; click a request to open its bursts, a burst to inspect it)</h2>
+    <div class="scroll"><canvas id="cv" height="300" tabindex="0" aria-label="request lanes: up and down move between lanes, Enter opens a request or inspects a burst, + and - zoom, left and right pan"></canvas></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <div class="row2" id="lower" hidden>
+    <section class="panel"><h2>Selected request</h2><div id="inspectQ" class="kv"></div></section>
+    <section class="panel"><h2>Selected burst</h2><div id="inspectB" class="kv"></div><p class="note" id="timingLink"></p></section>
+  </div>
+</div>
+<div class="tip" id="tip" hidden></div>
+<script src="../common/mflow.js"></script>
+<script src="../common/live.js"></script>
+<script>
+(function () {
+"use strict";
+const $ = id => document.getElementById(id);
+const { NONE, OUTCOME, REQKIND, WAIT } = Mflow;
+
+// ------------------------------------------------------------------ pure helpers (tested)
+// The stages of request q and of burst b: [[name, from, to]] in executor cycles, from the record's
+// own times; a stage of no length is left out (a Fill has no bursts: credit, then retired).
+const REQ_STAGES = ["credit wait", "to first burst", "bursting", "draining"];
+const BURST_STAGES = ["grant wait", "queued", "bank", "data", "return"];
+function requestStages(R, q) {
+  const Q = R.Q, t = [Q.t_offered[q], Q.t_credit[q], Q.t_first[q], Q.t_last[q], Q.t_retired[q]];
+  return REQ_STAGES.map((n, k) => [n, t[k], t[k + 1]]).filter(s => s[2] > s[1]);
+}
+function burstStages(R, b) {
+  const B = R.B, t = [B.t_posted[b], B.t_submit[b], B.t_cmd[b], B.t_data0[b], B.t_data1[b], B.t_done[b]];
+  return BURST_STAGES.map((n, k) => [n, t[k], t[k + 1]]).filter(s => s[2] > s[1]);
+}
+
+// Each request's bursts, by posting time: an array indexed by request.
+function burstsByRequest(R) {
+  const out = Array.from({ length: R.Q.rows }, () => []);
+  for (let b = 0; b < R.B.rows; b++) if (R.B.request[b] !== NONE) out[R.B.request[b]].push(b);
+  for (const l of out) l.sort((a, b) => R.B.t_posted[a] - R.B.t_posted[b] || a - b);
+  return out;
+}
+
+// The lanes, top to bottom: per engine (all, or just `engine`), its waits lane, then its requests
+// of the kinds shown (by offer time), the open request followed by its bursts. Each lane is
+// { kind: "engine" | "waits" | "request" | "burst", engine, q, b }.
+function lanes(R, byReq, { engine = null, kinds = [true, true, true], open = null } = {}) {
+  const engines = [...new Set(Array.from(R.Q.engine))].sort((a, b) => a - b);
+  for (let i = 0; i < R.W.rows; i++) if (!engines.includes(R.W.engine[i])) engines.push(R.W.engine[i]);
+  engines.sort((a, b) => a - b);
+  const out = [];
+  for (const e of engines) {
+    if (engine !== null && e !== engine) continue;
+    out.push({ kind: "engine", engine: e });
+    let has = false;
+    for (let i = 0; i < R.W.rows && !has; i++) has = R.W.engine[i] === e;
+    if (has) out.push({ kind: "waits", engine: e });
+    const qs = [];
+    for (let q = 0; q < R.Q.rows; q++) if (R.Q.engine[q] === e && kinds[R.Q.kind[q]]) qs.push(q);
+    qs.sort((a, b) => R.Q.t_offered[a] - R.Q.t_offered[b] || a - b);
+    for (const q of qs) {
+      out.push({ kind: "request", engine: e, q });
+      if (q === open) for (const b of byReq[q]) out.push({ kind: "burst", engine: e, q, b });
+    }
+  }
+  return out;
+}
+
+// The view a link asks for: { req, t, zoom }, clamped to the run.
+function viewFromQuery(search, end) {
+  const q = new URLSearchParams(search);
+  const num = k => { const v = Number(q.get(k)); return q.has(k) && q.get(k) !== "" && Number.isFinite(v) ? v : null; };
+  const zoom = num("zoom"), t = num("t"), req = num("req");
+  return { req: req !== null && Number.isInteger(req) && req >= 0 ? req : null,
+           t: t !== null ? Math.min(Math.max(t, 0), end) : null,
+           zoom: zoom !== null && zoom >= 2 ? Math.min(zoom, Math.max(end, 2)) : null };
+}
+
+// An engine's name: dma[e], or, for a record with no engine (an LPDDR5 pattern drives the
+// controller directly), what its requests are.
+function engineName(e) {
+  return e === NONE ? "no engine (to the controller)" : "dma[" + e + "]";
+}
+
+// ------------------------------------------------------------------ state
+let R = null, byReq = [], L = [], end = 1, open = null, selB = null, focusLane = -1;   // focusLane: the keyboard's lane
+let viewA = 0, viewB = 1;
+const WAIT_LABEL = ["slot credit", "L3 link credit", "DRAM request credit", "burst window", "store buffer", "program order"];
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const COL = {};
+function colours() {
+  for (const k of ["ink", "ink-2", "ink-3", "grid", "lane", "accent", "load", "store", "fill", "s0", "s1", "s2", "s3", "s4", "w0", "w1", "w2", "w3", "w4", "w5"])
+    COL[k] = css("--" + k);
+}
+const REQ_COL = k => [COL.load, COL.store, COL.fill][k];
+const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const none = v => (v === NONE ? "-" : v);
+
+// ------------------------------------------------------------------ loading
+async function loadFrom(source) {
+  $("loadMsg").textContent = "Reading…";
+  try { R = await Mflow.open(source); start(); }
+  catch (e) { $("loadMsg").textContent = "Could not read the bundle: " + e.message; }
+}
+$("pick").addEventListener("change", e => loadFrom(e.target.files));
+const drop = $("load");
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("drag"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
+drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("drag"); loadFrom(e.dataTransfer.files); });
+
+function start() {
+  if (!R.Q.rows) { $("loadMsg").textContent = "The record has no request."; return; }
+  byReq = burstsByRequest(R);
+  end = Math.max(R.m.makespan || 0, ...Array.from(R.Q.t_retired));
+  $("load").hidden = true;
+  for (const id of ["summary", "transport", "lanes", "lower"]) $(id).hidden = false;
+  const n = [0, 0, 0];
+  for (let q = 0; q < R.Q.rows; q++) n[R.Q.kind[q]]++;
+  const chip = (k, v) => `<span class="chip">${esc(k)} <b>${esc(v)}</b></span>`;
+  $("chips").innerHTML = [chip("device", R.m.device), chip("source", R.m.source || "-"), chip("makespan", end + " cycles"),
+    chip("load / store / fill", n.join(" / ")), chip("bursts", R.B.rows), chip("waits", R.W.rows)].join("");
+  const engines = [...new Set(Array.from(R.Q.engine))].sort((a, b) => a - b);
+  $("engine").innerHTML = '<option value="">every engine</option>' + engines.map(e => `<option value="${e}">${esc(engineName(e))}</option>`).join("");
+  $("legend").innerHTML =
+    REQ_STAGES.map((s, k) => `<span><span class="sw" style="background:var(--s${k})"></span>${esc(s)}</span>`).join("") +
+    '<span>· a request\'s bar is drawn in its kind\'s colour:</span>' +
+    ["load", "store", "fill"].map(k => `<span><span class="sw" style="background:var(--${k})"></span>${k}</span>`).join("") +
+    '<span>· a burst\'s stages:</span>' + BURST_STAGES.map((s, k) => `<span><span class="sw" style="background:var(--s${k})"></span>${esc(s)}</span>`).join("") +
+    '<span>· waits:</span>' + WAIT_LABEL.map((s, k) => `<span><span class="sw" style="background:var(--w${k})"></span>${esc(s)}</span>`).join("");
+  colours();
+  const q = viewFromQuery(location.search, end);
+  setView(0, end);
+  if (q.req !== null && q.req < R.Q.rows) openRequest(q.req, q.zoom === null);
+  if (q.zoom !== null) { const c = q.t !== null ? q.t : end / 2; setView(c - q.zoom / 2, c + q.zoom / 2); }
+  relayout();
+}
+
+function relayout() {
+  const e = $("engine").value;
+  L = lanes(R, byReq, { engine: e === "" ? null : Number(e), kinds: [$("kLoad").checked, $("kStore").checked, $("kFill").checked], open });
+  draw(); inspect();
+}
+function openRequest(q, fit) {
+  open = open === q && !fit ? null : q;
+  selB = null;
+  if (fit && open !== null) { const s = requestStages(R, q); if (s.length) { const a = s[0][1], b = s[s.length - 1][2], p = Math.max(2, (b - a) * 0.1); setView(a - p, b + p); } }
+  share();
+}
+
+// ------------------------------------------------------------------ the view
+function setView(a, b) {
+  const span = Math.max(2, b - a);
+  a = Math.max(0, Math.min(a, end - span));
+  viewA = a; viewB = Math.min(end, a + span);
+  share();
+}
+let shareTimer = 0;
+function share() {
+  clearTimeout(shareTimer);
+  shareTimer = setTimeout(() => {
+    const q = new URLSearchParams(location.search);
+    if (open !== null) q.set("req", String(open)); else q.delete("req");
+    q.set("t", String(Math.round((viewA + viewB) / 2))); q.set("zoom", String(Math.round(viewB - viewA)));
+    try { history.replaceState(null, "", "?" + q.toString()); } catch (e) { /* a file:// page may refuse */ }
+  }, 250);
+}
+
+const LABEL_W = 110, AXIS_H = 20, LANE_H = 14, HEAD_H = 18, WAITS_H = 26;
+const laneH = l => (l.kind === "engine" ? HEAD_H : l.kind === "waits" ? WAITS_H : LANE_H);
+const cv = $("cv"), ctx = cv.getContext("2d");
+function draw() {
+  if (!R) return;
+  let y = AXIS_H;
+  for (const l of L) { l.y = y; y += laneH(l); }
+  const H = y + 4, dpr = window.devicePixelRatio || 1, W = cv.clientWidth;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  const per = (W - LABEL_W) / (viewB - viewA), x = t => LABEL_W + (t - viewA) * per;
+  ctx.font = "11px " + css("--font-data"); ctx.textBaseline = "middle";
+  const raw = 80 / per, p = Math.pow(10, Math.floor(Math.log10(Math.max(raw, 1))));
+  const step = [1, 2, 5, 10].map(m => m * p).find(v => v >= raw);
+  ctx.strokeStyle = COL.grid; ctx.fillStyle = COL["ink-3"];
+  for (let t = Math.ceil(viewA / step) * step; t <= viewB; t += step) {
+    const px = Math.round(x(t)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(px, AXIS_H); ctx.lineTo(px, H); ctx.stroke(); ctx.fillText(String(t), px + 2, 9);
+  }
+  const bar = (a, b, l, c, inset) => {
+    if (b < viewA || a > viewB) return;
+    ctx.fillStyle = c; ctx.fillRect(x(a), l.y + inset, Math.max(1, x(b) - x(a)), laneH(l) - 2 * inset);
+  };
+  for (const l of L) {
+    ctx.fillStyle = l.kind === "engine" ? COL.ink : (l.q === open && l.kind === "request") || (l.kind === "burst" && l.b === selB) ? COL.accent : COL["ink-2"];
+    const label = l.kind === "engine" ? engineName(l.engine) : l.kind === "waits" ? "  held up by" :
+      l.kind === "request" ? `  ${REQKIND[R.Q.kind[l.q]]} #${l.q}` : `    burst ${l.b}`;
+    ctx.fillText(label, 4, l.y + laneH(l) / 2);
+    if (l.kind !== "engine") { ctx.fillStyle = COL.lane; ctx.fillRect(LABEL_W, l.y + 1, W - LABEL_W, laneH(l) - 2); }
+  }
+  ctx.save(); ctx.beginPath(); ctx.rect(LABEL_W, 0, W - LABEL_W, H); ctx.clip();
+  for (const l of L) {
+    if (l.kind === "waits") {
+      // Several causes can hold at once: each cause has its own sixth of the lane.
+      const h = (WAITS_H - 2) / WAIT.length;
+      for (let i = 0; i < R.W.rows; i++) {
+        if (R.W.engine[i] !== l.engine || R.W.t_to[i] < viewA || R.W.t_from[i] > viewB) continue;
+        const k = R.W.reason[i];
+        ctx.fillStyle = COL["w" + k]; ctx.fillRect(x(R.W.t_from[i]), l.y + 1 + k * h, Math.max(1, x(R.W.t_to[i]) - x(R.W.t_from[i])), h);
+      }
+    } else if (l.kind === "request") {
+      requestStages(R, l.q).forEach(([n, a, b]) => bar(a, b, l, COL["s" + REQ_STAGES.indexOf(n)], 3));
+      // its kind, as a strip along the bottom of its lane, offered to retired
+      const a = R.Q.t_offered[l.q], b = Math.max(R.Q.t_retired[l.q], a + 0.5);
+      if (b >= viewA && a <= viewB) { ctx.fillStyle = REQ_COL(R.Q.kind[l.q]); ctx.fillRect(x(a), l.y + LANE_H - 3, Math.max(1, x(b) - x(a)), 2); }
+    } else if (l.kind === "burst") {
+      burstStages(R, l.b).forEach(([n, a, b]) => bar(a, b, l, COL["s" + BURST_STAGES.indexOf(n)], 2));
+      if (l.b === selB) { ctx.strokeStyle = COL.accent; ctx.lineWidth = 2; ctx.strokeRect(LABEL_W + 1, l.y + 1, W - LABEL_W - 2, LANE_H - 2); }
+    }
+  }
+  const fl = L[focusLane];
+  if (fl && document.activeElement === cv) {   // the keyboard's lane
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 1; ctx.setLineDash([3, 2]);
+    ctx.strokeRect(LABEL_W + 0.5, fl.y + 0.5, W - LABEL_W - 1, laneH(fl) - 1); ctx.setLineDash([]);
+  }
+  ctx.restore();
+  $("clock").textContent = `cycles ${Math.round(viewA)}–${Math.round(viewB)} of ${end}`;
+}
+
+// ------------------------------------------------------------------ the inspector
+function inspect() {
+  const kv = (k, v) => `<span>${esc(k)}</span><span>${esc(v)}</span>`;
+  if (open === null) { $("inspectQ").innerHTML = kv("request", "none selected"); }
+  else {
+    const Q = R.Q, q = open;
+    $("inspectQ").innerHTML = kv("request", q) + kv("kind", REQKIND[Q.kind[q]]) + kv("engine", engineName(Q.engine[q])) +
+      kv("address", "0x" + BigInt(Q.address[q]).toString(16)) + kv("bytes", Q.bytes[q]) + kv("bursts", byReq[q].length) +
+      kv("program action (ticket)", none(Q.ticket[q])) + kv("L3 slot", none(Q.slot[q])) +
+      '<div class="h">its pipeline (cycles)</div>' +
+      kv("offered", Q.t_offered[q]) + kv("credit", Q.t_credit[q]) + kv("first burst", Q.t_first[q]) +
+      kv("last burst", Q.t_last[q]) + kv("retired", Q.t_retired[q]) + kv("latency", Q.t_retired[q] - Q.t_offered[q]);
+  }
+  if (selB === null) { $("inspectB").innerHTML = kv("burst", "none selected"); $("timingLink").textContent = ""; return; }
+  const B = R.B, b = selB;
+  $("inspectB").innerHTML = kv("burst", b) + kv("direction", B.is_load[b] ? "read" : "write") +
+    kv("bank", `mc${B.mc[b]}/ch${B.channel[b]}/bg${B.bank_group[b]}/ba${B.bank[b]}`) + kv("row / col", `${B.row[b]} / ${B.col[b]}`) +
+    kv("page", OUTCOME[B.outcome[b]]) + '<div class="h">its pipeline (cycles)</div>' +
+    burstStages(R, b).map(([n, a, z]) => kv(n, `${a} → ${z} (${+(z - a).toFixed(3)})`)).join("");
+  const served = new URLSearchParams(location.search).get("bundle");
+  if (served) {
+    const u = new URLSearchParams({ bundle: served, burst: String(b) });
+    $("timingLink").innerHTML = `<a href="timing.html?${esc(u.toString())}">Open this burst in the timing diagram</a>`;
+  } else $("timingLink").textContent = "";
+}
+
+// ------------------------------------------------------------------ interaction
+// The lanes from the keyboard: Up and Down move between request and burst lanes, Enter or Space
+// does what a click does (open a request, inspect a burst).
+function actOn(l) {
+  if (l.kind === "request") { openRequest(l.q, false); relayout(); focusLane = L.indexOf(L.find(x => x.kind === "request" && x.q === l.q)); draw(); }
+  else if (l.kind === "burst") { selB = l.b; draw(); inspect(); }
+}
+// Zoom about the view's centre by factor f (< 1 zooms in), or pan by a fraction of the view.
+function zoomBy(f) { const c = (viewA + viewB) / 2, s = (viewB - viewA) * f; setView(c - s / 2, c + s / 2); draw(); }
+function panBy(frac) { const d = (viewB - viewA) * frac; setView(viewA + d, viewB + d); draw(); }
+cv.addEventListener("keydown", e => {
+  if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(0.5); return; }
+  if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(2); return; }
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); panBy(e.key === "ArrowLeft" ? -0.1 : 0.1); return; }
+  const usable = i => L[i] && (L[i].kind === "request" || L[i].kind === "burst");
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const d = e.key === "ArrowDown" ? 1 : -1;
+    let i = focusLane;
+    do { i += d; } while (i >= 0 && i < L.length && !usable(i));
+    if (usable(i)) { focusLane = i; draw(); }
+  } else if ((e.key === "Enter" || e.key === " ") && usable(focusLane)) {
+    e.preventDefault();
+    actOn(L[focusLane]);
+  }
+});
+cv.addEventListener("focus", () => { if (focusLane < 0) focusLane = L.findIndex(l => l.kind === "request"); draw(); });
+cv.addEventListener("blur", draw);
+function laneAt(py) { return L.find(l => py >= l.y && py < l.y + laneH(l)) || null; }
+let drag = null;
+cv.addEventListener("pointerdown", e => { drag = { x: e.offsetX, a: viewA, b: viewB, moved: false }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", e => {
+  if (drag) {
+    const dx = e.offsetX - drag.x;
+    if (Math.abs(dx) > 3) drag.moved = true;
+    if (drag.moved) { const d = dx * (drag.b - drag.a) / (cv.clientWidth - LABEL_W); setView(drag.a - d, drag.b - d); draw(); }
+    return;
+  }
+  const l = laneAt(e.offsetY), tip = $("tip");
+  if (!l || l.kind === "engine") { tip.hidden = true; return; }
+  const t = viewA + (e.offsetX - LABEL_W) * (viewB - viewA) / (cv.clientWidth - LABEL_W);
+  let text = "";
+  if (l.kind === "waits") {
+    const held = [];
+    for (let i = 0; i < R.W.rows; i++) if (R.W.engine[i] === l.engine && R.W.t_from[i] <= t && t < R.W.t_to[i]) held.push(`${WAIT_LABEL[R.W.reason[i]]} ${R.W.t_from[i]}–${R.W.t_to[i]}`);
+    text = `${engineName(l.engine)} at cycle ${Math.floor(t)}: ` + (held.length ? "held up by\n" + held.join("\n") : "not held up");
+  } else {
+    const st = l.kind === "request" ? requestStages(R, l.q) : burstStages(R, l.b);
+    const s = st.find(([, a, b]) => a <= t && t < b);
+    text = (l.kind === "request" ? `${REQKIND[R.Q.kind[l.q]]} #${l.q}` : `burst ${l.b} of request ${l.q}`) + (s ? `\n${s[0]}: ${s[1]} → ${s[2]}` : "");
+  }
+  tip.textContent = text; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY + 12) + "px"; tip.hidden = false;
+});
+cv.addEventListener("pointerleave", () => { $("tip").hidden = true; });
+cv.addEventListener("pointerup", e => {
+  const d = drag; drag = null;
+  if (!d || d.moved) return;
+  const l = laneAt(e.offsetY);
+  if (!l) return;
+  focusLane = L.indexOf(l);
+  actOn(l);
+});
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const t = viewA + (e.offsetX - LABEL_W) * (viewB - viewA) / (cv.clientWidth - LABEL_W), f = Math.exp(e.deltaY * 0.0015);
+  setView(t - (t - viewA) * f, t + (viewB - t) * f); draw();
+}, { passive: false });
+for (const id of ["engine", "kLoad", "kStore", "kFill"]) $(id).addEventListener("change", relayout);
+$("whole").addEventListener("click", () => { setView(0, end); draw(); });
+$("zoomOut").addEventListener("click", () => zoomBy(2));
+$("zoomIn").addEventListener("click", () => zoomBy(0.5));
+window.addEventListener("resize", draw);
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { colours(); draw(); });
+
+// An embedded bundle (pack.py) loads at once; so does one a server names (?bundle=<url>).
+const served = new URLSearchParams(location.search).get("bundle");
+if (window.MFLOW_EMBED) loadFrom(window.MFLOW_EMBED);
+else if (served) {
+  // Only a bundle on this page's own server: a link must not point the page at another site.
+  const url = new URL(served, location.href);
+  if (url.origin === location.origin) {
+    loadFrom(url.href);
+    if (window.MflowLive) MflowLive.watch("bundle");   // the debug server's reload bar
+  } else $("loadMsg").textContent = "Not reading " + url.origin + ": ?bundle= names a bundle on this page's server";
+}
+
+// For tests (test_views.py runs these under Node): the pure helpers.
+if (typeof module !== "undefined") module.exports = { requestStages, burstStages, burstsByRequest, lanes, viewFromQuery, engineName };
+})();
+</script>
+</body>
+</html>
