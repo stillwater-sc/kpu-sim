@@ -322,8 +322,8 @@ pattern traces are viewable without changing those tools.
 | `/api/runs` | The same, as JSON |
 | `/api/events` | Server-sent events: `run-added` or `run-changed` when the root changes |
 | `/files/<path>` | A file under `--root`, with its MIME type. `Range` is supported for large `.bin` columns |
-| `/view/<viewer>?bundle=…`, `?trace=…` | A viewer page from `tools/visualization/` |
-| `/common/<file>` | Shared viewer scripts (`mflow.js`) |
+| `/view/<viewer>/<page>?bundle=…`, `?trace=…` | A viewer page from `tools/visualization/` |
+| `/view/common/<file>` | Shared viewer scripts (`mflow.js`), beside the viewers: a page's `../common/mflow.js` resolves there |
 
 **Live runs.** A thread polls the root's mtimes every second; this needs no inotify dependency
 and works on any filesystem. When a run appears or a `run.json` changes, it pushes an event:

@@ -112,6 +112,12 @@ add_subdirectory(floorplan)
 add_subdirectory(kpu-memsim)
 
 # ============================================================================
+# The debug server: runs and their viewers, to a browser on loopback
+# (docs/plans/cycle-mflow-and-debug-server.md step 7). Python, tested here.
+# ============================================================================
+add_subdirectory(debug-server)
+
+# ============================================================================
 # Legacy C++ tools (deprecated - to be migrated)
 # ============================================================================
 # add_subdirectory(cpp)
