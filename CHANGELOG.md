@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The debug pattern, record to browser, steps 1–7** (#562–#568; epic #532,
+- **The debug pattern, record to browser, steps 1–12** (#562–#573; epic #532,
   `docs/plans/cycle-mflow-and-debug-server.md`). A cycle-core run is recorded, checked, drawn and served
   by the same tools as the memory side's `kpu-memsim` runs.
   - **1, events and the `.mflow` recorder** (#561): the DMA engine and the LPDDR5 channel report to a
@@ -31,6 +31,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     write windows apart, Fills, and each request's action and slot.
   - **7, the read-only debug server `tools/debug-server/`** (#582): runs and their viewers to a browser on
     127.0.0.1, reached through an SSH tunnel; files confined to the root, Range requests, read-only.
+  - **8, live updates and Open in Perfetto** (#584): the server rediscovers runs every second and sends
+    each change to every open page (`/api/events`); a view on a changed run offers to reload it
+    (`common/live.js`). A trace's Open in Perfetto button hands the file to ui.perfetto.dev.
+  - **9, the DRAM views on `.mflow`** (#585, #586, #587, #589) in `tools/visualization/dram/`, on a shared
+    data layer, `common/dram.js` (banks, their states, each burst's command chain and timing gaps, in
+    controller ticks): the timing diagram, the bank analyzer, the request swimlanes and the memory block
+    diagram. Each is a debug-server viewer, packs into one file with `pack.py`, takes links to a moment,
+    and is operable from the keyboard. They replace the four Chrome-trace views in
+    `traces/memory/lpddr5/tools/`.
+  - **10, the LPDDR5 patterns write `.mflow`** (#588): the pattern harness records each request, burst
+    and command through the controller's command observer; every pattern's CTest writes its record and
+    checks it with `mflow_check.py`. M1 allows a record with no `dma` station to have bursts of no engine.
+  - **11, `mflow_check.py --summary`** (#590): requests and bursts, commands by kind, page outcomes,
+    throughput against the record's ceiling, each bank's commands, burst latency.
+  - **12, the guide** (#573): `docs/02-simulation/debugging-a-cycle-core-run.md`, run, check, serve and
+    view.
 
 - **The memory subsystem on the cycle core, Phase 1 steps 1b–1e** (#538–#541; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §4). DRAM, the DMA engine, the NoC and the L3 tile, built
@@ -318,6 +334,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `README.md` and `docs/README.md` now point to it first.
 
 ### Removed
+
+- **The LPDDR5 Chrome DRAM trace** (#590, step 11 of the debug pattern). `trace_validator.py` and its
+  self-test, `kpu-trace-summary`, the committed `traces/memory/lpddr5/**/*_trace.json`, the pattern
+  harness's Chrome export, the cycle core's `write_dram_trace` and `kpu-run --memory-dram-trace`. The
+  `.mflow` record replaces it: `mflow_check.py` checks every invariant the validator did
+  (`INVARIANTS.md` maps each), and `--summary` replaces the summary tool. The MCP server's
+  `kpu_validate_trace`, `CLAUDE.md`, `/trace-check` and the `add-invariant` and `lpddr5-trace-debug` skills
+  now use `mflow_check.py`. The other devices' traces and validators are unchanged.
 
 - **`tools/trace/serve-trace.py`** (#582): replaced by the debug server, which also serves the LPDDR5 views
   until the `.mflow` DRAM views replace them (step 9).
