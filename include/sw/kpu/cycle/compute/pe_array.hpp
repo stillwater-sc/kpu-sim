@@ -167,8 +167,9 @@ public:
                                           std::to_string(p.a.command) + " launched while PE(" +
                                           std::to_string(p.c_up.row) + "," + std::to_string(j) + ")'s for command " +
                                           std::to_string(p.c_up.command) + " passed it");
-                        out = Result{true, total, i, p.a.command, padded, launches_.size()};
-                        launches_.push_back({now, 0, i, j, p.a.command, total, padded});
+                        out = Result{true, total, i, p.a.command, padded, launched_};
+                        if (config_.log) launches_.push_back({now, 0, i, j, p.a.command, total, padded});
+                        ++launched_;
                         counters().accept();
                     } else {
                         p.c = total;
@@ -185,7 +186,7 @@ public:
                 throw L1Fault(where(now) + ": column " + std::to_string(j) + "'s result buffer did not take PE(" +
                               std::to_string(r.row) + "," + std::to_string(j) + ")'s result (the array cannot wait)");
             north_out_[j]->push(now, ArrayResult{++id_, r.row, j, r.command, r.value, r.padded});
-            launches_[r.launch].left = now;
+            if (config_.log) launches_[r.launch].left = now;
             counters().complete();
         }
 
@@ -217,7 +218,7 @@ public:
             results += p.c_up.valid;
         }
         return std::to_string(a) + " PEs with operands, " + std::to_string(results) + " results moving north, " +
-               std::to_string(launches_.size()) + " launched";
+               std::to_string(launched_) + " launched";
     }
 
     [[nodiscard]] const Config& config() const { return config_; }
@@ -240,7 +241,7 @@ private:
         std::int32_t value = 0;
         std::uint32_t row = 0, command = 0;
         bool padded = false;
-        std::size_t launch = 0;   // its entry in launches_
+        std::size_t launch = 0;   // its launch's number: its entry in launches_, when logged
     };
     struct PE {
         Operand a, b;
@@ -268,6 +269,7 @@ private:
         mac_count_.assign(pes_.size(), 0);
         macs_.clear();
         launches_.clear();
+        launched_ = 0;
         id_ = 0;
     }
 
@@ -276,6 +278,7 @@ private:
     std::vector<std::uint64_t> mac_count_;
     std::vector<Mac> macs_;
     std::vector<Launch> launches_;
+    std::size_t launched_ = 0;   // results launched, logged or not
     std::uint64_t id_ = 0;
     std::vector<Link<L1Element>*> west_, north_in_;
     std::vector<Link<ArrayResult>*> north_out_;

@@ -361,6 +361,35 @@ TEST_CASE("The array is sized from the deployment's fabric", "[cycle][array]") {
     CHECK_THROWS_WITH(PEArray("a", d, PEArray::Config{4, 4, 3, true}), ContainsSubstring("1, 2 or 4 bytes"));
 }
 
+TEST_CASE("With its log off the array keeps no history, and its results are the same", "[cycle][array]") {
+    // A long run must not grow memory with the work it did (CodeRabbit, #594).
+    const Matrix a = operand(16, 4, 8), b = operand(17, 8, 4);
+    Simulator sim;
+    Domain& kpu = sim.add_domain(Domain::from_ghz("kpu", 1.0));
+    auto& drv = sim.add<EdgeDriver>("edges", kpu);
+    auto& array = sim.add<PEArray>("array", kpu, PEArray::Config{4, 4, 1, false});
+    auto& north = sim.add<ResultSink>("north", kpu);
+    std::vector<Link<L1Element>*> w, n;
+    std::vector<Link<ArrayResult>*> c;
+    for (std::uint32_t i = 0; i < 4; ++i) {
+        w.push_back(&sim.link<L1Element>("west " + std::to_string(i), drv, array, 4));
+        n.push_back(&sim.link<L1Element>("north in " + std::to_string(i), drv, array, 4));
+        c.push_back(&sim.link<ArrayResult>("north " + std::to_string(i), array, north, 2));
+    }
+    drv.connect(w, n);
+    array.connect(w, n, c);
+    north.connect(c);
+    drv.stream(1, a, b, 0, true, true);
+    REQUIRE(sim.run_until_idle(kLimit));
+    CHECK(array.macs().empty());
+    CHECK(array.launches().empty());
+    CHECK_THAT(array.describe(), ContainsSubstring("16 launched"));
+    const Matrix p = product(a, b);
+    REQUIRE(north.got().size() == 16);
+    for (const auto& g : north.got()) CHECK(g.r.value == p[g.r.row][g.r.col]);
+    CHECK(array.macs_at(3, 3) == 8);
+}
+
 TEST_CASE("The array's Perfetto lanes: a span per multiply, one lane per PE", "[cycle][array]") {
     Tracer t;
     const Matrix a = operand(14, 2, 4), b = operand(15, 4, 2);
