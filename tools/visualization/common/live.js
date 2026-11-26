@@ -75,6 +75,36 @@ function bar(text) {
   return el;
 }
 
+// What a view knows of its run, and what each piece of news means for the bar (no DOM: tested).
+//   event(name, run)     an event about any run: the bar's text, or null
+//   listing()            a reconnect starts fetching /api/runs: returns a token for the reply
+//   listed(token, runs)  the reply: the bar's text, or null
+// `known` is the run's version: undefined until the first listing, null while the run is gone.
+// Once the stream is open, its events are the news. A listing is only for what happened while it
+// was closed; one overtaken by an event about this run (it was fetched before the event, or
+// raced it) is stale and is dropped: the event is at least as new, and a later change comes as
+// an event too.
+function tracker(href, base) {
+  let known, seen = 0;
+  return {
+    get known() { return known; },
+    event(name, run) {
+      if (!concerns(run, href, base)) return null;
+      seen++;
+      known = name === "run-removed" ? null : run.version;
+      return notice(name, run, href, base);
+    },
+    listing() { return seen; },
+    listed(token, runs) {
+      if (token !== seen) return null;   // stale: an event about this run came meanwhile
+      const run = holder(runs, href, base);
+      const text = known === undefined ? null : recheck(known, run);
+      known = run ? run.version : null;
+      return text;
+    },
+  };
+}
+
 // Watch the artifact named by query parameter `param`. Returns the EventSource, or null when there
 // is nothing to watch here.
 function watch(param) {
@@ -85,35 +115,29 @@ function watch(param) {
   try { href = new URL(v, location.href); } catch (e) { return null; }
   if (href.origin !== location.origin) return null;
   const es = new EventSource("/api/events");
-  // The run's version, as this page last knew it: undefined until the first connection lists it,
-  // null while the run is gone. Events keep it current; a reconnect compares the listing with it.
-  let known;
+  const t = tracker(href.href, location.href);
   es.onopen = async () => {
+    const token = t.listing();
     let runs;
     try {
       const r = await fetch("/api/runs", { cache: "no-store" });
       if (!r.ok) return;
       runs = (await r.json()).runs;
     } catch (e) { return; }
-    const run = holder(runs, href.href, location.href);
-    if (known !== undefined) {
-      const text = recheck(known, run);
-      if (text) bar(text);
-    }
-    known = run ? run.version : null;
+    const text = t.listed(token, runs);
+    if (text) bar(text);
   };
   for (const name of ["run-added", "run-changed", "run-removed"])
     es.addEventListener(name, ev => {
       let d;
       try { d = JSON.parse(ev.data); } catch (e) { return; }
-      const text = notice(name, d && d.run, href.href, location.href);
-      if (concerns(d && d.run, href.href, location.href)) known = name === "run-removed" ? null : d.run.version;
+      const text = t.event(name, d && d.run);
       if (text) bar(text);
     });
   return es;
 }
 
-const api = { watch, notice, recheck, holder, concerns, sameArtifact };
+const api = { watch, tracker, notice, recheck, holder, concerns, sameArtifact };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else root.MflowLive = api;
 })(typeof window !== "undefined" ? window : globalThis);

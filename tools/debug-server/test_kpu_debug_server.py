@@ -272,6 +272,7 @@ class ServerTest(unittest.TestCase):
         self.assertIn('const PERFETTO = "https://ui.perfetto.dev";', page)
         self.assertIn('ev.origin !== PERFETTO || ev.source !== win || ev.data !== "PONG"', page)
         self.assertIn("win.postMessage({ perfetto: { buffer,", page)
+        self.assertIn("}, PERFETTO, [buffer]);", page)   # transferred, not copied
 
     def test_each_row_names_its_run_for_the_live_list(self):
         _, _, body = self.get("/")

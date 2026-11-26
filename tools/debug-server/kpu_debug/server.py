@@ -442,7 +442,8 @@ function openInPerfetto(url, name) {
     done();
     try {
       const buffer = await trace;
-      win.postMessage({ perfetto: { buffer, title: name, fileName: url.split("/").pop() } }, PERFETTO);
+      // Transferred, not copied: a large trace is not held twice. The page does not read it again.
+      win.postMessage({ perfetto: { buffer, title: name, fileName: url.split("/").pop() } }, PERFETTO, [buffer]);
       live.textContent = "Sent " + name + " to Perfetto.";
     } catch (e) { live.textContent = "Could not fetch the trace: " + e.message; }
   }
