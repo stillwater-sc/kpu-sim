@@ -43,6 +43,8 @@ VIEWERS = {
                    "title": "Domain-flow viewer", "reads": None, "param": None},
     "dram-bank": {"dir": REPO / "tools" / "visualization" / "dram", "page": "bank_analyzer.html",
                   "title": "DRAM bank analyzer", "reads": "mflow", "param": "bundle"},
+    "dram-swim": {"dir": REPO / "tools" / "visualization" / "dram", "page": "swimlane.html",
+                  "title": "DRAM request swimlanes", "reads": "mflow", "param": "bundle"},
     # A Chrome DRAM trace (dram-trace) has no browser view of its own: the .mflow views replaced
     # them (step 9), and the trace itself retires (step 11). It still opens in Perfetto.
 }

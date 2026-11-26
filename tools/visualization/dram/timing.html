@@ -72,6 +72,7 @@ input[type=number] { width: 9ch; font-family: var(--font-data); }
 label { font-size: 13px; color: var(--ink-2); display: inline-flex; gap: 5px; align-items: center; }
 .clock { font: 13px var(--font-data); }
 canvas { display: block; width: 100%; touch-action: none; }
+canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; border: 1px solid var(--line); }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font: 12px var(--font-data); }
@@ -114,6 +115,7 @@ code { font: 12px var(--font-data); }
     <input type="number" id="burstNo" min="0" aria-label="burst">
     <button id="next" title="next burst (→)">burst ▶</button>
     <button id="fit">Burst</button>
+    <button id="zoomIn">Zoom in</button>
     <button id="zoomOut">Zoom out</button>
     <button id="whole">Whole run</button>
     <label><input type="checkbox" id="idle"> idle banks</label>
@@ -122,7 +124,7 @@ code { font: 12px var(--font-data); }
 
   <section class="panel" id="diagram" hidden>
     <h2>Waveforms (drag or wheel to zoom in, "Zoom out" to zoom out, click a command or a burst to select it)</h2>
-    <canvas id="cv" height="400"></canvas>
+    <canvas id="cv" height="400" tabindex="0" aria-label="waveforms: + and - zoom, left and right pan"></canvas>
     <div class="legend" id="legend"></div>
   </section>
 
@@ -505,14 +507,25 @@ $("prev").addEventListener("click", () => step(-1));
 $("next").addEventListener("click", () => step(1));
 $("fit").addEventListener("click", () => { fitBurst(); draw(); });
 $("whole").addEventListener("click", () => { setView(0, X.end); draw(); });
-$("zoomOut").addEventListener("click", () => { const c = (viewA + viewB) / 2, s = (viewB - viewA) * 2; setView(c - s / 2, c + s / 2); draw(); });
+// Zoom about the view's centre by factor f (< 1 zooms in), or pan by a fraction of the view.
+function zoomBy(f) { const c = (viewA + viewB) / 2, s = (viewB - viewA) * f; setView(c - s / 2, c + s / 2); draw(); }
+function panBy(frac) { const d = (viewB - viewA) * frac; setView(viewA + d, viewB + d); draw(); }
+$("zoomOut").addEventListener("click", () => zoomBy(2));
+$("zoomIn").addEventListener("click", () => zoomBy(0.5));
+// The waveforms from the keyboard: + and - zoom, Left and Right pan a tenth of the view (the
+// page's own Left and Right, previous and next burst, stay for when the canvas is not focused).
+cv.addEventListener("keydown", e => {
+  if (e.key === "+" || e.key === "=") { e.preventDefault(); e.stopPropagation(); zoomBy(0.5); }
+  else if (e.key === "-" || e.key === "_") { e.preventDefault(); e.stopPropagation(); zoomBy(2); }
+  else if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); panBy(e.key === "ArrowLeft" ? -0.1 : 0.1); }
+});
 $("idle").addEventListener("change", draw);
 $("burstNo").addEventListener("change", e => {
   const b = Number(e.target.value);
   if (Number.isInteger(b) && b >= 0 && b < R.B.rows) { select(b, true); draw(); }
 });
 document.addEventListener("keydown", e => {
-  if (!X || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (!X || e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target === cv) return;
   if (e.key === "ArrowLeft") step(-1); else if (e.key === "ArrowRight") step(1);
 });
 window.addEventListener("resize", draw);

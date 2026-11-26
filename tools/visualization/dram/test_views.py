@@ -26,7 +26,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 COMMON = HERE.parent / "common"
 READER, DRAM = COMMON / "mflow.js", COMMON / "dram.js"
-VIEWS = ["timing.html", "bank_analyzer.html"]
+VIEWS = ["timing.html", "bank_analyzer.html", "swimlane.html"]
+USES_DRAM = {"timing.html", "bank_analyzer.html"}   # the views drawn from ../common/dram.js
 BUNDLE = None
 
 
@@ -259,6 +260,92 @@ process.stdout.write(JSON.stringify([[...conflictActs(R, X.channels[0]).entries(
 process.stdout.write(JSON.stringify([viewFromQuery("?ch=mc0/ch1&bank=bg2/ba3&t=99&zoom=10", 50), viewFromQuery("?zoom=1&t=", 50)]));""")
         self.assertEqual(got, [{"ch": "mc0/ch1", "bank": "bg2/ba3", "t": 50, "zoom": 10}, {"ch": None, "bank": None, "t": None, "zoom": None}])
 
+    # -- the swimlane's helpers -------------------------------------------------------
+    def swimlane(self, *sigs, body):
+        page = self.pages["swimlane.html"]
+        return self.node("\n".join([
+            "const Mflow = { NONE: 0xFFFFFFFF };", "const { NONE } = Mflow;",
+            # Three requests of engine 0 (a load with two bursts, a Fill, a store with one) and one of
+            # engine 1; engine 0 has waits, engine 1 none.
+            "const Q = { rows: 4, engine: [0, 0, 0, 1], kind: [0, 2, 1, 0], t_offered: [5, 0, 9, 1], t_credit: [6, 2, 9, 1],",
+            "            t_first: [8, 2, 12, 3], t_last: [9, 2, 12, 4], t_retired: [20, 7, 18, 9] };",
+            "const B = { rows: 4, request: [0, 2, 0, 3], t_posted: [9, 12, 8, 3], t_submit: [9, 12, 8, 3], t_cmd: [11, 13, 8, 4],",
+            "            t_data0: [14, 15, 10, 5], t_data1: [16, 16, 12, 6], t_done: [17, 18, 14, 8] };",
+            "const W = { rows: 2, engine: [0, 0], reason: [3, 0], t_from: [1, 4], t_to: [3, 6] };",
+            "const R = { Q, B, W, m: {} };",
+            *[extract(page, x) for x in sigs], body]))
+
+    def test_a_requests_and_a_bursts_stages(self):
+        got = self.swimlane("function requestStages(R, q) {", "function burstStages(R, b) {",
+                            body="""
+const REQ_STAGES = ["credit wait", "to first burst", "bursting", "draining"];
+const BURST_STAGES = ["grant wait", "queued", "bank", "data", "return"];
+""" + "\n".join([]) + """
+process.stdout.write(JSON.stringify([requestStages(R, 0), requestStages(R, 1), burstStages(R, 0), burstStages(R, 2)]));""")
+        self.assertEqual(got, [[["credit wait", 5, 6], ["to first burst", 6, 8], ["bursting", 8, 9], ["draining", 9, 20]],
+                               [["credit wait", 0, 2], ["draining", 2, 7]],   # a Fill: no bursts, nothing between
+                               [["queued", 9, 11], ["bank", 11, 14], ["data", 14, 16], ["return", 16, 17]],
+                               [["bank", 8, 10], ["data", 10, 12], ["return", 12, 14]]])
+
+    def test_the_lanes_group_requests_by_engine_with_waits_and_an_open_request(self):
+        got = self.swimlane("function burstsByRequest(R) {", "function lanes(R, byReq,", body="""
+const by = burstsByRequest(R), f = L => L.map(l => [l.kind, l.engine, l.q === undefined ? null : l.q, l.b === undefined ? null : l.b]);
+process.stdout.write(JSON.stringify([by, f(lanes(R, by)), f(lanes(R, by, { open: 0, engine: 0 })),
+  f(lanes(R, by, { kinds: [false, true, false] }))]));""")
+        by, all_, open_, stores = got
+        self.assertEqual(by, [[2, 0], [], [1], [3]])   # by posting time: burst 2 (8) before burst 0 (9)
+        self.assertEqual(all_, [["engine", 0, None, None], ["waits", 0, None, None], ["request", 0, 1, None],
+                                ["request", 0, 0, None], ["request", 0, 2, None], ["engine", 1, None, None],
+                                ["request", 1, 3, None]])
+        self.assertEqual(open_, [["engine", 0, None, None], ["waits", 0, None, None], ["request", 0, 1, None],
+                                 ["request", 0, 0, None], ["burst", 0, 0, 2], ["burst", 0, 0, 0], ["request", 0, 2, None]])
+        self.assertEqual(stores, [["engine", 0, None, None], ["waits", 0, None, None], ["request", 0, 2, None],
+                                  ["engine", 1, None, None]])
+
+    def test_the_swimlanes_link_names_a_request(self):
+        got = self.swimlane("function viewFromQuery(search, end) {", body="""
+process.stdout.write(JSON.stringify([viewFromQuery("?req=3&t=50&zoom=20", 40), viewFromQuery("?req=1.5&zoom=1", 40)]));""")
+        self.assertEqual(got, [{"req": 3, "t": 40, "zoom": 20}, {"req": None, "t": None, "zoom": None}])
+
+    def test_the_real_records_pipelines_are_in_order(self):
+        if BUNDLE is None:
+            self.skipTest("no bundle given")
+        page = self.pages["swimlane.html"]
+        got = self.read("\n".join([extract(page, "function requestStages(R, q) {"), extract(page, "function burstStages(R, b) {"),
+                                    "const REQ_STAGES = ['credit wait', 'to first burst', 'bursting', 'draining'];",
+                                    "const BURST_STAGES = ['grant wait', 'queued', 'bank', 'data', 'return'];", """
+let bad = 0, spans = 0;
+const chk = st => { for (let i = 1; i < st.length; i++) if (st[i][1] < st[i - 1][2]) bad++; spans += st.length; };
+for (let q = 0; q < R.Q.rows; q++) chk(requestStages(R, q));
+for (let b = 0; b < R.B.rows; b++) chk(burstStages(R, b));
+process.stdout.write(JSON.stringify({ bad, spans }));"""]))
+        self.assertEqual(got["bad"], 0)
+        self.assertGreater(got["spans"], 0)
+
+    def test_an_engine_is_named_and_a_record_without_one_says_so(self):
+        # An LPDDR5 pattern drives the controller with no DMA engine: its requests carry NONE.
+        got = self.swimlane("function engineName(e) {", body="""
+process.stdout.write(JSON.stringify([engineName(0), engineName(3), engineName(NONE)]));""")
+        self.assertEqual(got, ["dma[0]", "dma[3]", "no engine (to the controller)"])
+
+    def test_the_swimlanes_and_the_timing_view_are_operable_from_the_keyboard(self):
+        # The lanes take focus; Up and Down move between them, Enter or Space opens a request or
+        # inspects a burst, + and - zoom and Left and Right pan, and there is a Zoom in button.
+        sw = self.pages["swimlane.html"]
+        for needle in ('<canvas id="cv" height="300" tabindex="0"', '(e.key === "Enter" || e.key === " ") && usable(focusLane)',
+                       'if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(0.5); return; }',
+                       '<button id="zoomIn">Zoom in</button>'):
+            with self.subTest(view="swimlane", needle=needle):
+                self.assertIn(needle, sw)
+        # The timing view's canvas keys zoom and pan; the page's own Left and Right (the previous
+        # and next burst) stand aside while the canvas has focus.
+        tv = self.pages["timing.html"]
+        for needle in ('<canvas id="cv" height="400" tabindex="0"', 'e.preventDefault(); e.stopPropagation(); zoomBy(0.5);',
+                       'panBy(e.key === "ArrowLeft" ? -0.1 : 0.1)', 'e.target.tagName === "SELECT" || e.target === cv) return;',
+                       '<button id="zoomIn">Zoom in</button>'):
+            with self.subTest(view="timing", needle=needle):
+                self.assertIn(needle, tv)
+
     # -- the timing view's helpers ------------------------------------------------------
     def timing(self, *sigs, body):
         page = self.pages["timing.html"]
@@ -330,7 +417,7 @@ process.stdout.write(JSON.stringify([niceStep(1, 70), niceStep(10, 70), niceStep
     def test_a_page_reads_a_served_bundle_only_from_its_own_origin(self):
         for view, page in self.pages.items():
             with self.subTest(view=view):
-                for script in ("mflow.js", "dram.js", "live.js"):
+                for script in ("mflow.js", "live.js") + (("dram.js",) if view in USES_DRAM else ()):
                     self.assertIn(f'<script src="../common/{script}"></script>', page)
                 self.assertIn("url.origin === location.origin", page)
                 self.assertIn('MflowLive.watch("bundle")', page)
@@ -361,7 +448,7 @@ process.stdout.write(JSON.stringify([esc('<img src=x onerror=alert(1)>'), esc("a
     def test_pack_embeds_the_bundle_and_every_shared_script(self):
         if BUNDLE is None:
             self.skipTest("no bundle given")
-        for view in ("timing", "bank_analyzer"):
+        for view in ("timing", "bank_analyzer", "swimlane"):
             with self.subTest(view=view):
                 out = self.tmp / f"{view}.html"
                 p = self.pack(view, str(BUNDLE), "-o", str(out))
@@ -369,7 +456,8 @@ process.stdout.write(JSON.stringify([esc('<img src=x onerror=alert(1)>'), esc("a
                 page = out.read_text(encoding="utf-8")
                 self.assertNotIn("<script src=", page)   # nothing to fetch: no reader, no reload bar
                 self.assertIn("function parse(files)", page)
-                self.assertIn("function bankStates(R, cmds, end)", page)
+                if view + ".html" in USES_DRAM:
+                    self.assertIn("function bankStates(R, cmds, end)", page)
                 m = re.search(r"window\.MFLOW_EMBED = (\{.*?\});</script>", page, re.S)
                 payload = json.loads(m.group(1).replace("<\\/", "</"))
                 self.assertEqual(json.loads(payload["manifest"])["format"], "kpu-mflow")

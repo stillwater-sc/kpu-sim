@@ -119,7 +119,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual([(v["viewer"], v["href"]) for v in arts["mflow"]["views"]],
                          [("memflow", "/view/memflow/index.html?bundle=/files/2026-11-25-mm64/mem.mflow/"),
                           ("dram-timing", "/view/dram-timing/timing.html?bundle=/files/2026-11-25-mm64/mem.mflow/"),
-                          ("dram-bank", "/view/dram-bank/bank_analyzer.html?bundle=/files/2026-11-25-mm64/mem.mflow/")])
+                          ("dram-bank", "/view/dram-bank/bank_analyzer.html?bundle=/files/2026-11-25-mm64/mem.mflow/"),
+                          ("dram-swim", "/view/dram-swim/swimlane.html?bundle=/files/2026-11-25-mm64/mem.mflow/")])
         # Nothing inside a run directory is listed again as a run of its own.
         self.assertFalse(any(k.startswith("2026-11-25-mm64/") for k in runs))
         # Bare artifacts: a bundle, a DRAM trace (to the LPDDR5 view); a JSON file that is no trace is not a run.
