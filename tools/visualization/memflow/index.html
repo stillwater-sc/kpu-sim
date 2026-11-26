@@ -39,6 +39,8 @@
   --act: #2f9e6e; --rd: #2a78d6; --wr: #d9822b; --pre: #8a919b; --ref: #8e5bd0;
   --load: #2a78d6; --store: #d9822b; --crit: #d03b3b; --warn: #fab219; --accent: #2a5db0;
   --seq-lo: #e8f0fb; --seq-hi: #0d366b;
+  --fill: #1f9e89;
+  --w0: #8e5bd0; --w1: #2a9d8f; --w2: #c2185b; --w3: #5a6acf; --w4: #b8860b; --w5: #6b7d2e;
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
@@ -48,6 +50,8 @@
     --line: #2e3237; --grid: #25292d; --lane: #1f2226;
     --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6;
     --load: #3987e5; --store: #ec9a45; --accent: #7aa7ea; --seq-lo: #1b2738; --seq-hi: #b7d3f6;
+    --fill: #3cc4ad;
+    --w0: #a97ee6; --w1: #49c0b1; --w2: #ec5a92; --w3: #8794e8; --w4: #d9ac3a; --w5: #9bb04f;
     color-scheme: dark;
   }
 }
@@ -56,6 +60,8 @@
     --line: #2e3237; --grid: #25292d; --lane: #1f2226;
     --act: #3fbf86; --rd: #3987e5; --wr: #ec9a45; --pre: #6d747e; --ref: #a97ee6;
     --load: #3987e5; --store: #ec9a45; --accent: #7aa7ea; --seq-lo: #1b2738; --seq-hi: #b7d3f6;
+    --fill: #3cc4ad;
+    --w0: #a97ee6; --w1: #49c0b1; --w2: #ec5a92; --w3: #8794e8; --w4: #d9ac3a; --w5: #9bb04f;
     color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -95,7 +101,7 @@ code { font: 12px var(--font-data); }
 <div class="wrap">
   <header>
     <h1>KPU Memory-Side Debugger</h1>
-    <p class="sub">The memory side of the KPU on its own: DRAM, memory controllers, DMA engines and their store buffers, with the NoC ports stubbed by request models and sinks. Every DRAM command and every burst, on one cursor.</p>
+    <p class="sub">The memory side of the KPU: DRAM, memory controllers, DMA engines and their store buffers, run on its own by kpu-memsim (the NoC ports stubbed by request models and sinks) or on the cycle core by kpu-run. Every DRAM command and every burst, on one cursor.</p>
   </header>
 
   <section class="load" id="load">
@@ -127,7 +133,7 @@ code { font: 12px var(--font-data); }
       <div class="panel">
         <h2>Observations</h2>
         <ul class="obs" id="obs"></ul>
-        <p class="note">Computed from the record. Invariants (TF10, TF11, M1-M5) are <code>mflow_check.py</code>'s job.</p>
+        <p class="note">Computed from the record. Invariants (TF10, TF11, M1-M11) are <code>mflow_check.py</code>'s job.</p>
       </div>
     </div>
 
@@ -142,6 +148,16 @@ code { font: 12px var(--font-data); }
         <span><span class="sw" style="background:var(--ref)"></span>REF</span>
         <span><span class="sw" style="background:var(--crit)"></span>row conflict / refusal / over capacity</span>
         <span><span class="sw" style="background:var(--warn)"></span>ejection waiting for a buffer slot</span>
+        <span><span class="sw" style="background:var(--fill)"></span>Fill (program bytes into L3, no DRAM)</span>
+      </div>
+      <div class="legend" id="waitLegend">
+        <span>DMA held up by:</span>
+        <span><span class="sw" style="background:var(--w0)"></span>slot credit</span>
+        <span><span class="sw" style="background:var(--w1)"></span>L3 link credit</span>
+        <span><span class="sw" style="background:var(--w2)"></span>DRAM request credit</span>
+        <span><span class="sw" style="background:var(--w3)"></span>burst window</span>
+        <span><span class="sw" style="background:var(--w4)"></span>store buffer</span>
+        <span><span class="sw" style="background:var(--w5)"></span>program order</span>
       </div>
     </div>
 
@@ -174,7 +190,10 @@ code { font: 12px var(--font-data); }
 const $ = id => document.getElementById(id);
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmt = n => Number(n).toLocaleString("en-US");
-const { NONE, CMD, OUTCOME, PORTK } = Mflow;   // the record's enums (../common/mflow.js)
+const { NONE, CMD, OUTCOME, PORTK, REQKIND, WAIT } = Mflow;   // the record's enums (../common/mflow.js)
+const WAIT_LABEL = ["slot credit", "L3 link credit", "DRAM request credit", "burst window", "store buffer", "program order"];
+const WAIT_COLOR = WAIT.map((_, k) => "--w" + k);
+const REQ_COLOR = ["--load", "--store", "--fill"];
 // Every string the page writes as HTML goes through esc: a bundle is input, and its names
 // (device, stations, arbitration) must never become markup.
 function esc(v) {
@@ -215,6 +234,23 @@ function valueAt(steps, t) {
   let lo = 0, hi = steps.length - 1;
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (steps[mid][0] <= t) lo = mid; else hi = mid - 1; }
   return steps[lo][1];
+}
+// A wait engine's intervals by cause: [[wait rows of cause 0], [cause 1], ...], each by start.
+function groupWaits(W, engine) {
+  const out = WAIT.map(() => []);
+  for (let i = 0; i < W.rows; i++) if (W.engine[i] === engine) out[W.reason[i]].push(i);
+  for (const l of out) l.sort((a, b) => W.t_from[a] - W.t_from[b]);
+  return out;
+}
+// The causes holding an engine up at cycle t, and the interval of each: [[cause, from, to], ...].
+function waitsAt(W, byCause, t) {
+  const out = [];
+  byCause.forEach((l, k) => {
+    let lo = 0, hi = l.length - 1, hit = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (W.t_from[l[mid]] <= t) { hit = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (hit >= 0 && t < W.t_to[l[hit]]) out.push([k, W.t_from[l[hit]], W.t_to[l[hit]]]);
+  });
+  return out;
 }
 function stepMax(steps) { let m = 0; for (const [, v] of steps) m = Math.max(m, v); return m; }
 const parseIdx = (name, key) => { const m = name.match(new RegExp(key + "\\[(\\d+)\\]")); return m ? Number(m[1]) : -1; };
@@ -265,6 +301,21 @@ function prepare() {
   }
   for (const bus of D.buses) bus.bursts.sort((a, b) => B.t_data0[a] - B.t_data0[b]);
   for (const eng of D.engines) eng.inflight = stepSeries(eng.bursts.map(i => [B.t_submit[i], B.t_done[i]]));
+  // Version 4: an engine with a write window too has its reads and writes bounded apart.
+  D.window = R.m.window; D.writeWindow = R.m.write_window || 0;
+  for (const eng of D.engines) {
+    eng.reads = stepSeries(eng.bursts.filter(i => B.is_load[i]).map(i => [B.t_submit[i], B.t_done[i]]));
+    eng.writes = stepSeries(eng.bursts.filter(i => !B.is_load[i]).map(i => [B.t_submit[i], B.t_done[i]]));
+  }
+  // The waits (version 4): each engine's intervals by cause, and its cycles held up by each.
+  const W = R.W;
+  for (const eng of D.engines) eng.waits = groupWaits(W, eng.e);
+  for (const eng of D.engines) eng.waited = eng.waits.map(l => l.reduce((n, i) => n + W.t_to[i] - W.t_from[i], 0));
+  // A waits lane for each engine whose waits are recorded: it has a dmawait station (the cycle
+  // core's recorder; kpu-memsim's harness records none, and its engines get no empty lane).
+  const waitLanes = new Set(st.filter(s => s.kind === "dmawait").map(s => parseIdx(s.name, "dmawait")));
+  for (const eng of D.engines) eng.hasWaits = waitLanes.has(eng.e);
+  D.hasWaits = D.engines.some(e => e.hasWaits);
   for (let i = 0; i < Q.rows; i++) { const e = engineAt.get(Q.engine[i]); if (e !== undefined) D.engines[e].reqs.push(i); }
   for (const eng of D.engines) eng.reqs.sort((a, b) => Q.t_offered[a] - Q.t_offered[b]);
   for (let i = 0; i < F.rows; i++) {
@@ -286,8 +337,9 @@ function prepare() {
   }
   for (const port of D.ports) port.inflight = stepSeries(port.loads.map(([a, b]) => [a, b]));
   D.makespan = Math.max(1, R.m.makespan);
-  D.bytes = 0;
-  for (let i = 0; i < Q.rows; i++) D.bytes += Q.bytes[i];
+  D.bytes = 0;   // DRAM traffic: a Fill moves no DRAM bytes
+  D.fills = 0;
+  for (let i = 0; i < Q.rows; i++) { if (Q.kind[i] === 2) D.fills++; else D.bytes += Q.bytes[i]; }
   D.outcomes = [0, 0, 0, 0];
   for (let i = 0; i < B.rows; i++) D.outcomes[B.outcome[i]]++;
   buildRows();
@@ -298,16 +350,19 @@ let ROWS = [];
 const folded = new Set(["Banks"]);   // 32+ bank lanes start folded under their header
 function buildRows() {
   ROWS = [];
-  const cat = (name, n) => { ROWS.push({ header: true, name, n }); return !folded.has(name); };
+  // A category with nothing in it (a cycle-core run has no port stubs) is left out, header and all.
+  const cat = (name, n) => { if (!n) return false; ROWS.push({ header: true, name, n }); return !folded.has(name); };
   if (cat("Port stubs", D.ports.length * 2))
     for (const p of D.ports) {
       ROWS.push({ kind: "port-load", label: "port[" + p.k + "] loads in", ref: p, h: 18 });
       ROWS.push({ kind: "port-eject", label: "port[" + p.k + "] ejections", ref: p, h: 14 });
     }
-  if (cat("DMA engines", D.engines.length * 2))
+  if (cat("DMA engines", D.engines.reduce((n, e) => n + (e.hasWaits ? 3 : 2), 0)))
     for (const e of D.engines) {
-      ROWS.push({ kind: "dma-inflight", label: "dma[" + e.e + "] bursts / W=" + e.cap, ref: e, h: 18 });
+      if (D.writeWindow) ROWS.push({ kind: "dma-inflight", label: "dma[" + e.e + "] reads/" + D.window + ", writes/" + D.writeWindow, ref: e, h: 24 });
+      else ROWS.push({ kind: "dma-inflight", label: "dma[" + e.e + "] bursts / W=" + e.cap, ref: e, h: 18 });
       ROWS.push({ kind: "dma-reqs", label: "dma[" + e.e + "] requests", ref: e, h: 16 });
+      if (e.hasWaits) ROWS.push({ kind: "dma-waits", label: "dma[" + e.e + "] held up by", ref: e, h: 4 * WAIT.length + 2 });
     }
   if (cat("Store buffers", D.buffers.length))
     for (const b of D.buffers) ROWS.push({ kind: "buffer", label: "dmabuf[" + b.e + "] / " + b.cap, ref: b, h: 16 });
@@ -422,14 +477,28 @@ function drawLanes() {
         g.fillRect(xa, y + 3, xb - xa, h - 6);
       }
     } else if (row.kind === "dma-inflight") {
-      drawSteps(g, ref.inflight, x0, w, y, h, ref.cap, tok("--accent"));
+      if (D.writeWindow) {   // reads above, writes below, each against its own window
+        drawSteps(g, ref.reads, x0, w, y, h / 2, D.window, tok("--load"));
+        drawSteps(g, ref.writes, x0, w, y + h / 2, h / 2, D.writeWindow, tok("--store"));
+      } else drawSteps(g, ref.inflight, x0, w, y, h, ref.cap, tok("--accent"));
+    } else if (row.kind === "dma-waits") {
+      const W = R.W;
+      ref.waits.forEach((l, k) => {
+        g.fillStyle = tok(WAIT_COLOR[k]);
+        for (const i of l) {
+          const a = W.t_from[i], b = Math.max(W.t_to[i], a + minPx);
+          if (b < viewA || a > viewB) continue;
+          const xa = xOf(a, x0, w), xb = Math.max(xOf(b, x0, w), xa + 1);
+          g.fillRect(xa, y + 1 + 4 * k, xb - xa, 3);
+        }
+      });
     } else if (row.kind === "dma-reqs") {
       let lane = 0;
       for (const i of ref.reqs) {
         const a = Q.t_offered[i], b = Math.max(Q.t_retired[i], a + minPx);
         if (b < viewA || a > viewB) { lane++; continue; }
         const xa = xOf(a, x0, w), xb = Math.max(xOf(b, x0, w), xa + 1), sub = (lane++ % 4) * ((h - 4) / 4);
-        g.fillStyle = tok(Q.is_load[i] ? "--load" : "--store");
+        g.fillStyle = tok(REQ_COLOR[Q.kind[i]]);
         g.fillRect(xa, y + 2 + sub, xb - xa, Math.max(1, (h - 4) / 4 - 1));
       }
     } else if (row.kind === "buffer") {
@@ -589,8 +658,23 @@ function drawObs() {
     const peak = stepMax(b.held);
     if (peak > b.cap) out.push(["crit", "dmabuf[" + b.e + "] held " + peak + " slots, over its " + b.cap]);
   }
-  const fullW = D.engines.filter(e => stepMax(e.inflight) === e.cap).length;
-  out.push(["", fullW + " of " + D.engines.length + " engines filled their window of " + (D.engines[0] ? D.engines[0].cap : "?") + " bursts at some point"]);
+  if (D.writeWindow) {
+    for (const e of D.engines) {
+      const r = stepMax(e.reads), wr = stepMax(e.writes);
+      if (r > D.window) out.push(["crit", "dma[" + e.e + "] had " + r + " reads in flight, over its window of " + D.window]);
+      if (wr > D.writeWindow) out.push(["crit", "dma[" + e.e + "] had " + wr + " writes in flight, over its write window of " + D.writeWindow]);
+    }
+    const fullR = D.engines.filter(e => stepMax(e.reads) === D.window).length, fullWr = D.engines.filter(e => stepMax(e.writes) === D.writeWindow).length;
+    out.push(["", fullR + " of " + D.engines.length + " engines filled their read window of " + D.window + ", " + fullWr + " their write window of " + D.writeWindow]);
+  } else {
+    const fullW = D.engines.filter(e => stepMax(e.inflight) === e.cap).length;
+    out.push(["", fullW + " of " + D.engines.length + " engines filled their window of " + (D.engines[0] ? D.engines[0].cap : "?") + " bursts at some point"]);
+  }
+  for (const e of D.engines) {
+    const top = e.waited.map((n, k) => [n, k]).filter(([n]) => n > 0).sort((a, b) => b[0] - a[0]).slice(0, 3);
+    if (top.length) out.push(["", "dma[" + e.e + "] held up most by " + top.map(([n, k]) => WAIT_LABEL[k] + " (" + fmt(n) + " cycles)").join(", ")]);
+  }
+  if (D.fills) out.push(["", D.fills + " Fills put program bytes in L3 with no DRAM traffic"]);
   let refusals = 0, waits = 0;
   for (const p of D.ports) { refusals += p.refuse.length; waits += p.waits.length; }
   if (refusals) out.push(["warn", refusals + " load offers refused by a full port input queue (back-pressure)"]);
@@ -618,10 +702,17 @@ function burstPairs(i) {
 function requestPairs(q) {
   const Q = R.Q, bs = D.burstsOf.get(q) || [], oc = [0, 0, 0, 0];
   for (const i of bs) oc[R.B.outcome[i]]++;
-  return [["request #" + q], ["kind", Q.is_load[q] ? "load (DMA read toward L3)" : "store (ejection written to DRAM)"], ["engine / port", Q.engine[q] + " / " + Q.port[q]],
-    ["address", "0x" + Q.address[q].toString(16) + " (" + fmt(Q.bytes[q]) + " B, " + bs.length + " bursts)"],
-    ["offered", fmt(Q.t_offered[q])], [Q.is_load[q] ? "L3 credit" : "buffer slot", fmt(Q.t_credit[q])], ["first burst", fmt(Q.t_first[q])], ["last burst", fmt(Q.t_last[q])], ["retired", fmt(Q.t_retired[q])],
-    ["latency", fmt(Q.t_retired[q] - Q.t_offered[q]) + " cycles"], ["page outcomes", oc[1] + " hit, " + oc[2] + " empty, " + oc[3] + " conflict"]];
+  const kind = Q.kind[q], fill = kind === 2;
+  const pairs = [["request #" + q], ["kind", ["load (DMA read toward L3)", "store (ejection written to DRAM)", "fill (the program's bytes into L3, no DRAM)"][kind]],
+    ["engine / port", Q.engine[q] + " / " + Q.port[q]]];
+  if (Q.ticket[q] !== NONE) pairs.push(["program action", "#" + Q.ticket[q]]);
+  if (Q.slot[q] !== NONE) pairs.push(["L3 slot", Q.slot[q]]);
+  pairs.push(fill ? ["bytes", fmt(Q.bytes[q]) + " B, no bursts"] : ["address", "0x" + Q.address[q].toString(16) + " (" + fmt(Q.bytes[q]) + " B, " + bs.length + " bursts)"],
+    ["offered", fmt(Q.t_offered[q])], [kind === 1 ? "buffer slot" : "L3 slot credit", fmt(Q.t_credit[q])]);
+  if (!fill) pairs.push(["first burst", fmt(Q.t_first[q])], ["last burst", fmt(Q.t_last[q])]);
+  pairs.push(["retired", fmt(Q.t_retired[q])], ["latency", fmt(Q.t_retired[q] - Q.t_offered[q]) + " cycles"]);
+  if (!fill) pairs.push(["page outcomes", oc[1] + " hit, " + oc[2] + " empty, " + oc[3] + " conflict"]);
+  return pairs;
 }
 function chainHtml(bi) {
   const C = R.C, cs = (D.cmdsOf.get(bi) || []).slice().sort((a, b) => C.t_issue[a] - C.t_issue[b]);
@@ -655,6 +746,13 @@ function pick(row, t, tol) {
     const [i, d] = nearest(ref.reqs, t, i => Q.t_offered[i], i => Q.t_retired[i]);
     if (i >= 0 && d <= tol) return () => inspectRequest(i);
   }
+  if (row.kind === "dma-waits") return () => {
+    const now = waitsAt(R.W, ref.waits, t), total = ref.waited;
+    $("insp").innerHTML = kv([["dma[" + ref.e + "] at cycle " + fmt(t)]].concat(
+      now.length ? now.map(([k, a, b]) => [WAIT_LABEL[k], "held from " + fmt(a) + " to " + fmt(b) + " (" + fmt(b - a) + " cycles)"])
+                 : [["held up by", "nothing at this cycle"]],
+      [["over the run"]], WAIT.map((_, k) => [WAIT_LABEL[k], fmt(total[k]) + " cycles"])));
+  };
   if (row.kind === "buffer") return () => { $("insp").innerHTML = kv([["dmabuf[" + ref.e + "] at cycle " + fmt(t)], ["held", valueAt(ref.held, t) + " of " + ref.cap], ["staged (delivered, not yet writing)", valueAt(ref.staged, t)]]); };
   if (row.kind === "port-load" || row.kind === "port-eject") {
     const evs = row.kind === "port-load" ? ref.loads.map(([a, b, q]) => [a, b, q]) : ref.waits.concat(ref.delivers).map(([a, q]) => [a, a, q]);
@@ -702,7 +800,10 @@ lanes.addEventListener("click", e => {
 });
 function tipText(row, t) {
   const ref = row.ref;
-  if (row.kind === "dma-inflight") return "\nbursts in flight " + valueAt(ref.inflight, t) + " / " + ref.cap;
+  if (row.kind === "dma-inflight") return D.writeWindow
+    ? "\nreads in flight " + valueAt(ref.reads, t) + " / " + D.window + ", writes " + valueAt(ref.writes, t) + " / " + D.writeWindow
+    : "\nbursts in flight " + valueAt(ref.inflight, t) + " / " + ref.cap;
+  if (row.kind === "dma-waits") { const now = waitsAt(R.W, ref.waits, t); return "\n" + (now.length ? now.map(([k]) => WAIT_LABEL[k]).join(", ") : "not held up"); }
   if (row.kind === "buffer") return "\nheld " + valueAt(ref.held, t) + " / " + ref.cap + ", staged " + valueAt(ref.staged, t);
   if (row.kind === "port-load") return "\nloads crossing or queued " + valueAt(ref.inflight, t);
   if (row.kind === "bank") {
@@ -763,10 +864,12 @@ function start() {
   const chip = (k, v) => "<span class=\"chip\">" + esc(k) + " <b>" + esc(v) + "</b></span>";
   $("summary").innerHTML = [
     chip("device", m.device), chip("makespan", fmt(m.makespan) + " cycles"), chip("requests", fmt(R.Q.rows)),
-    chip("bytes", fmt(D.bytes)), chip("bandwidth", bpc.toFixed(1) + " B/cycle" + (ceil ? " (" + (100 * bpc / ceil).toFixed(0) + "% of " + ceil.toFixed(1) + ")" : "")),
-    chip("window", m.window + " bursts/engine"), chip("arbitration", m.arbitration + (m.arbitration === "round_robin" ? " (quantum " + m.grant_quantum + ")" : "")), chip("bursts", fmt(R.B.rows)), chip("commands", fmt(R.C.rows)),
+    chip("DRAM bytes", fmt(D.bytes)), chip("bandwidth", bpc.toFixed(1) + " B/cycle" + (ceil ? " (" + (100 * bpc / ceil).toFixed(0) + "% of " + ceil.toFixed(1) + ")" : "")),
+    chip("window", D.writeWindow ? m.window + " reads + " + D.writeWindow + " writes/engine" : m.window + " bursts/engine"),
+    chip("source", m.source || "memory-side-harness"), chip("arbitration", m.arbitration + (m.arbitration === "round_robin" ? " (quantum " + m.grant_quantum + ")" : "")), chip("bursts", fmt(R.B.rows)), chip("commands", fmt(R.C.rows)),
     chip("hit / empty / conflict", D.outcomes[1] + " / " + D.outcomes[2] + " / " + D.outcomes[3]),
     chip("engines", D.engines.length), chip("ports", D.ports.length), chip("banks", D.banks.length)].join("");
+  $("waitLegend").hidden = !D.hasWaits;
   $("timingNote").textContent = m.timing_note ? "DRAM timing: " + m.timing_note : "";
   $("scrub").max = D.makespan;
   viewA = 0; viewB = D.makespan;
@@ -785,7 +888,7 @@ else if (served) {
 }
 
 // For tests (test_viewer.py runs these under Node): the pure helpers.
-if (typeof module !== "undefined") module.exports = { stepSeries, valueAt, stepMax, parseIdx };
+if (typeof module !== "undefined") module.exports = { stepSeries, valueAt, stepMax, parseIdx, groupWaits, waitsAt };
 })();
 </script>
 </body>

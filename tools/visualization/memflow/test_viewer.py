@@ -2,7 +2,7 @@
 """
 Smoke test for the memory-side debugger and pack.py (docs/plans/memory-side-debugger.md step 5).
 
-Usage: python3 test_viewer.py <bundle.mflow>
+Usage: python3 test_viewer.py <bundle.mflow> [--expect-fills] [--expect-waits]
 
 Packs the bundle, checks the payload is embedded and parses, checks a non-bundle is refused
 with exit 2, and -- when Node.js is on PATH -- syntax-checks the viewer's script and runs its
@@ -24,6 +24,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 READER = HERE.parent / "common" / "mflow.js"
 BUNDLE = None
+EXPECT_FILLS = False   # --expect-fills: the bundle's run has Fills (a matmul's C, from L-B)
+EXPECT_WAITS = False   # --expect-waits: the bundle's run stalls its DMA engine
 
 
 def extract(page, signature):
@@ -237,6 +239,74 @@ process.stdout.write(JSON.stringify([s, [0, 4, 5, 10, 15, 19, 20, 25].map(t => v
         self.assertEqual(steps, [[0, 1], [5, 2], [15, 1], [20, 0]])
         self.assertEqual(values, [1, 1, 2, 2, 1, 1, 0, 0])
 
+    def test_waits_are_grouped_by_cause_and_found_at_a_cycle(self):
+        # The waits lane's data: an engine's intervals by cause, and the causes holding it at t
+        # (half-open: an interval [a, b) holds at a, not at b); another engine's waits are not its.
+        src = "\n".join(["const WAIT = [0, 1, 2, 3, 4, 5];",
+                         extract(self.page, "function groupWaits(W, engine) {"),
+                         extract(self.page, "function waitsAt(W, byCause, t) {"), """
+const W = { rows: 5, engine: [0, 0, 0, 1, 0], reason: [3, 0, 3, 3, 0],
+            t_from: [10, 0, 40, 10, 12], t_to: [20, 5, 50, 20, 30] };
+const g = groupWaits(W, 0);
+process.stdout.write(JSON.stringify([g, [0, 4, 5, 10, 12, 19, 20, 29, 30, 45].map(t => waitsAt(W, g, t))]));"""])
+        groups, at = self.node(src)
+        self.assertEqual(groups, [[1, 4], [], [], [0, 2], [], []])
+        self.assertEqual(at, [[[0, 0, 5]], [[0, 0, 5]], [], [[3, 10, 20]], [[0, 12, 30], [3, 10, 20]],
+                              [[0, 12, 30], [3, 10, 20]], [[0, 12, 30]], [[0, 12, 30]], [], [[3, 40, 50]]])
+
+    def test_the_real_bundles_fills_move_no_dram_bytes(self):
+        # A Fill is a request with no bursts; every other request has exactly the bursts its bytes
+        # span (mflow_check.py's M4: a request smaller than a burst still takes a whole one).
+        got = self.read(BUNDLE, """
+const of = new Array(R.Q.rows).fill(0);
+for (let b = 0; b < R.B.rows; b++) if (R.B.request[b] !== Mflow.NONE) of[R.B.request[b]]++;
+const bb = BigInt(R.m.burst_bytes);
+let fills = 0, fillBursts = 0, wrongSpans = 0;
+for (let q = 0; q < R.Q.rows; q++) {
+  if (R.Q.kind[q] === 2) { fills++; fillBursts += of[q]; continue; }
+  const a = BigInt(R.Q.address[q]), n = BigInt(R.Q.bytes[q]);
+  const want = n === 0n ? 0n : (a + n + bb - 1n) / bb - a / bb;
+  if (BigInt(of[q]) !== want) wrongSpans++;
+}
+process.stdout.write(JSON.stringify({ fills, fillBursts, wrongSpans }));""")
+        self.assertEqual(got["fillBursts"], 0)
+        self.assertEqual(got["wrongSpans"], 0)
+        if EXPECT_FILLS:   # a fixture that promises Fills (--expect-fills): a load-only run has none
+            self.assertGreater(got["fills"], 0)
+
+    def test_the_real_bundles_waits_are_grouped_and_found(self):
+        # groupWaits and waitsAt on the bundle's own waits table: every interval lands in its engine's
+        # list for its cause, and is found at its first cycle; a cycle-core bundle has waits.
+        got = self.read(BUNDLE, "\n".join(["const WAIT = Mflow.WAIT;",
+                                          extract(self.page, "function groupWaits(W, engine) {"),
+                                          extract(self.page, "function waitsAt(W, byCause, t) {"), """
+const W = R.W, engines = [...new Set(W.engine)];
+let grouped = 0, found = 0, cycles = 0;
+for (const e of engines) {
+  const g = groupWaits(W, e);
+  g.forEach((l, k) => { for (const i of l) {
+    grouped++; cycles += W.t_to[i] - W.t_from[i];
+    if (W.engine[i] !== e || W.reason[i] !== k) throw new Error("wait " + i + " grouped under the wrong engine or cause");
+    if (waitsAt(W, g, W.t_from[i]).some(([c, a, b]) => c === k && a === W.t_from[i] && b === W.t_to[i])) found++;
+  } });
+}
+process.stdout.write(JSON.stringify({ source: R.m.source || null, rows: W.rows, grouped, found, cycles }));"""]))
+        self.assertNotIn("error", got)
+        self.assertEqual(got["grouped"], got["rows"])
+        self.assertEqual(got["found"], got["rows"])
+        if EXPECT_WAITS:   # a fixture that promises stalls (--expect-waits): a run need not stall
+            self.assertGreater(got["rows"], 0)
+            self.assertGreater(got["cycles"], 0)
+
+    def test_every_colour_is_defined_in_both_themes(self):
+        # The waits, the Fills: each token the page draws with has a light and a dark value (the
+        # page has one light block and two dark ones: the media query and data-theme="dark").
+        blocks = re.findall(r"(:root\s*\{.*?\}|:root:not\(\[data-theme=\"light\"\]\)\s*\{.*?\}|:root\[data-theme=\"dark\"\]\s*\{.*?\})", self.page, re.S)
+        self.assertEqual(len(blocks), 3)
+        for tok in ["--fill"] + ["--w%d" % k for k in range(6)]:
+            for b in blocks:
+                self.assertIn(tok + ":", b, f"{tok} missing from a theme block")
+
     def test_a_non_bundle_is_refused(self):
         p = self.pack(str(self.tmp), "-o", str(self.tmp / "x.html"))
         self.assertEqual(p.returncode, 2)
@@ -260,4 +330,8 @@ if __name__ == "__main__":
         print(__doc__)
         sys.exit(2)
     BUNDLE = sys.argv.pop(1)
+    for flag in ("--expect-fills", "--expect-waits"):
+        if flag in sys.argv:
+            sys.argv.remove(flag)
+            globals()["EXPECT_" + flag.split("-")[-1].upper()] = True
     unittest.main()

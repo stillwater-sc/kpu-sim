@@ -130,7 +130,7 @@ if(KPU_PYTHON3)
     # The memory-side debugger reads a cycle-core bundle (its reader runs under Node when on PATH).
     add_test(NAME cycle_mflow_viewer_s1
         COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/memflow/test_viewer.py
-                ${CMAKE_CURRENT_BINARY_DIR}/cycle_mflow_s1.mflow)
+                ${CMAKE_CURRENT_BINARY_DIR}/cycle_mflow_s1.mflow --expect-fills --expect-waits)
     set_tests_properties(cycle_mflow_viewer_s1 PROPERTIES LABELS "cycle;memory;mflow;viewer;v0.10"
                          FIXTURES_REQUIRED cycle_mflow)
 endif()
