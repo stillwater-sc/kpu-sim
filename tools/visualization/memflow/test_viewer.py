@@ -271,13 +271,19 @@ Mflow.open('http://server/b/', stub).then(() => process.stdout.write('"accepted"
             "step('listing after it', t.listed(tok, [run('4'), other]));",
             "step('running', t.event('run-changed', run('5', 'running')));",
             "step('removed while closed', t.listed(t.listing(), [other]));",
+            "const older = t.listing(), newer = t.listing();",                      # two reconnects overlap
+            "step('newer reply first', t.listed(newer, [run('7')]));",
+            "step('older reply after', t.listed(older, [run('6')]));",               # dropped: older than applied
+            "const a = t.listing(), b = t.listing();",                              # the later one fails...
+            "step('older reply, later failed', t.listed(a, [run('8')]));",           # ...so the older one applies
             "process.stdout.write(JSON.stringify(out));",
         ]))
         newer, removed = "This run has a newer version.", "This run was removed from the server."
         self.assertEqual(got, [["first listing", None, "1"], ["same", None, "1"], ["changed while closed", newer, "2"],
                                ["event meanwhile", newer, "3"], ["stale listing", None, "3"], ["fresh listing", None, "3"],
                                ["another run", None, "3"], ["listing after it", newer, "4"], ["running", None, "5"],
-                               ["removed while closed", removed, None]])
+                               ["removed while closed", removed, None], ["newer reply first", newer, "7"],
+                               ["older reply after", None, "7"], ["older reply, later failed", newer, "8"]])
 
     def test_the_page_watches_its_run_only_when_served(self):
         self.assertIn('<script src="../common/live.js"></script>', self.page)

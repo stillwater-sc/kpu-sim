@@ -83,9 +83,10 @@ function bar(text) {
 // Once the stream is open, its events are the news. A listing is only for what happened while it
 // was closed; one overtaken by an event about this run (it was fetched before the event, or
 // raced it) is stale and is dropped: the event is at least as new, and a later change comes as
-// an event too.
+// an event too. Listings may overlap (two reconnects): each is numbered, and a reply older than
+// one already applied is dropped; one whose later sibling failed still applies.
 function tracker(href, base) {
-  let known, seen = 0;
+  let known, seen = 0, asked = 0, applied = 0;
   return {
     get known() { return known; },
     event(name, run) {
@@ -94,9 +95,11 @@ function tracker(href, base) {
       known = name === "run-removed" ? null : run.version;
       return notice(name, run, href, base);
     },
-    listing() { return seen; },
+    listing() { return { seen, n: ++asked }; },
     listed(token, runs) {
-      if (token !== seen) return null;   // stale: an event about this run came meanwhile
+      if (token.seen !== seen) return null;   // stale: an event about this run came meanwhile
+      if (token.n < applied) return null;     // stale: a later listing was already applied
+      applied = token.n;                       // (a later one that failed does not count)
       const run = holder(runs, href, base);
       const text = known === undefined ? null : recheck(known, run);
       known = run ? run.version : null;
