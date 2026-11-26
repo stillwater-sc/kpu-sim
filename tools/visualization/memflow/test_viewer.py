@@ -23,6 +23,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 READER = HERE.parent / "common" / "mflow.js"
+LIVE = HERE.parent / "common" / "live.js"
 BUNDLE = None
 EXPECT_FILLS = False   # --expect-fills: the bundle's run has Fills (a matmul's C, from L-B)
 EXPECT_WAITS = False   # --expect-waits: the bundle's run stalls its DMA engine
@@ -72,6 +73,8 @@ class ViewerSmokeTest(unittest.TestCase):
             self.assertIn(table["file"], payload["bins"])
         # The reader is inlined in place of its <script src>: the packed page needs no other file.
         self.assertNotIn('<script src="../common/mflow.js">', page)
+        # The server's reload bar is left out: a packed page loads no script from anywhere.
+        self.assertNotIn("<script src=", page)
         self.assertIn("function parse(files)", page)
 
     def test_viewer_reads_the_version_the_writer_writes(self):
@@ -202,6 +205,93 @@ const stub = async url => ({ ok: true, text: async () => manifest, arrayBuffer: 
 Mflow.open('http://server/b/', stub).then(() => process.stdout.write('"accepted"'), e => process.stdout.write(JSON.stringify(e.message)));""",
         ]))
         self.assertIn("names a table file", got)
+
+    def test_a_rewritten_run_offers_a_reload_only_to_its_own_views(self):
+        # ../common/live.js (plan step 8): which events of /api/events put up the bar.
+        base = "http://localhost:8080/view/memflow/index.html?bundle=/files/r/mem.mflow/"
+        run = {"id": "r", "status": "ok", "artifacts": [{"url": "/files/r/mem.mflow/"}, {"url": "/files/r/trace.json"}]}
+        cases = [
+            ["run-changed", run, "/files/r/mem.mflow/"],
+            ["run-changed", run, "/files/r/mem.mflow"],                 # the trailing "/" does not matter
+            ["run-changed", run, "http://localhost:8080/files/r/mem.mflow/"],
+            ["run-changed", run, "/files/r/mem.mflow/?v=1"],            # a cache-buster names the same bundle
+            ["run-added", run, "/files/r/mem.mflow/"],                  # rewritten between two polls
+            ["run-removed", run, "/files/r/mem.mflow/"],
+            ["run-changed", dict(run, status="running"), "/files/r/mem.mflow/"],   # its record is not written yet
+            ["run-removed", dict(run, status="running"), "/files/r/mem.mflow/"],
+            ["run-changed", run, "/files/other/mem.mflow/"],            # another run's view
+            ["run-changed", run, "/files/r/mem.mflow/x/"],
+            ["run-changed", {"id": "r"}, "/files/r/mem.mflow/"],        # no artifacts
+            ["run-changed", None, "/files/r/mem.mflow/"],
+            ["run-something", run, "/files/r/mem.mflow/"],
+        ]
+        got = self.node("\n".join([
+            f"const L = require({json.dumps(str(LIVE))});",
+            f"const cases = {json.dumps(cases)};",
+            f"process.stdout.write(JSON.stringify(cases.map(([n, r, h]) => L.notice(n, r, h, {json.dumps(base)}))));",
+        ]))
+        newer, removed = "This run has a newer version.", "This run was removed from the server."
+        self.assertEqual(got, [newer, newer, newer, newer, newer, removed, None, removed, None, None, None, None, None])
+
+    def test_a_reconnect_compares_the_run_with_the_version_it_knew(self):
+        # Events sent while the stream was down are lost: on reconnect, /api/runs against `known`.
+        base = "http://localhost:8080/view/memflow/index.html?bundle=/files/r/mem.mflow/"
+        runs = [{"id": "o", "version": "9", "artifacts": [{"url": "/files/o/mem.mflow/"}]},
+                {"id": "r", "version": "2", "status": "ok", "artifacts": [{"url": "/files/r/mem.mflow/"}]}]
+        got = self.node("\n".join([
+            f"const L = require({json.dumps(str(LIVE))});",
+            f"const runs = {json.dumps(runs)}, base = {json.dumps(base)};",
+            "const run = L.holder(runs, '/files/r/mem.mflow/', base);",
+            "process.stdout.write(JSON.stringify([run && run.id, L.holder(runs, '/files/x/', base),",
+            "  L.recheck('2', run), L.recheck('1', run), L.recheck('1', Object.assign({}, run, {status: 'running'})),",
+            "  L.recheck('2', null), L.recheck(null, null), L.recheck(null, run)]));",
+        ]))
+        self.assertEqual(got, ["r", None, None, "This run has a newer version.", None,
+                               "This run was removed from the server.", None, "This run has a newer version."])
+
+    def test_a_listing_overtaken_by_an_event_is_dropped(self):
+        # live.js's tracker: the reconnect's /api/runs reply against the events of the open stream.
+        base = "http://localhost:8080/view/memflow/index.html?bundle=/files/r/mem.mflow/"
+        got = self.node("\n".join([
+            f"const L = require({json.dumps(str(LIVE))});",
+            f"const base = {json.dumps(base)}, href = '/files/r/mem.mflow/';",
+            "const run = (v, s) => ({ id: 'r', version: v, status: s || 'ok', artifacts: [{ url: href }] });",
+            "const other = { id: 'o', version: '9', artifacts: [{ url: '/files/o/mem.mflow/' }] };",
+            "const t = L.tracker(href, base), out = [];",
+            "const step = (what, v) => out.push([what, v === undefined ? null : v, t.known === undefined ? 'undefined' : t.known]);",
+            "step('first listing', t.listed(t.listing(), [run('1')]));",            # the baseline: no bar
+            "step('same', t.listed(t.listing(), [run('1')]));",
+            "step('changed while closed', t.listed(t.listing(), [run('2')]));",
+            "let tok = t.listing();",                                               # a reconnect's fetch starts...
+            "step('event meanwhile', t.event('run-changed', run('3')));",            # ...an event overtakes it...
+            "step('stale listing', t.listed(tok, [run('2')]));",                     # ...and its reply is dropped
+            "step('fresh listing', t.listed(t.listing(), [run('3')]));",
+            "tok = t.listing();",
+            "step('another run', t.event('run-changed', other));",                  # not about this run: no effect
+            "step('listing after it', t.listed(tok, [run('4'), other]));",
+            "step('running', t.event('run-changed', run('5', 'running')));",
+            "step('removed while closed', t.listed(t.listing(), [other]));",
+            "const older = t.listing(), newer = t.listing();",                      # two reconnects overlap
+            "step('newer reply first', t.listed(newer, [run('7')]));",
+            "step('older reply after', t.listed(older, [run('6')]));",               # dropped: older than applied
+            "const a = t.listing(), b = t.listing();",                              # the later one fails...
+            "step('older reply, later failed', t.listed(a, [run('8')]));",           # ...so the older one applies
+            "process.stdout.write(JSON.stringify(out));",
+        ]))
+        newer, removed = "This run has a newer version.", "This run was removed from the server."
+        self.assertEqual(got, [["first listing", None, "1"], ["same", None, "1"], ["changed while closed", newer, "2"],
+                               ["event meanwhile", newer, "3"], ["stale listing", None, "3"], ["fresh listing", None, "3"],
+                               ["another run", None, "3"], ["listing after it", newer, "4"], ["running", None, "5"],
+                               ["removed while closed", removed, None], ["newer reply first", newer, "7"],
+                               ["older reply after", None, "7"], ["older reply, later failed", newer, "8"]])
+
+    def test_the_page_watches_its_run_only_when_served(self):
+        self.assertIn('<script src="../common/live.js"></script>', self.page)
+        self.assertIn('MflowLive.watch("bundle")', self.page)
+        live = LIVE.read_text(encoding="utf-8")
+        # Nothing to watch from a file, a packed page, or another origin.
+        self.assertIn("!/^https?:$/.test(location.protocol)", live)
+        self.assertIn("if (href.origin !== location.origin) return null;", live)
 
     def test_the_page_reads_a_served_bundle_only_from_its_own_origin(self):
         self.assertIn('<script src="../common/mflow.js"></script>', self.page)

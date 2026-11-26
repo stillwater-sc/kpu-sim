@@ -6,6 +6,7 @@ full server (docs/plans/kpu-debug-server-full.md) reuses them unchanged.
     confine(base, rel)      the file `rel` names under `base`, or None if it is outside it
     discover_runs(root)     every run under `root`: run directories (their run.json) and bare
                             artifacts (an .mflow or .tflow bundle, a trace .json)
+    changes(before, after)  the events between two discoveries: a run added, changed or removed
     VIEWERS                 the viewers, where they live, and what each reads
 
 Standard library only.
@@ -70,6 +71,15 @@ def inside(base, p):
     except (OSError, RuntimeError):
         return False
     return q == root or root in q.parents
+
+
+def _version(path):
+    """A file's version: its mtime and size, which change when it is rewritten. None if it is gone."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return f"{st.st_mtime_ns:x}-{st.st_size:x}"
 
 
 def _json(path):
@@ -138,9 +148,12 @@ def discover_runs(root):
         manifest = next((e for e in entries if e.name == "run.json"), None)
         # A run.json that is a link is not read: it could publish a manifest from outside the root.
         if manifest is not None and not manifest.is_symlink() and manifest.is_file():
+            # The version first: if run.json is replaced after it is read, the next poll still
+            # sees a version this one did not, and sends the change.
+            version = _version(Path(d) / "run.json")
             m = _json(Path(d) / "run.json")
             if isinstance(m, dict) and m.get("format") == "kpu-run":
-                runs.append(_run(root, Path(d), m))
+                runs.append(_run(root, Path(d), m, version))
                 return
         for e in entries:
             if e.is_symlink():
@@ -162,7 +175,7 @@ def discover_runs(root):
     return runs
 
 
-def _run(root, d, m):
+def _run(root, d, m, version):
     arts = []
     named = m.get("artifacts") if isinstance(m.get("artifacts"), dict) else {}
     for name, f in sorted(named.items()):
@@ -175,7 +188,7 @@ def _run(root, d, m):
         arts.append(_artifact(root, p, kind, name))
     return {"id": _rel(root, d), "kind": m.get("kind", "run"), "status": m.get("status"),
             "device": m.get("device"), "started": m.get("started"), "seconds": m.get("seconds"),
-            "build": m.get("build"), "git": m.get("git"), "artifacts": arts}
+            "build": m.get("build"), "git": m.get("git"), "version": version, "artifacts": arts}
 
 
 def _bare(root, p, kind):
@@ -184,5 +197,26 @@ def _bare(root, p, kind):
     except OSError:
         started = 0
     stamp = datetime.datetime.fromtimestamp(started, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # A bundle is rewritten through its manifest; a trace is its one file.
+    version = _version(p / "manifest.json" if p.is_dir() else p)
     return {"id": _rel(root, p), "kind": kind, "status": None, "device": None, "started": stamp,
-            "seconds": None, "build": None, "git": None, "artifacts": [_artifact(root, p, kind)]}
+            "seconds": None, "build": None, "git": None, "version": version,
+            "artifacts": [_artifact(root, p, kind)]}
+
+
+def changes(before, after):
+    """The events that take discovery `before` to discovery `after` (each a list of runs, as
+    discover_runs returns them): ("run-added", run), ("run-changed", run) when a run's version
+    differs, and ("run-removed", run) with the run as it last was. Added and changed come in
+    `after`'s order (newest first), removed last."""
+    old = {r["id"]: r for r in before}
+    new = {r["id"]: r for r in after}
+    out = []
+    for r in after:
+        o = old.get(r["id"])
+        if o is None:
+            out.append(("run-added", r))
+        elif o.get("version") != r.get("version"):
+            out.append(("run-changed", r))
+    out.extend(("run-removed", r) for r in before if r["id"] not in new)
+    return out

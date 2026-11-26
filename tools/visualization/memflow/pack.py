@@ -26,6 +26,8 @@ HERE = Path(__file__).resolve().parent
 MARKER = "<!--MFLOW_EMBED-->"
 READER = HERE.parent / "common" / "mflow.js"
 READER_TAG = '<script src="../common/mflow.js"></script>'
+# The debug server's reload bar (../common/live.js): a packed page is a file, with no server to watch.
+LIVE_TAG = '<script src="../common/live.js"></script>\n'
 MAX_BYTES = 12 * 1024 * 1024
 
 
@@ -71,6 +73,7 @@ def main():
         print(f"pack: {READER} holds '</script', which would end its inlined <script> early", file=sys.stderr)
         sys.exit(2)
     page = page.replace(READER_TAG, f"<script>\n{reader}</script>", 1)
+    page = page.replace(LIVE_TAG, "", 1)
     payload = json.dumps({"manifest": manifest, "lod": lod, "bins": bins})
     # "</" inside a <script> would end it early; JSON allows the escaped form.
     payload = payload.replace("</", "<\\/")

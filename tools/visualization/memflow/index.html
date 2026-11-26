@@ -13,7 +13,8 @@
   kpu-memsim). Plain HTML, no build step, no server: open this file and choose the bundle's
   folder, or drop its files on the page; or open it as index.html?bundle=<url of the bundle's
   directory> from a server. pack.py embeds a bundle, and the reader, into a copy of this file.
-  The reader is ../common/mflow.js, shared with the DRAM views.
+  The reader is ../common/mflow.js, shared with the DRAM views. Served by the debug server, the page
+  offers a reload when its run is rewritten (../common/live.js; pack.py leaves it out).
 
   WHAT IT SHOWS
     - Bandwidth over time against the DRAM ceiling, and each bank's page outcomes.
@@ -184,6 +185,7 @@ code { font: 12px var(--font-data); }
 
 <!--MFLOW_EMBED-->
 <script src="../common/mflow.js"></script>
+<script src="../common/live.js"></script>
 <script>
 (() => {
 "use strict";
@@ -883,8 +885,11 @@ if (window.MFLOW_EMBED) loadFrom(window.MFLOW_EMBED);
 else if (served) {
   // Only a bundle on this page's own server: a link must not point the page at another site.
   const url = new URL(served, location.href);
-  if (url.origin === location.origin) loadFrom(url.href);
-  else $("loadMsg").textContent = "Not reading " + url.origin + ": ?bundle= names a bundle on this page's server";
+  if (url.origin === location.origin) {
+    loadFrom(url.href);
+    // On the debug server: a bar offers a reload when the run is rewritten (../common/live.js).
+    if (window.MflowLive) MflowLive.watch("bundle");
+  } else $("loadMsg").textContent = "Not reading " + url.origin + ": ?bundle= names a bundle on this page's server";
 }
 
 // For tests (test_viewer.py runs these under Node): the pure helpers.
