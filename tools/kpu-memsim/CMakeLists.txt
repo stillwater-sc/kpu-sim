@@ -73,6 +73,9 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_memsim_t4 kpu_memsim_rejects_bad_scenario kpu_memsim_unfinished
         kpu_memsim_rejects_bad_device PROPERTIES LABELS "memside;dram;tools")
+    # The T4 run writes the bundle every test below reads: a fixture, so a test run with -R still
+    # runs it first (DEPENDS only orders tests that both run).
+    set_tests_properties(kpu_memsim_t4 PROPERTIES FIXTURES_SETUP t4_mflow)
 
     # The debugger (plan step 5): pack the T4 run, refuse a non-bundle, parse the script and
     # run its reader over the bundle.
@@ -81,13 +84,13 @@ if(KPU_BUILD_TESTS)
         add_test(NAME memflow_viewer_smoke
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/memflow/test_viewer.py
                     ${CMAKE_CURRENT_BINARY_DIR}/t4_mixed.mflow)
-        set_tests_properties(memflow_viewer_smoke PROPERTIES DEPENDS kpu_memsim_t4
+        set_tests_properties(memflow_viewer_smoke PROPERTIES FIXTURES_REQUIRED t4_mflow
             LABELS "memside;dram;tools")
         # The DRAM views (plan step 9) on the T4 run: two channels, 32 banks.
         add_test(NAME dram_views_t4
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/visualization/dram/test_views.py
                     ${CMAKE_CURRENT_BINARY_DIR}/t4_mixed.mflow)
-        set_tests_properties(dram_views_t4 PROPERTIES DEPENDS kpu_memsim_t4
+        set_tests_properties(dram_views_t4 PROPERTIES FIXTURES_REQUIRED t4_mflow
             LABELS "memside;dram;tools;viewer")
 
         # The checker (plan step 4): the T4 run holds every invariant, and each check fails on
@@ -98,7 +101,7 @@ if(KPU_BUILD_TESTS)
         add_test(NAME mflow_check_selftest
             COMMAND ${KPU_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/test_mflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/t4_mixed.mflow)
-        set_tests_properties(mflow_check_t4 mflow_check_selftest PROPERTIES DEPENDS kpu_memsim_t4
+        set_tests_properties(mflow_check_t4 mflow_check_selftest PROPERTIES FIXTURES_REQUIRED t4_mflow
             LABELS "memside;dram;tools")
     endif()
 endif()

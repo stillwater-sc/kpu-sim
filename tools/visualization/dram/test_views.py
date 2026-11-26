@@ -148,9 +148,11 @@ process.stdout.write(JSON.stringify([Dram.chain(R, 0), Dram.chain(R, 1), g(0), g
         # Burst 0: an empty page; its PRE closes the row later (tRAS).
         self.assertEqual(g0, [["tRCD", "ACT", "RD", 10, 24, 14, 14, True], ["tCL", "RD", "data", 24, 38, 14, 14, True],
                               ["tBurst", "RD", "data", 38, 46, 8, 8, True], ["tRAS", "ACT", "PRE", 10, 60, 50, 28, True]])
-        # Burst 1: its ACT follows a refresh (tRFCpb, measured from the REF, 150 >= 140), the bank's
-        # previous ACT (tRC); its row is never closed, so no tRAS.
-        self.assertEqual(g1, [["tRFCpb", "REF", "ACT", 80, 230, 150, 140, True], ["tRC", "ACT", "ACT", 10, 230, 220, 42, True],
+        # Burst 1: its ACT follows the bank's last PRE (tRP, 60 -> 230) and its last REF (tRFCpb,
+        # 150 >= 140), each on its own as M5 checks them, and its previous ACT (tRC); its row is
+        # never closed, so no tRAS.
+        self.assertEqual(g1, [["tRP", "PRE", "ACT", 60, 230, 170, 14, True], ["tRFCpb", "REF", "ACT", 80, 230, 150, 140, True],
+                              ["tRC", "ACT", "ACT", 10, 230, 220, 42, True],
                               ["tRCD", "ACT", "RD", 230, 250, 20, 14, True], ["tCL", "RD", "data", 250, 264, 14, 14, True],
                               ["tBurst", "RD", "data", 264, 272, 8, 8, True]])
         # Burst 2, a write on the other channel: tWL, not tCL.
@@ -163,6 +165,14 @@ R.C.k_issue[1] = 20;   // RD 10 ticks after its ACT: tRCD is 14
 const X = Dram.model(R);
 process.stdout.write(JSON.stringify(Dram.gaps(R, X, 0).filter(g => !g.ok).map(g => [g.name, g.measured, g.required])));""")
         self.assertEqual(got, [["tRCD", 10, 14]])   # tCL is measured from the RD: 38 - 20 = 18, within
+
+    def test_a_parameter_that_is_not_a_tick_count_is_left_out(self):
+        got = self.dram("""
+R.m.dram_timing.params.tRCD = "<img src=x onerror=alert(1)>"; R.m.dram_timing.params.tCL = -1;
+R.m.dram_timing.params.tBurst = Infinity;
+const X = Dram.model(R);
+process.stdout.write(JSON.stringify(Dram.gaps(R, X, 0).map(g => g.name)));""")
+        self.assertEqual(got, ["tRAS"])
 
     def test_a_hits_timing_names_the_act_that_opened_its_row(self):
         got = self.dram("""
@@ -190,13 +200,13 @@ process.stdout.write(JSON.stringify([Dram.chain(R, 3), Dram.gaps(R, X, 3).map(g 
     def test_a_link_names_a_moment_and_is_clamped_to_the_run(self):
         got = self.timing("function viewFromQuery(search, end) {", body="""
 process.stdout.write(JSON.stringify([
-  viewFromQuery("?ch=mc0/ch1&burst=12&t=500&zoom=64", 1000), viewFromQuery("?t=-5&zoom=2&burst=1.5", 1000),
+  viewFromQuery("?ch=mc0/ch1&burst=12&t=500&zoom=64&cursor=480", 1000), viewFromQuery("?t=-5&zoom=2&burst=1.5&cursor=-3", 1000),
   viewFromQuery("?t=5000&zoom=99999&burst=-1", 1000), viewFromQuery("?t=x&zoom=", 1000), viewFromQuery("", 1000)]));""")
-        self.assertEqual(got, [{"zoom": 64, "t": 500, "burst": 12, "ch": "mc0/ch1"},
-                               {"zoom": None, "t": 0, "burst": None, "ch": None},
-                               {"zoom": 1000, "t": 1000, "burst": None, "ch": None},
-                               {"zoom": None, "t": None, "burst": None, "ch": None},
-                               {"zoom": None, "t": None, "burst": None, "ch": None}])
+        self.assertEqual(got, [{"cursor": 480, "zoom": 64, "t": 500, "burst": 12, "ch": "mc0/ch1"},
+                               {"cursor": 0, "zoom": None, "t": 0, "burst": None, "ch": None},
+                               {"cursor": None, "zoom": 1000, "t": 1000, "burst": None, "ch": None},
+                               {"cursor": None, "zoom": None, "t": None, "burst": None, "ch": None},
+                               {"cursor": None, "zoom": None, "t": None, "burst": None, "ch": None}])
 
     def test_a_bursts_view_fits_what_is_near_it(self):
         got = self.timing("function burstSpan(gaps) {", body="""
@@ -204,18 +214,27 @@ const X = Dram.model(R);
 const g = (name, a, b, required) => ({ name, a, b, measured: b - a, required });
 process.stdout.write(JSON.stringify([
   burstSpan(Dram.gaps(R, X, 0)),            // ACT 10 .. data 46; tRAS's PRE at 60 is left out
-  burstSpan(Dram.gaps(R, X, 1)),            // the REF (80) is 150 before the ACT: near (4 x 140)
+  burstSpan(Dram.gaps(R, X, 1)),            // the REF (80) is near (150 <= 4 x 140); the PRE (60) is not (170 > 4 x 14)
   burstSpan([g("tRP", 0, 30, 14), g("tRCD", 30, 44, 14), g("tCL", 44, 58, 14), g("tBurst", 58, 66, 8)]),
   burstSpan([g("tRP", 0, 100, 14), g("tRCD", 100, 114, 14), g("tCL", 114, 128, 14), g("tBurst", 128, 136, 8)]),
   burstSpan([g("tRCD", 0, 900, 14), g("tCL", 900, 914, 14), g("tBurst", 914, 922, 8)]),   // a hit, opened long ago
+  burstSpan([g("tRP", 20, 40, 14), g("tRFCpb", 30, 40, 140), g("tRCD", 40, 54, 14), g("tCL", 54, 68, 14), g("tBurst", 68, 76, 8)]),
   burstSpan([])]));""")
-        self.assertEqual(got, [[10, 46], [80, 272], [0, 66], [100, 136], [900, 922], None])
+        self.assertEqual(got, [[10, 46], [80, 272], [0, 66], [100, 136], [900, 922], [30, 76], None])
 
     def test_a_bank_that_only_refreshes_is_idle(self):
         got = self.timing("function busy(R, bank) {", body="""
 const X = Dram.model(R);
 process.stdout.write(JSON.stringify(X.channels[0].banks.map(b => busy(R, b))));""")
         self.assertEqual(got, [True, False, False])
+
+    def test_the_view_is_shared_by_its_centre_and_a_channel_change_drops_the_burst(self):
+        page = self.pages["timing.html"]
+        self.assertIn('q.set("t", String(Math.round((viewA + viewB) / 2)));', page)
+        self.assertIn('$("chan").addEventListener("change", e => { sel = null; setChannel(', page)
+        # the whole run is the view until a burst or a link narrows it
+        s = page.index("setView(0, X.end);   // the whole run")
+        self.assertLess(s, page.index("setChannel(ci, false);"))
 
     def test_the_axis_step_is_round(self):
         got = self.timing("function niceStep(perTick, px) {", body="""

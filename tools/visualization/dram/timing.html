@@ -19,7 +19,7 @@
 
   Open this file and choose the bundle's folder (or drop its files), or open it as
   timing.html?bundle=<url of the bundle's directory> from a server; pack.py embeds a bundle. A
-  moment can be shared as a link: ?ch=<mc0/ch0>&burst=<n>&t=<tick>&zoom=<ticks shown>.
+  moment can be shared as a link: ?ch=<mc0/ch0>&burst=<n>&t=<centre tick>&zoom=<ticks shown>&cursor=<tick>.
 
   SPDX-License-Identifier: MIT
   Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -151,14 +151,17 @@ function niceStep(perTick, px) {
   return 10 * p;
 }
 
-// The view a link asks for, clamped to the run: { t, zoom, burst, ch } from ?t=&zoom=&burst=&ch=.
+// The view a link asks for, clamped to the run: { t, zoom, burst, ch, cursor } from
+// ?t=&zoom=&burst=&ch=&cursor=; t is the centre of the view.
 function viewFromQuery(search, end) {
   const q = new URLSearchParams(search);
   const num = k => { const v = Number(q.get(k)); return q.has(k) && Number.isFinite(v) ? v : null; };
   const zoom = num("zoom");
   const t = num("t");
   const burst = num("burst");
+  const cur = num("cursor");
   return {
+    cursor: cur !== null ? Math.min(Math.max(cur, 0), end) : null,
     zoom: zoom !== null && zoom >= 4 ? Math.min(zoom, Math.max(end, 4)) : null,
     t: t !== null ? Math.min(Math.max(t, 0), end) : null,
     burst: burst !== null && Number.isInteger(burst) && burst >= 0 ? burst : null,
@@ -184,8 +187,9 @@ function burstSpan(gaps) {
   const rcd = g("tRCD");
   if (rcd && rcd.measured <= 4 * rcd.required) {
     a = rcd.a;
-    const before = g("tRP") || g("tRFCpb");
-    if (before && before.measured <= 4 * before.required) a = before.a;
+    // the closer of the bank's last PRE and last REF, if it is near
+    const near = ["tRP", "tRFCpb"].map(g).filter(x => x && x.measured <= 4 * x.required);
+    if (near.length) a = Math.max(...near.map(x => x.a));
   }
   return [a, data.b];
 }
@@ -243,11 +247,12 @@ function start() {
   colours();
   const q = viewFromQuery(location.search, X.end);
   const ci = Math.max(0, X.channels.findIndex(c => c.key === q.ch));
+  setView(0, X.end);   // the whole run, unless a burst or the link says otherwise (a channel may only refresh)
   setChannel(ci, false);
   if (q.burst !== null && q.burst < R.B.rows) select(q.burst, q.zoom === null);
   else if (cas.length) select(R.C.burst[cas[0]], true);
   if (q.zoom !== null) { const c = q.t !== null ? q.t : (viewA + viewB) / 2; setView(c - q.zoom / 2, c + q.zoom / 2); }
-  if (q.t !== null) cursor = q.t;
+  if (q.cursor !== null) cursor = q.cursor;
   draw();
 }
 
@@ -274,7 +279,8 @@ function share() {   // the view, as a link: ?ch=&burst=&t=&zoom= (kept with ?bu
     const q = new URLSearchParams(location.search);
     q.set("ch", chan.key);
     if (sel !== null) q.set("burst", String(sel)); else q.delete("burst");
-    q.set("t", String(Math.round(cursor !== null ? cursor : (viewA + viewB) / 2)));
+    q.set("t", String(Math.round((viewA + viewB) / 2)));   // the view's centre: the link reopens this view
+    if (cursor !== null) q.set("cursor", String(Math.round(cursor))); else q.delete("cursor");
     q.set("zoom", String(Math.round(viewB - viewA)));
     try { history.replaceState(null, "", "?" + q.toString()); } catch (e) { /* a file:// page may refuse */ }
   }, 250);
@@ -439,7 +445,7 @@ function inspect() {
   $("inspect").innerHTML = h;
   const g = Dram.gaps(R, X, b);
   $("gapsBox").innerHTML = g.length ? '<table class="t"><tr><th>timing</th><th>from → to</th><th>measured</th><th>required</th></tr>' +
-    g.map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.from)} → ${esc(x.to)}</td><td class="${x.ok ? "" : "bad"}">${x.measured}</td><td>${x.required}</td></tr>`).join("") + "</table>" : "";
+    g.map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.from)} → ${esc(x.to)}</td><td class="${x.ok ? "" : "bad"}">${esc(x.measured)}</td><td>${esc(x.required)}</td></tr>`).join("") + "</table>" : "";
 }
 
 // ------------------------------------------------------------------ interaction
@@ -494,7 +500,7 @@ cv.addEventListener("wheel", e => {
   const t = tickAt(e.offsetX), f = Math.exp(e.deltaY * 0.0015);
   setView(t - (t - viewA) * f, t + (viewB - t) * f); draw();
 }, { passive: false });
-$("chan").addEventListener("change", e => { setChannel(Number(e.target.value)); sel = null; inspect(); });
+$("chan").addEventListener("change", e => { sel = null; setChannel(Number(e.target.value)); inspect(); });
 $("prev").addEventListener("click", () => step(-1));
 $("next").addEventListener("click", () => step(1));
 $("fit").addEventListener("click", () => { fitBurst(); draw(); });

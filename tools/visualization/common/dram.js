@@ -124,7 +124,7 @@ function bankOf(R, X, b) {
 // The timing around burst b's CAS, as mflow_check.py's M5 checks it on the bank's own command
 // sequence, against the device's table (model X's params). Each is { name, from, to, a, b,
 // measured, required, ok }: commands `from` and `to` (kinds) at ticks a and b.
-//   the bank's command before the row's ACT    PRE: tRP, REF: tRFCpb; and the ACT before: tRC
+//   the bank's last PRE, last REF and last ACT before the row's ACT   tRP, tRFCpb, tRC
 //   the row's ACT to the CAS                    tRCD (for a hit, the ACT was another burst's)
 //   the CAS to its data, and the data           tCL (read) or tWL (write); tBurst
 //   the ACT to the PRE that closes the row      tRAS
@@ -138,7 +138,9 @@ function gaps(R, X, b) {
   const back = (from, kinds) => { for (let j = from - 1; j >= 0; j--) if (kinds.includes(C.kind[cmds[j]])) return j; return -1; };
   const out = [];
   const add = (name, i, j, ta, tb) => {
-    if (P[name] === undefined) return;
+    // A parameter is a tick count: anything else in the manifest is no parameter (and never
+    // reaches a page as markup).
+    if (typeof P[name] !== "number" || !Number.isFinite(P[name]) || P[name] < 0) return;
     const measured = tb - ta;
     out.push({ name, from: CMD[C.kind[i]], to: j === "data" ? "data" : CMD[C.kind[j]], a: ta, b: tb,
                measured, required: P[name], ok: measured >= P[name] });
@@ -147,9 +149,11 @@ function gaps(R, X, b) {
   const ja = back(at, [ACT]);
   if (ja >= 0) {
     const act = cmds[ja];
-    const jp = back(ja, [ACT, PRE, REF]);
-    if (jp >= 0 && C.kind[cmds[jp]] === PRE) add("tRP", cmds[jp], act, issue(cmds[jp]), issue(act));
-    if (jp >= 0 && C.kind[cmds[jp]] === REF) add("tRFCpb", cmds[jp], act, issue(cmds[jp]), issue(act));
+    // The bank's last PRE and its last REF, each on its own (M5 checks both against the ACT: a
+    // REF between a PRE and the ACT does not excuse tRP, nor a PRE after a REF tRFCpb).
+    const jp = back(ja, [PRE]), jr = back(ja, [REF]);
+    if (jp >= 0) add("tRP", cmds[jp], act, issue(cmds[jp]), issue(act));
+    if (jr >= 0) add("tRFCpb", cmds[jr], act, issue(cmds[jr]), issue(act));
     const jc = back(ja, [ACT]);
     if (jc >= 0) add("tRC", cmds[jc], act, issue(cmds[jc]), issue(act));
     add("tRCD", act, cas, issue(act), issue(cas));
