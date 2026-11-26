@@ -302,6 +302,32 @@ TEST_CASE("A result slot used twice: the second tile's command waits for the slo
     CHECK(r.bm.holds(2));   // slot 2's last Release: no producer follows, so the mover's
 }
 
+TEST_CASE("A slot whose first producer is a Result, then a Move: the Move waits for the credit", "[cycle][combiner]") {
+    // Slot 2 holds C first (no consumer: it is released once written), then D moved in from L3. The
+    // BlockMover reaches its Move of D before the command producing C fires, and only the slot's
+    // credit holds it back: the Streamer's until C's Release passes it on (CodeRabbit, #595:
+    // check_feeds, which did not model the credit, refused this schedule).
+    const TileID ta = tile(MatrixID::A, 0), tb = tile(MatrixID::B, 0), tc = tile(MatrixID::C, 0),
+                 td = tile(MatrixID::A, 9);
+    const L2Program p{l2_move(0, ta, kA, 16, 4),   l2_move(1, tb, kB, 16, 4),   l2_feed(0, ta, 4),
+                      l2_feed(1, tb, 4),           l2_result(2, tc, 4),         l2_release(0, ta),
+                      l2_release(1, tb),           l2_release(2, tc),
+                      l2_move(2, td, 0x30000, 16, 4), l2_writeback(2, td, kC + 0x2000, 16, 4), l2_release(2, td)};
+    const StreamerProgram cmds{{{0, ta, 0, 4}, {1, tb, 0, 4}, 16, true, true, StreamerCommand::Result{2, tc, {}}}};
+    REQUIRE_NOTHROW(check_feeds(cmds, p));
+    const Matrix a = operand(16, 4, 16), b = operand(17, 16, 4), d = operand(18, 4, 16);
+    ComputeRig r(p, cmds, ComputeRig::Options{});
+    load_lanes(r.l3, kA, a, 16);
+    load_lanes(r.l3, kB, transpose(b), 16);
+    load_lanes(r.l3, 0x30000, d, 16);
+    REQUIRE(r.sim.run_until_idle(kLimit));
+    REQUIRE(r.combiner.records()[0].result);   // C was written before D moved in
+    CHECK(r.l2.acquires() == 4);
+    for (std::uint32_t i = 0; i < 4; ++i)   // D's rows, back to L3 as they came
+        CHECK(r.l3.peek(kC + 0x2000 + std::uint64_t(i) * 16, 16) == r.l3.peek(0x30000 + std::uint64_t(i) * 16, 16));
+    CHECK(r.bm.holds(2));
+}
+
 TEST_CASE("A result with no result tile to write is an L1Fault", "[cycle][combiner]") {
     // The command ends its reduction, so the array launches its results, but it names no result tile.
     One o{4, 4, 1, {}};

@@ -488,9 +488,12 @@ private:
 //      operands, so one that needs a tile whose Move is queued behind another slot's Release, which
 //      waits for this very command, never fires. The check steps the protocol without time, as the
 //      components execute it: the BlockMover's Moves and Writebacks in program order (a Move waits
-//      for its slot to be free), the L2's Releases in program order (each waits for its residency's
-//      consumers), and the commands in order (each waits for both operands' residencies, with a
-//      Feed left on each). Whatever cannot proceed when nothing else can is a deadlock.
+//      for its slot's credit), the L2's Releases in program order (each waits for its residency's
+//      consumers, and passes the slot's credit to its next producer), and the commands in order
+//      (each waits for both operands' residencies, with a Feed left on each, and a producing one
+//      for its result slot's credit). A slot's credit starts with its first producer's owner, as
+//      the components' do (CodeRabbit, #595). Whatever cannot proceed when nothing else can is a
+//      deadlock.
 // Raises std::invalid_argument naming the slot and the first read that differs, or where each of
 // the three is stuck.
 inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
@@ -574,13 +577,29 @@ inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
                                             std::to_string(n[slot]));
     }
     std::map<std::uint32_t, Residency> live;   // by slot
+    // Each slot's credit: the BlockMover's, the Streamer's, or spent on a live residency.
+    enum class Owner { Mover, Streamer, Spent };
+    std::map<std::uint32_t, Owner> credit;
+    const auto owner = [&](std::uint32_t slot) {
+        const auto it = credit.find(slot);
+        if (it != credit.end()) return it->second;
+        return credit[slot] = streamer_holds_at_start(l2, slot) ? Owner::Streamer : Owner::Mover;
+    };
+    // The owner a Release at program index `i` passes its slot's credit to: the next producer's.
+    const auto next_owner = [&](std::size_t i) {
+        for (std::size_t n = i + 1; n < l2.size(); ++n)
+            if (l2[n].slot == l2[i].slot && is_producer(l2[n].kind))
+                return l2[n].kind == L2Action::Kind::Result ? Owner::Streamer : Owner::Mover;
+        return Owner::Mover;
+    };
     std::size_t m = 0, r = 0, c = 0;
     for (bool progress = true; progress;) {
         progress = false;
         while (m < mover.size()) {   // the BlockMover
             const L2Action& a = l2[mover[m]];
             if (a.kind == L2Action::Kind::Move) {
-                if (live.count(a.slot)) break;   // waits for the slot's credit
+                if (owner(a.slot) != Owner::Mover) break;   // waits for the slot's credit
+                credit[a.slot] = Owner::Spent;
                 live[a.slot] = of_move[mover[m]];
             } else {   // a Writeback: of the residency live in its slot, once its producer has filled it
                 const auto it = live.find(a.slot);
@@ -595,6 +614,7 @@ inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
             const auto it = live.find(a.slot);
             if (it == live.end() || !(it->second.tile == a.tile) || it->second.consumers != 0) break;
             live.erase(it);
+            credit[a.slot] = next_owner(releases[r]);
             ++r;
             progress = true;
         }
@@ -605,12 +625,15 @@ inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
                 return it != live.end() && it->second.tile == o.tile && it->second.feeds > 0;
             };
             if (!ready(k.a) || !ready(k.b)) break;
-            if (k.result && live.count(k.result->slot)) break;   // waits for its result slot's credit
+            if (k.result && owner(k.result->slot) != Owner::Streamer) break;   // waits for its result slot's credit
             for (const StreamerCommand::Operand* o : {&k.a, &k.b}) {
                 --live[o->slot].feeds;
                 --live[o->slot].consumers;
             }
-            if (k.result) live[k.result->slot] = of_move[*produces[c]];   // its Result's residency
+            if (k.result) {   // its Result's residency
+                credit[k.result->slot] = Owner::Spent;
+                live[k.result->slot] = of_move[*produces[c]];
+            }
             ++c;
             progress = true;
         }
