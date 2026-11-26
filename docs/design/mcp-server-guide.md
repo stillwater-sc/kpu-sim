@@ -34,7 +34,7 @@ The server provides five tools, each wrapping a project CLI operation:
 | `kpu_build` | `cmake --build --preset <preset>` | `{success, errors[{file, line, message}], warnings_count}` |
 | `kpu_test` | `ctest -L <label>` | `{total, passed, failed, results[{name, status}], failures[{file, line, assertion, actual, expected}]}` |
 | `kpu_run_demo` | Demo executables | `{status, total_cycles, summary{tile_counts}, transaction_log[{cycle, component, event, tile, credit_flow}]}` |
-| `kpu_validate_trace` | `trace_validator.py` | `{status, traces_checked, violations[{invariant_id, severity, message, fix_hint}]}` |
+| `kpu_validate_trace` | `tools/trace/mflow_check.py` | `{status, bundles_checked, violations[{invariant_id, message, bundle}], unreadable[{bundle, error}]}` |
 | `kpu_test_status` | Build + test + git | `{build_ok, tests{total, passed, failed}, failing_tests[], git_status, last_commit}` |
 
 ### Architecture
@@ -46,7 +46,7 @@ Claude Code  ←── stdio/JSON-RPC ──→  kpu_sim_server.py
                                           │
                               ┌───────────┼───────────┐
                               ▼           ▼           ▼
-                           cmake       ctest    trace_validator.py
+                           cmake       ctest     mflow_check.py
 ```
 
 - **Transport**: stdio (JSON-RPC 2.0 over stdin/stdout)

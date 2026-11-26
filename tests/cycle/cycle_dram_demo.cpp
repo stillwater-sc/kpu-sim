@@ -2,14 +2,14 @@
 // tests/cycle/cycle_dram_demo.cpp
 // One LPDDR5 channel on the cycle core (#537): its traces and counters, for the validators.
 //
-//   cycle_dram_demo <dram-trace.json> <core-trace.json> <counters.json>
+//   cycle_dram_demo <core-trace.json> <counters.json>
 //
 // A 1 GHz requester sends every workload of the controller's pattern suite, one after another
 // (page hits, conflicts, mixed reads and writes, two to four banks, strided), across a clock-domain
 // crossing into the 3.2 GHz channel; the responses cross back to a 1 GHz sink, which is held for a
 // while so the channel backs up. Writes:
-//   - the controller's own trace, for patterns/memory/lpddr5/common/trace_validator.py;
-//   - the cycle core's trace and counters, for check_trace.py (open either in ui.perfetto.dev).
+//   - the cycle core's trace and counters, for check_trace.py (open the trace in ui.perfetto.dev).
+// The channel checks its controller's DRAM timing invariants as it runs.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -34,8 +34,8 @@ using namespace sw::kpu::cycle::test;
 namespace pl = sw::kpu::patterns::lpddr5;
 
 int main(int argc, char** argv) try {
-    if (argc != 4) {
-        std::fprintf(stderr, "usage: cycle_dram_demo <dram-trace.json> <core-trace.json> <counters.json>\n");
+    if (argc != 3) {
+        std::fprintf(stderr, "usage: cycle_dram_demo <core-trace.json> <counters.json>\n");
         return 2;
     }
     std::vector<Requester::Item> items;
@@ -66,7 +66,6 @@ int main(int argc, char** argv) try {
     ch.connect(in, out);
     sink.connect(out);
     sink.stall(60, 160);
-    ch.enable_dram_trace(true);
 
     if (!sim.run_until_idle(1'000'000'000)) {
         std::fprintf(stderr, "cycle_dram_demo: the run did not finish\n");
@@ -76,12 +75,8 @@ int main(int argc, char** argv) try {
         std::fprintf(stderr, "cycle_dram_demo: %zu of %zu responses\n", sink.received.size(), n);
         return 1;
     }
-    if (!ch.write_dram_trace(argv[1])) {
-        std::fprintf(stderr, "cycle_dram_demo: cannot write %s\n", argv[1]);
-        return 1;
-    }
-    tracer.write(argv[2]);
-    write_counters_json(sim, argv[3]);
+    tracer.write(argv[1]);
+    write_counters_json(sim, argv[2]);
     const DramCounts d = ch.dram();
     std::printf("cycle_dram_demo: %zu requests; %llu reads, %llu writes; page hits %llu, empty %llu, conflicts %llu; "
                 "refreshes %llu; data bus %llu of %llu cycles (%.1f%%)\n",

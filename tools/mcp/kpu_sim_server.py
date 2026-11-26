@@ -9,7 +9,7 @@ Tools:
   - kpu_build: Build the project, return structured results
   - kpu_test: Run tests, return per-test pass/fail
   - kpu_run_demo: Run a demo, return parsed transaction log
-  - kpu_validate_trace: Validate trace files against invariants
+  - kpu_validate_trace: Check .mflow records against the memory-side invariants (mflow_check.py)
   - kpu_test_status: Quick project health check
 
 SPDX-License-Identifier: MIT
@@ -27,7 +27,7 @@ from parsers import (
     parse_build_output,
     parse_ctest_output,
     parse_demo_output,
-    parse_trace_validator_output,
+    parse_mflow_check_output,
 )
 
 # Server root is the kpu-sim project directory
@@ -125,58 +125,56 @@ def kpu_run_demo(demo: str = "csp_pipeline_demo", args: list[str] | None = None)
 
 
 @mcp.tool()
-def kpu_validate_trace(trace_file: str = "all") -> dict:
-    """Validate trace files against DRAM timing invariants.
+def kpu_validate_trace(bundle: str = "all") -> dict:
+    """Check memory-flow records (.mflow bundles) with tools/trace/mflow_check.py.
 
     Args:
-        trace_file: Path to trace file, or "all" to validate all traces
+        bundle: Path to a .mflow bundle (a directory), or "all" for the LPDDR5 patterns' records
+                (build/patterns/) and every bundle under traces/ and runs/ (the self-tests'
+                deliberately broken copies under build/tests/ are not runs)
 
     Returns:
-        Dictionary with: status (str), traces_checked (int),
-        violations (list of {invariant_id, severity, message, fix_hint, trace_file})
+        Dictionary with: status (PASS, FAIL, NO_RECORDS, NOT_FOUND or ERROR), bundles_checked
+        (int), violations (list of {invariant_id, message, bundle}) and unreadable (bundles the
+        checker could not read, with its message)
     """
-    validator = PROJECT_ROOT / "patterns" / "memory" / "lpddr5" / "common" / "trace_validator.py"
+    checker = PROJECT_ROOT / "tools" / "trace" / "mflow_check.py"
+    if not checker.exists():
+        return {"status": "ERROR", "bundles_checked": 0, "violations": [], "unreadable": [],
+                "error": "tools/trace/mflow_check.py not found"}
 
-    if not validator.exists():
-        return {"status": "ERROR", "traces_checked": 0, "violations": [], "error": "Trace validator not found"}
-
-    if trace_file == "all":
-        # Find all trace files
-        traces_dir = PROJECT_ROOT / "traces"
-        if not traces_dir.exists():
-            return {"status": "NO_TRACES", "traces_checked": 0, "violations": [], "error": "No traces/ directory found. Run a pattern first."}
-
-        trace_files = list(traces_dir.rglob("*.json"))
-        if not trace_files:
-            return {"status": "NO_TRACES", "traces_checked": 0, "violations": [], "error": "No trace files found in traces/"}
+    if bundle == "all":
+        bundles = sorted(p for d in ("build/patterns", "traces", "runs") if (PROJECT_ROOT / d).is_dir()
+                         for p in (PROJECT_ROOT / d).rglob("*.mflow") if p.is_dir())
+        if not bundles:
+            return {"status": "NO_RECORDS", "bundles_checked": 0, "violations": [], "unreadable": [],
+                    "error": "No .mflow bundles found. Run the LPDDR5 patterns (ctest -R lpddr5_) first."}
     else:
-        trace_path = Path(trace_file)
-        if not trace_path.is_absolute():
-            trace_path = PROJECT_ROOT / trace_path
-        if not trace_path.exists():
-            return {"status": "NOT_FOUND", "traces_checked": 0, "violations": [], "error": f"Trace file not found: {trace_file}"}
-        trace_files = [trace_path]
+        path = Path(bundle)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        if not path.is_dir():
+            return {"status": "NOT_FOUND", "bundles_checked": 0, "violations": [], "unreadable": [],
+                    "error": f"Bundle not found: {bundle}"}
+        bundles = [path]
 
-    all_violations = []
-    for tf in trace_files:
+    violations, unreadable = [], []
+    for b in bundles:
         try:
-            result = _run(["python3", str(validator), str(tf), "--json"], timeout=30)
-            parsed = parse_trace_validator_output(result.stdout, str(tf))
-            all_violations.extend(parsed.get("violations", []))
+            result = _run(["python3", str(checker), str(b), "--json"], timeout=60)
+            parsed = parse_mflow_check_output(result.stdout, result.returncode, str(b))
         except Exception as e:
-            all_violations.append({
-                "invariant_id": "PARSE_ERROR",
-                "severity": "ERROR",
-                "message": str(e),
-                "fix_hint": "",
-                "trace_file": str(tf),
-            })
+            unreadable.append({"bundle": str(b), "error": str(e)})
+            continue
+        if parsed["status"] in ("UNREADABLE", "UNKNOWN"):
+            unreadable.append({"bundle": str(b), "error": (result.stderr or "").strip() or parsed["status"]})
+        violations.extend(parsed["violations"])
 
-    status = "PASS" if not all_violations else "FAIL"
     return {
-        "status": status,
-        "traces_checked": len(trace_files),
-        "violations": all_violations,
+        "status": "PASS" if not violations and not unreadable else "FAIL",
+        "bundles_checked": len(bundles),
+        "violations": violations,
+        "unreadable": unreadable,
     }
 
 

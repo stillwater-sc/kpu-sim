@@ -10,7 +10,7 @@ exceeded the budget, and nothing runnable caught it.
 Usage:
     python3 tflow_check.py <bundle.tflow> [--json] [--verbose]
 
-Exit codes (the same contract as patterns/memory/lpddr5/common/trace_validator.py):
+Exit codes (the same contract as mflow_check.py and dflow_check.py):
     0  every invariant holds
     1  one or more invariants are violated -- parse them and fix the root cause
     2  the bundle could not be read -- there are no violations to parse

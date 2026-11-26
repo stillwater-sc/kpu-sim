@@ -7,9 +7,13 @@ memory side must satisfy, so a DRAM-timing, window or buffer bug becomes a faili
 of a reviewing problem.
 
 Usage:
-    python3 mflow_check.py <bundle.mflow> [--json] [--verbose]
+    python3 mflow_check.py <bundle.mflow> [--json] [--verbose] [--summary]
 
-Exit codes (the same contract as tflow_check.py and the LPDDR5 trace_validator.py):
+--summary also reports what the run did (it replaces kpu-trace-summary, which read the retired
+Chrome DRAM trace): requests and bursts, commands by kind, page outcomes, bytes and throughput
+against the record's ceiling, each bank's commands, and the bursts' latency.
+
+Exit codes (the same contract as tflow_check.py and dflow_check.py):
     0  every invariant holds
     1  one or more invariants are violated -- parse them and fix the root cause
     2  the bundle could not be read -- there are no violations to parse
@@ -35,12 +39,13 @@ Invariants:
                         (2 x grant_quantum bursts) -- a fair arbiter serves every waiting engine
                         within one pass. (fixed arbitration is priority by design: not checked)
     M5   DRAM timing    against the DECLARED device's table (the manifest's dram_timing, the
-                        table the controller ran -- not the LPDDR5-6400 table trace_validator.py
-                        hard-codes): per bank tRCD, tRP, tRAS, tRC, tRFCpb; per bank group
-                        tRRD_L, tCCD_L; per channel tRRD_S, tCCD_S, tFAW; and the bus turnarounds:
-                        a RD waits tWTR_S after the data of the channel's last WR ends, and tWTR_L
-                        after the data of its bank group's last WR -- reads between them do not
-                        clear it -- and a WR after a RD waits tRTW after the RD's data ends
+                        table the controller ran, not a hard-coded LPDDR5-6400 table as the
+                        retired Chrome-trace validator used): per bank tRCD, tRP, tRAS, tRC,
+                        tRFCpb; per bank group tRRD_L, tCCD_L; per channel tRRD_S, tCCD_S,
+                        tFAW; and the bus turnarounds: a RD waits tWTR_S after the data of the
+                        channel's last WR ends, and tWTR_L after the data of its bank group's
+                        last WR -- reads between them do not clear it -- and a WR after a RD
+                        waits tRTW after the RD's data ends
     M7   waits          (version 4) one cause's waits on an engine never overlap; each is a
                         non-empty interval inside the run, of an engine with a dmawait station.
                         Different causes may hold at once
@@ -49,7 +54,7 @@ Invariants:
                         kind, wait cycles by cause, RD/WR/REF commands, page outcomes; and the
                         counters' completions of the DMA engine (requests) and the channel (bursts)
     M9   ownership      every ACT, RD, WR and PRE serves a burst, on that burst's bank; an ACT opens
-                        and a PRE closes its burst's row (trace_validator.py's INV-001, -002, -004)
+                        and a PRE closes its burst's row (INVARIANTS.md's INV-001, -002, -004)
     M10  order          a burst's ACTs issue before its CAS; its page is closed before its CAS only
                         for a refresh (the PRE is the bank's last command before a REF), and each
                         such close is the only reason for another ACT; at most one PRE follows its
@@ -735,6 +740,75 @@ def check(rec, run=None):
     return r
 
 
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+def _pct(sorted_vals, p):
+    """The p-th percentile (nearest rank) of a sorted, non-empty list."""
+    return sorted_vals[min(len(sorted_vals) - 1, max(0, -(-p * len(sorted_vals) // 100) - 1))]
+
+
+def summary(rec):
+    """What the run did, from the record alone (no check): a dict, as --json prints it."""
+    m, Q, B, C = rec["manifest"], rec["requests"], rec["bursts"], rec["commands"]
+    nq, nb, nc = rec["requests_rows"], rec["bursts_rows"], rec["commands_rows"]
+    cycles = m["makespan"]
+    kinds = {k: sum(1 for q in range(nq) if Q["kind"][q] == i) for i, k in enumerate(("load", "store", "fill"))}
+    reads = sum(1 for b in range(nb) if B["is_load"][b])
+    by_kind = {k: 0 for k in CMD}
+    banks = {}
+    for i in range(nc):
+        by_kind[CMD[C["kind"][i]]] += 1
+        key = f"mc{C['mc'][i]}/ch{C['channel'][i]}/bg{C['bank_group'][i]}/ba{C['bank'][i]}"
+        banks[key] = banks.get(key, 0) + 1
+    outcomes = {k: sum(1 for b in range(nb) if B["outcome"][b] == o)
+                for o, k in ((HIT, "hit"), (EMPTY, "empty"), (CONFLICT, "conflict"))}
+    bb = m.get("burst_bytes")
+    out = {"device": m["device"], "source": m.get("source"), "cycles": cycles,
+           "requests": nq, "request_kinds": kinds, "bursts": nb, "reads": reads, "writes": nb - reads,
+           "commands": nc, "commands_by_kind": by_kind,
+           "outcomes": outcomes, "hit_rate": outcomes["hit"] / nb if nb else None,
+           # Column commands per row opened: how much each ACT bought.
+           "cas_per_act": (by_kind["RD"] + by_kind["WR"]) / by_kind["ACT"] if by_kind["ACT"] else None,
+           "banks": dict(sorted(banks.items())), "active_banks": len(banks)}
+    if bb is not None:
+        out["bytes"] = {"total": nb * bb, "read": reads * bb, "write": (nb - reads) * bb}
+        out["bytes_per_cycle"] = nb * bb / cycles if cycles else None
+        ceiling = m.get("ceiling_bytes_per_cycle")
+        if ceiling and out["bytes_per_cycle"] is not None:
+            out["ceiling_bytes_per_cycle"] = ceiling
+            out["efficiency"] = out["bytes_per_cycle"] / ceiling
+    lat = sorted(B["t_done"][b] - B["t_posted"][b] for b in range(nb))
+    if lat:
+        out["burst_latency"] = {"min": lat[0], "mean": sum(lat) / len(lat), "p50": _pct(lat, 50),
+                                "p95": _pct(lat, 95), "max": lat[-1]}
+    return out
+
+
+def print_summary(S):
+    f = lambda x, d=2: "-" if x is None else f"{x:.{d}f}"
+    k = S["request_kinds"]
+    print(f"  run: {S['cycles']} cycles; {S['requests']} requests ({k['load']} loads, {k['store']} stores, "
+          f"{k['fill']} fills), {S['bursts']} bursts ({S['reads']} reads, {S['writes']} writes)")
+    print(f"  commands: {S['commands']} (" + ", ".join(f"{n} {c}" for c, n in S["commands_by_kind"].items()) + ")")
+    o = S["outcomes"]
+    print(f"  pages: {o['hit']} hits, {o['empty']} empty, {o['conflict']} conflicts; hit rate "
+          f"{f(None if S['hit_rate'] is None else 100 * S['hit_rate'], 1)}%; {f(S['cas_per_act'], 1)} RD/WR per ACT")
+    if "bytes" in S:
+        by = S["bytes"]
+        eff = f"; {f(100 * S['efficiency'], 1)}% of the {f(S['ceiling_bytes_per_cycle'])} ceiling" if "efficiency" in S else ""
+        print(f"  bytes: {by['total']} ({by['read']} read, {by['write']} written); "
+              f"{f(S['bytes_per_cycle'])} bytes/cycle{eff}")
+    if "burst_latency" in S:
+        L = S["burst_latency"]
+        print(f"  burst latency (cycles, posted to done): min {f(L['min'], 1)}, mean {f(L['mean'], 1)}, "
+              f"p50 {f(L['p50'], 1)}, p95 {f(L['p95'], 1)}, max {f(L['max'], 1)}")
+    print(f"  banks: {S['active_banks']} active")
+    top = max(S["banks"].values(), default=0)
+    for key, n in S["banks"].items():
+        print(f"    {key:<20} {'#' * max(1, round(40 * n / top)):<40} {n} command{'s' if n != 1 else ''}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Check a .mflow bundle against the memory-side invariants.")
     ap.add_argument("bundle")
@@ -742,6 +816,7 @@ def main():
                                   "bundle is in one)")
     ap.add_argument("--json", "-j", action="store_true", help="machine-readable output")
     ap.add_argument("--verbose", "-v", action="store_true")
+    ap.add_argument("--summary", "-s", action="store_true", help="also report what the run did")
     args = ap.parse_args()
     try:
         rec = load(args.bundle)
@@ -757,8 +832,10 @@ def main():
     rep = check(rec, run)
     ok = not rep.violations
     if args.json:
-        print(json.dumps({"bundle": args.bundle, "passed": ok, "checked": rep.checked,
-                          "violations": rep.violations}, indent=1))
+        out = {"bundle": args.bundle, "passed": ok, "checked": rep.checked, "violations": rep.violations}
+        if args.summary:
+            out["summary"] = summary(rec)
+        print(json.dumps(out, indent=1))
     else:
         m = rec["manifest"]
         print(f"mflow_check: {args.bundle} ({m['device']}, makespan {m['makespan']}, "
@@ -767,6 +844,8 @@ def main():
             T = m["dram_timing"]
             print(f"  timing ({T['ticks_per_cycle']:.4g} ticks per cycle): " +
                   " ".join(f"{p}={T['params'][p]}" for p in TIMING))
+        if args.summary:
+            print_summary(summary(rec))
         print(f"  checked {' '.join(rep.checked)}")
         for v in rep.violations:
             print(f"  {v['invariant']}  {v['message']}")

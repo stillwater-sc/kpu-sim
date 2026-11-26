@@ -8,33 +8,16 @@ Generated trace files from memory controller patterns and visualization tools.
 traces/
 ├── README.md                       # This file
 └── memory/
-    ├── lpddr5/                     # LPDDR5 memory controller traces
-    │   ├── single-bank/            # Level 1: Single bank patterns
-    │   │   ├── page_hits_trace.json
-    │   │   ├── page_conflicts_trace.json
-    │   │   └── mixed_rw_trace.json
-    │   ├── two-bank/               # Level 2: Two bank patterns
-    │   │   ├── same_group_trace.json
-    │   │   └── diff_groups_trace.json
-    │   ├── three-bank/             # Level 3: Three bank patterns
-    │   │   ├── same_group_trace.json
-    │   │   └── mixed_groups_trace.json
-    │   ├── four-bank/              # Level 4: Four bank patterns
-    │   │   ├── full_group_trace.json
-    │   │   ├── across_groups_trace.json
-    │   │   └── page_hit_burst_trace.json
-    │   ├── dual-channel/           # Level 5: Dual channel patterns
-    │   │   ├── independent_trace.json
-    │   │   └── interleaved_trace.json
-    │   ├── complex/                # Level 6: Complex patterns
-    │   │   ├── stream_trace.json       # STREAM benchmark
-    │   │   ├── tile_load_trace.json    # ML tile loading
-    │   │   ├── multi_dma_trace.json    # Multi-DMA engines
-    │   │   ├── random_trace.json       # Random access
-    │   │   └── strided_trace.json      # Strided access
-    │   └── bandwidth/              # Level 7: Bandwidth patterns
-    │       ├── page_burst_trace.json   # Max page hits (128/page)
-    │       └── max_bandwidth_trace.json # Peak bandwidth
+    ├── lpddr5/                     # LPDDR5 memory controller records (.mflow)
+    │   ├── inventory.md            # The pattern records, by level
+    │   ├── single-bank/            # Level 1: page_hits, page_conflicts, mixed_rw
+    │   ├── two-bank/               # Level 2: same_group, diff_groups
+    │   ├── three-bank/             # Level 3: same_group, mixed_groups
+    │   ├── four-bank/              # Level 4: full_group, across_groups, page_hit_burst
+    │   ├── dual-channel/           # Level 5: independent, interleaved
+    │   ├── complex/                # Level 6: stream, tile_load, multi_dma, random, strided
+    │   └── bandwidth/              # Level 7: page_burst, max_bandwidth
+    │                               #   each a <name>.mflow record, generated (not committed)
     │
     └── gddr6/                      # GDDR6 memory controller traces
         ├── tools/                  # Visualization tools (shared with LPDDR5)
@@ -84,7 +67,7 @@ traces/
 ## Quick Start
 
 ```bash
-# Generate LPDDR5 traces
+# Generate LPDDR5 records (.mflow bundles; under ctest they go to build/patterns/memory/lpddr5/)
 ./build/patterns/memory/lpddr5/lpddr5_page_hits
 ./build/patterns/memory/lpddr5/lpddr5_stream
 ./build/patterns/memory/lpddr5/lpddr5_multi_dma
@@ -94,8 +77,8 @@ traces/
 ./build/patterns/memory/gddr6/gddr6_stream
 ./build/patterns/memory/gddr6/gddr6_multi_dma
 
-# View summary (CLI)
-./build/tools/trace/kpu-trace-summary traces/memory/lpddr5/complex/stream_trace.json
+# Check a record, and see what the run did
+python3 tools/trace/mflow_check.py traces/memory/lpddr5/complex/stream.mflow --summary
 
 # Serve the traces to a browser (from a laptop: ssh -L 8080:localhost:8080 <server>)
 python3 tools/debug-server/kpu_debug_server.py --root traces/memory
@@ -160,17 +143,14 @@ The GDDR6 views, still on Chrome DRAM traces, are in `traces/memory/gddr6/tools/
 ### CLI Tools
 
 ```bash
-# Basic summary
-./build/tools/trace/kpu-trace-summary trace.json
+# Check an LPDDR5 record against the invariants (exit 0 pass, 1 violations, 2 unreadable)
+python3 tools/trace/mflow_check.py record.mflow
 
-# Verbose with per-transaction details
-./build/tools/trace/kpu-trace-summary trace.json --verbose
+# ... and summarize the run: throughput, page outcomes, each bank's commands, burst latency
+python3 tools/trace/mflow_check.py record.mflow --summary
 
 # JSON output for scripting
-./build/tools/trace/kpu-trace-summary trace.json --json
-
-# Validate timing constraints
-./build/tools/trace/kpu-trace-summary trace.json --validate
+python3 tools/trace/mflow_check.py record.mflow --summary --json
 
 # Serve the traces to a browser (tools/debug-server/README.md)
 python3 tools/debug-server/kpu_debug_server.py --root traces
@@ -178,9 +158,10 @@ python3 tools/debug-server/kpu_debug_server.py --root traces
 
 ### Perfetto (Advanced)
 
-For detailed timeline analysis:
+For detailed timeline analysis of a Chrome trace (the GDDR6 and other devices' traces, the
+cycle core's component trace; the debug server has an Open in Perfetto button for each):
 1. Go to https://ui.perfetto.dev
-2. Drag and drop any trace JSON file
+2. Drag and drop the trace JSON file
 3. Explore with full zoom/pan/search capabilities
 
 ## Keyboard Controls (Web Viewers)
@@ -195,6 +176,8 @@ For detailed timeline analysis:
 
 ## Trace File Format
 
+The LPDDR5 patterns write `.mflow` records (`tools/visualization/common/mflow.js` reads them;
+`docs/plans/cycle-mflow-and-debug-server.md` describes them). The other devices' patterns write
 Chrome Trace Event Format (JSON):
 
 ```json
@@ -221,4 +204,4 @@ Chrome Trace Event Format (JSON):
 
 - [Memory Characterization](../docs/memory-characterization.md) - Latency and bandwidth analysis
 - [Pattern Source](../patterns/memory/) - Pattern implementation code
-- [LPDDR5 Invariants](../patterns/memory/lpddr5/INVARIANTS.md) - Timing constraint validation
+- [LPDDR5 Invariants](../patterns/memory/lpddr5/INVARIANTS.md) - each invariant and the `mflow_check.py` check that enforces it

@@ -73,7 +73,7 @@ The calibration workflow ensures that faster models produce results consistent w
 | Behavioral MC | Complete | `src/components/memory/behavioral_memory_controller.cpp` |
 | Transactional MC | Complete | `src/components/memory/transactional_memory_controller.cpp` |
 | Test Patterns | Complete | `patterns/memory/lpddr5/` |
-| Trace Validation | Complete | `patterns/memory/lpddr5/common/trace_validator.py` |
+| Trace Validation | Complete | `tools/trace/mflow_check.py` (on the `.mflow` record) |
 | MultiFidelityHarness | Partial | `patterns/memory/lpddr5/common/multi_fidelity.hpp` |
 | Factory Pattern | Complete | `src/components/memory/memory_controller_factory.cpp` |
 

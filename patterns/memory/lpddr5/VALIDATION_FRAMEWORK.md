@@ -1,5 +1,11 @@
 # LPDDR5 Trace Validation Framework
 
+> **Retired (2026-11-26, #572).** This framework validated the LPDDR5 controller's Chrome trace with
+> `trace_validator.py`. That trace, the validator and `kpu-trace-summary` are retired: the patterns
+> write `.mflow` records, checked by `tools/trace/mflow_check.py` (`--summary` for the run's
+> summary). `INVARIANTS.md` maps each invariant here to the check that now enforces it. This
+> document is kept as the history of the bugs the framework found.
+
 This document describes the validation framework for LPDDR5 memory controller traces,
 including the tools created, how to use them, and guidance for Claude Code integration.
 

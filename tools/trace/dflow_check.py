@@ -9,7 +9,7 @@ reviewing problem.
 Usage:
     python3 dflow_check.py <bundle.dflow> [--json] [--verbose]
 
-Exit codes (the same contract as tflow_check.py, mflow_check.py and trace_validator.py):
+Exit codes (the same contract as tflow_check.py and mflow_check.py):
     0  every invariant holds
     1  one or more invariants are violated -- parse them and fix the root cause
     2  the bundle could not be read -- there are no violations to parse

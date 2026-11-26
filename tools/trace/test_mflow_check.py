@@ -123,6 +123,46 @@ class MflowCheckSelfTest(unittest.TestCase):
         cap = max(s["capacity"] for s in self.b.manifest["stations"] if s["kind"] == "dmabuf")
         self.assertEqual(held, cap)
 
+    # -- --summary (kpu-trace-summary's report, on the record) ----------------
+    def summary(self, *extra):
+        p = subprocess.run([sys.executable, str(CHECK), str(self.b.dir), "--json", "--summary", *extra],
+                           capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)["summary"]
+
+    def test_the_summary_counts_the_record(self):
+        S, b = self.summary(), self.b
+        nb, nc = b.rows("bursts"), b.rows("commands")
+        reads = sum(b.get("bursts", "is_load", i) for i in range(nb))
+        kinds = [b.get("commands", "kind", i) for i in range(nc)]
+        self.assertEqual((S["bursts"], S["reads"], S["writes"], S["commands"]), (nb, reads, nb - reads, nc))
+        self.assertEqual(S["commands_by_kind"], {k: kinds.count(i) for i, k in enumerate(("ACT", "RD", "WR", "PRE", "REF"))})
+        self.assertEqual(sum(S["banks"].values()), nc)
+        outcomes = [b.get("bursts", "outcome", i) for i in range(nb)]
+        self.assertEqual(S["outcomes"], {"hit": outcomes.count(1), "empty": outcomes.count(2), "conflict": outcomes.count(3)})
+        bb = b.manifest["burst_bytes"]
+        self.assertEqual(S["bytes"], {"total": nb * bb, "read": reads * bb, "write": (nb - reads) * bb})
+        self.assertAlmostEqual(S["bytes_per_cycle"], nb * bb / b.manifest["makespan"])
+        lat = sorted(b.get("bursts", "t_done", i) - b.get("bursts", "t_posted", i) for i in range(nb))
+        L = S["burst_latency"]
+        self.assertEqual((L["min"], L["max"]), (lat[0], lat[-1]))
+        self.assertLessEqual(L["min"], L["p50"]); self.assertLessEqual(L["p50"], L["p95"]); self.assertLessEqual(L["p95"], L["max"])
+
+    def test_the_summary_follows_the_record(self):
+        # A hit turned into a conflict moves one burst between the counts.
+        before = self.summary()["outcomes"]
+        i = self.b.find("bursts", lambda i: self.b.get("bursts", "outcome", i) == 1)
+        self.b.set("bursts", "outcome", i, 3)
+        p = subprocess.run([sys.executable, str(CHECK), str(self.b.dir), "--json", "--summary"], capture_output=True, text=True)
+        after = json.loads(p.stdout)["summary"]["outcomes"]
+        self.assertEqual((after["hit"], after["conflict"]), (before["hit"] - 1, before["conflict"] + 1))
+
+    def test_the_summary_prints(self):
+        p = subprocess.run([sys.executable, str(CHECK), str(self.b.dir), "--summary"], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        for needle in ("  run: ", "  commands: ", "  pages: ", "  bytes: ", "  burst latency ", "  banks: "):
+            self.assertIn(needle, p.stdout)
+
     # -- TF10 ---------------------------------------------------------------
     def test_tf10_cas_to_a_row_not_open(self):
         i = self.b.find("commands", lambda i: self.b.get("commands", "kind", i) == RD)
@@ -345,7 +385,7 @@ class MflowCheckSelfTest(unittest.TestCase):
                 return
         self.fail("the clean bundle has no WR, RD, RD on one channel")
 
-    # -- M9, M10, M11 (trace_validator.py's INV-001..006, on the record) ------
+    # -- M9, M10, M11 (INVARIANTS.md's INV-001..006, on the record) ------
     def burst_with_act(self):
         for i in range(self.b.rows("commands")):
             if self.b.get("commands", "kind", i) == ACT and self.b.get("commands", "burst", i) != 0xFFFFFFFF:
