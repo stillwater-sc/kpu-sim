@@ -12,12 +12,15 @@
 //
 //   Dram.model(R)            { unit, ticksPerCycle, params, channels, end }:
 //                              channels  [{ key, mc, ch, banks, cmds }], sorted by (mc, ch)
-//                              banks     [{ key, bg, ba, cmds, states }], sorted by (bg, ba)
+//                              banks     [{ key, bg, ba, cmds, bursts, states }], sorted by (bg, ba)
 //                              cmds      command indices into R.C, by issue tick
+//                              bursts    burst indices into R.B, the bank's, in record order
 //                              states    [{ s, from, to, row }], s one of STATES, covering
 //                                        [0, end) with no gaps or overlaps
 //   Dram.tick(R, i, col)     command i's tick for column issue | end | data0 | data1
 //   Dram.chain(R, burst)     the commands that served `burst`, by issue tick
+//   Dram.episodes(R, bank, end)   a bank's row openings, ACT to PRE or REF
+//   Dram.bankStats(R, bank, end)  its commands, bursts, page outcomes, ticks per state, openings
 //   Dram.gaps(R, X, burst)   the timing around its CAS on its bank, as mflow_check.py's M5 checks
 //                            it: [{ name, from, to, a, b, measured, required, ok }]
 //
@@ -87,7 +90,7 @@ function model(R) {
   };
   const bank = (c, bg, ba) => {
     const key = "bg" + bg + "/ba" + ba;
-    if (!c.banks.has(key)) c.banks.set(key, { key, bg, ba, cmds: [], states: [] });
+    if (!c.banks.has(key)) c.banks.set(key, { key, bg, ba, cmds: [], bursts: [], states: [] });
     return c.banks.get(key);
   };
   for (const [mc, ch, bg, ba] of declaredBanks(R.m)) bank(chan(mc, ch), bg, ba);
@@ -98,6 +101,7 @@ function model(R) {
     bank(c, C.bank_group[i], C.bank[i]).cmds.push(i);   // a refresh is per bank, and names it
     end = Math.max(end, tick(R, i, "end"), tick(R, i, "data1"));
   }
+  for (let b = 0; b < R.B.rows; b++) bank(chan(R.B.mc[b], R.B.channel[b]), R.B.bank_group[b], R.B.bank[b]).bursts.push(b);
   const byIssue = (a, b) => tick(R, a, "issue") - tick(R, b, "issue") || a - b;
   const channels = [...chans.values()].sort((a, b) => a.mc - b.mc || a.ch - b.ch).map(c => {
     c.cmds.sort(byIssue);
@@ -169,6 +173,45 @@ function gaps(R, X, b) {
   return out;
 }
 
+// A bank's row openings: each ACT to the PRE or REF that closes it, or to the run's end (`open`
+// true): { row, from, to, open, act, close, rd, wr }, with the CAS commands it served.
+function episodes(R, bank, end) {
+  const out = [];
+  let e = null;
+  for (const i of bank.cmds) {
+    const k = R.C.kind[i], t = tick(R, i, "issue");
+    if (k === ACT) {
+      if (e) { e.to = t; e.open = false; out.push(e); }   // an ACT on an open bank (TF10 refuses it)
+      e = { row: R.C.row[i], from: t, to: end, open: true, act: i, close: null, rd: 0, wr: 0 };
+    } else if ((k === RD || k === WR) && e) {
+      if (k === RD) e.rd++; else e.wr++;
+    } else if ((k === PRE || k === REF) && e) {
+      e.to = t; e.open = false; e.close = i; out.push(e); e = null;
+    }
+  }
+  if (e) out.push(e);
+  return out;
+}
+
+// A bank's numbers: commands by kind, bursts by direction and page outcome (as the record states
+// them), ticks in each state, and its row openings (count, distinct rows, mean ticks open).
+function bankStats(R, bank, end) {
+  const cmds = [0, 0, 0, 0, 0], outcomes = [0, 0, 0, 0], ticks = {};
+  for (const s of STATES) ticks[s] = 0;
+  for (const i of bank.cmds) cmds[R.C.kind[i]]++;
+  let reads = 0, writes = 0;
+  for (const b of bank.bursts) { outcomes[R.B.outcome[b]]++; if (R.B.is_load[b]) reads++; else writes++; }
+  for (const s of bank.states) ticks[s.s] += s.to - s.from;
+  const ep = episodes(R, bank, end);
+  const known = outcomes[1] + outcomes[2] + outcomes[3];
+  return {
+    cmds, bursts: bank.bursts.length, reads, writes, outcomes,
+    hitRate: known ? outcomes[1] / known : null,
+    ticks, opens: ep.length, rows: new Set(ep.map(e => e.row)).size,
+    meanOpen: ep.length ? ep.reduce((a, e) => a + (e.to - e.from), 0) / ep.length : null,
+  };
+}
+
 // The first index in sorted `cmds` whose issue tick is >= t.
 function firstAt(R, cmds, t) {
   let lo = 0, hi = cmds.length;
@@ -176,7 +219,7 @@ function firstAt(R, cmds, t) {
   return lo;
 }
 
-const Dram = { STATES, CMD, ACT, RD, WR, PRE, REF, tick, declaredBanks, bankStates, model, chain, bankOf, gaps, firstAt };
+const Dram = { STATES, CMD, ACT, RD, WR, PRE, REF, tick, declaredBanks, bankStates, model, chain, bankOf, gaps, firstAt, episodes, bankStats };
 if (typeof module !== "undefined" && module.exports) module.exports = Dram;
 else root.Dram = Dram;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -118,13 +118,14 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(arts["mflow"]["url"], "/files/2026-11-25-mm64/mem.mflow/")
         self.assertEqual([(v["viewer"], v["href"]) for v in arts["mflow"]["views"]],
                          [("memflow", "/view/memflow/index.html?bundle=/files/2026-11-25-mm64/mem.mflow/"),
-                          ("dram-timing", "/view/dram-timing/timing.html?bundle=/files/2026-11-25-mm64/mem.mflow/")])
+                          ("dram-timing", "/view/dram-timing/timing.html?bundle=/files/2026-11-25-mm64/mem.mflow/"),
+                          ("dram-bank", "/view/dram-bank/bank_analyzer.html?bundle=/files/2026-11-25-mm64/mem.mflow/")])
         # Nothing inside a run directory is listed again as a run of its own.
         self.assertFalse(any(k.startswith("2026-11-25-mm64/") for k in runs))
         # Bare artifacts: a bundle, a DRAM trace (to the LPDDR5 view); a JSON file that is no trace is not a run.
         self.assertEqual(runs["bare.mflow"]["kind"], "mflow")
         self.assertEqual(runs["dram.json"]["kind"], "dram-trace")
-        self.assertEqual(runs["dram.json"]["artifacts"][0]["views"][0]["viewer"], "lpddr5")
+        self.assertEqual(runs["dram.json"]["artifacts"][0]["views"], [])   # Perfetto only (step 9b)
         self.assertNotIn("notes.json", runs)
 
     def test_symlinks_are_not_followed_into_runs(self):
