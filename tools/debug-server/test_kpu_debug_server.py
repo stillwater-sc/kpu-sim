@@ -278,6 +278,10 @@ class ServerTest(unittest.TestCase):
         self.assertIn(b'<tr data-id="2026-11-25-mm64">', body)
         self.assertIn(b'<div class="panel" id="runs">', body)
         self.assertIn(b'new EventSource("/api/events")', body)
+        # Every connection refetches the list, the first included: events before it are lost.
+        self.assertIn(b'es.onopen = () => { live.textContent = "Live: new runs appear here."; refresh(); };', body)
+        # An older refetch never replaces a newer one.
+        self.assertIn(b"if (!next || n < shown) return;", body)
 
     def test_a_run_has_a_version_from_its_manifest(self):
         _, _, body = self.get("/api/runs")
@@ -317,6 +321,30 @@ class ChangesTest(unittest.TestCase):
                          [("run-added", "d"), ("run-changed", "b"), ("run-removed", "c")])
         # A removed run is sent as it last was.
         self.assertIs(core.changes(before, after)[-1][1], before[2])
+
+    def test_a_run_replaced_while_it_is_read_is_seen_changed_on_the_next_poll(self):
+        tmp = Path(tempfile.mkdtemp(prefix="kpu-debug-race-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        d = tmp / "mm64"
+        d.mkdir()
+        (d / "run.json").write_text(run_json("s1", "running"))
+        real = core._json
+
+        def replaced_after_read(path):   # kpu-run renames a new run.json in, just after this read
+            got = real(path)
+            if Path(path).name == "run.json" and got.get("status") == "running":
+                (d / "run.json.tmp").write_text(run_json("s1", "ok") + " ")
+                os.replace(d / "run.json.tmp", d / "run.json")
+            return got
+
+        core._json = replaced_after_read
+        try:
+            first = core.discover_runs(tmp)
+        finally:
+            core._json = real
+        self.assertEqual(first[0]["status"], "running")
+        second = core.discover_runs(tmp)
+        self.assertEqual([(e, r["status"]) for e, r in core.changes(first, second)], [("run-changed", "ok")])
 
     def test_no_change_is_no_event(self):
         runs = [self.run_("a", "1")]
@@ -454,6 +482,35 @@ class LiveTest(unittest.TestCase):
             self.write_run("after-" + str(int((deadline - time.monotonic()) * 100)))
             time.sleep(0.1)
         self.assertEqual(self.srv.live.subscribers, set())
+
+
+class StalledClientTest(unittest.TestCase):
+    def test_a_client_that_stops_reading_is_dropped(self):
+        tmp = Path(tempfile.mkdtemp(prefix="kpu-debug-stall-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        saved = server_module.WRITE_TIMEOUT
+        server_module.WRITE_TIMEOUT = 0.5
+        self.addCleanup(setattr, server_module, "WRITE_TIMEOUT", saved)
+        srv = make_server(tmp, 0, poll=60)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        c = http.client.HTTPConnection(HOST, srv.server_address[1], timeout=10)
+        c.request("GET", "/api/events")
+        r = c.getresponse()   # the headers; from here on it reads nothing, and stays connected
+        self.addCleanup(c.close)
+        self.addCleanup(r.close)
+        deadline = time.monotonic() + 5
+        while not srv.live.subscribers and time.monotonic() < deadline:
+            time.sleep(0.01)
+        big = {"id": "x", "pad": "x" * (1 << 20)}
+        # Enough to fill both sockets' buffers; then the handler's write blocks, and times out.
+        for _ in range(64):
+            srv.live.publish(("run-changed", big))
+        deadline = time.monotonic() + 15
+        while srv.live.subscribers and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(srv.live.subscribers, set())
 
 
 class BacklogTest(unittest.TestCase):

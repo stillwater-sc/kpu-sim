@@ -40,6 +40,7 @@ POLL = 1.0          # seconds between rediscoveries of the root
 HEARTBEAT = 15.0    # seconds between keep-alive comments on an idle event stream
 TICK = 0.25         # seconds between checks of an event stream for its end
 BACKLOG = 256       # events a slow client may fall behind before its stream is ended
+WRITE_TIMEOUT = 30.0  # seconds one write to an event stream may block before the client is dropped
 TYPES = {".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
          ".json": "application/json", ".html": "text/html; charset=utf-8", ".bin": "application/octet-stream",
          ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".svg": "image/svg+xml",
@@ -243,13 +244,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_events(self, head):
         """The event stream: one `event:` per run added, changed or removed, its run as `data:`.
-        It ends when the client goes, the server closes, or the client falls BACKLOG behind."""
+        It ends when the client goes, the server closes, the client falls BACKLOG behind, or one
+        write blocks WRITE_TIMEOUT (a client that stopped reading)."""
         live = self.server.live
         self.send_response(HTTPStatus.OK)
         self.common_headers("text/event-stream; charset=utf-8", False)
         self.end_headers()
         if head or live is None:
             return
+        # A client that stops reading fills the socket's buffer, and a write would then block its
+        # handler for ever: each write gets WRITE_TIMEOUT. Only writes block here, so an idle
+        # stream (a keep-alive every HEARTBEAT) is never timed out for its silence.
+        self.connection.settimeout(WRITE_TIMEOUT)
         sub = live.subscribe()
         try:
             self.wfile.write(b"retry: 2000\n\n")
@@ -375,8 +381,8 @@ PERFETTO_KINDS = ("trace", "dram-trace")
 
 # The index's script.
 #  - Live: /api/events names each run added, changed or removed; the list is refetched from "/"
-#    (one renderer, the server's) and the runs named are marked. A reconnect refetches too, since
-#    events sent while the stream was down are lost.
+#    (one renderer, the server's) and the runs named are marked. Each connection refetches too,
+#    the first included, since events sent while no stream was open are lost.
 #  - Open in Perfetto: ui.perfetto.dev runs in this browser and cannot reach the server, so the
 #    page fetches the trace and hands it over with Perfetto's postMessage protocol: PING until the
 #    tab answers PONG, then {perfetto: {buffer, title, fileName}}. The trace goes only to the tab
@@ -387,17 +393,20 @@ SCRIPT = r"""
 const PERFETTO = "https://ui.perfetto.dev";
 const live = document.getElementById("live");
 const fresh = new Set();
-let timer = 0;
+let timer = 0, asked = 0, shown = 0;
 
+// Refetches may overlap: each is numbered, and a response older than the one shown is dropped.
 function refresh() {
   clearTimeout(timer);
   timer = setTimeout(async () => {
+    const n = ++asked;
     try {
       const r = await fetch("/", { cache: "no-store" });
       if (!r.ok) return;
       const doc = new DOMParser().parseFromString(await r.text(), "text/html");
       const next = doc.getElementById("runs");
-      if (!next) return;
+      if (!next || n < shown) return;
+      shown = n;
       document.getElementById("runs").replaceChildren(...next.childNodes);
       for (const tr of document.querySelectorAll("#runs tr[data-id]"))
         if (fresh.has(tr.dataset.id)) tr.classList.add("fresh");
@@ -408,8 +417,8 @@ function refresh() {
 
 if (window.EventSource) {
   const es = new EventSource("/api/events");
-  let opened = false;
-  es.onopen = () => { live.textContent = "Live: new runs appear here."; if (opened) refresh(); opened = true; };
+  // Every connection refetches, the first too: events before it (since the page was served) are lost.
+  es.onopen = () => { live.textContent = "Live: new runs appear here."; refresh(); };
   es.onerror = () => { live.textContent = "Live updates paused; reconnecting."; };
   for (const name of ["run-added", "run-changed", "run-removed"])
     es.addEventListener(name, ev => {

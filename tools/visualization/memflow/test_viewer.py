@@ -214,6 +214,7 @@ Mflow.open('http://server/b/', stub).then(() => process.stdout.write('"accepted"
             ["run-changed", run, "/files/r/mem.mflow/"],
             ["run-changed", run, "/files/r/mem.mflow"],                 # the trailing "/" does not matter
             ["run-changed", run, "http://localhost:8080/files/r/mem.mflow/"],
+            ["run-changed", run, "/files/r/mem.mflow/?v=1"],            # a cache-buster names the same bundle
             ["run-added", run, "/files/r/mem.mflow/"],                  # rewritten between two polls
             ["run-removed", run, "/files/r/mem.mflow/"],
             ["run-changed", dict(run, status="running"), "/files/r/mem.mflow/"],   # its record is not written yet
@@ -230,7 +231,23 @@ Mflow.open('http://server/b/', stub).then(() => process.stdout.write('"accepted"
             f"process.stdout.write(JSON.stringify(cases.map(([n, r, h]) => L.notice(n, r, h, {json.dumps(base)}))));",
         ]))
         newer, removed = "This run has a newer version.", "This run was removed from the server."
-        self.assertEqual(got, [newer, newer, newer, newer, removed, None, removed, None, None, None, None, None])
+        self.assertEqual(got, [newer, newer, newer, newer, newer, removed, None, removed, None, None, None, None, None])
+
+    def test_a_reconnect_compares_the_run_with_the_version_it_knew(self):
+        # Events sent while the stream was down are lost: on reconnect, /api/runs against `known`.
+        base = "http://localhost:8080/view/memflow/index.html?bundle=/files/r/mem.mflow/"
+        runs = [{"id": "o", "version": "9", "artifacts": [{"url": "/files/o/mem.mflow/"}]},
+                {"id": "r", "version": "2", "status": "ok", "artifacts": [{"url": "/files/r/mem.mflow/"}]}]
+        got = self.node("\n".join([
+            f"const L = require({json.dumps(str(LIVE))});",
+            f"const runs = {json.dumps(runs)}, base = {json.dumps(base)};",
+            "const run = L.holder(runs, '/files/r/mem.mflow/', base);",
+            "process.stdout.write(JSON.stringify([run && run.id, L.holder(runs, '/files/x/', base),",
+            "  L.recheck('2', run), L.recheck('1', run), L.recheck('1', Object.assign({}, run, {status: 'running'})),",
+            "  L.recheck('2', null), L.recheck(null, null), L.recheck(null, run)]));",
+        ]))
+        self.assertEqual(got, ["r", None, None, "This run has a newer version.", None,
+                               "This run was removed from the server.", None, "This run has a newer version."])
 
     def test_the_page_watches_its_run_only_when_served(self):
         self.assertIn('<script src="../common/live.js"></script>', self.page)

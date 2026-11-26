@@ -12,10 +12,10 @@
 (function (root) {
 "use strict";
 
-// Two URLs name the same artifact: same resolved URL, ignoring a trailing "/" (a bundle is a
-// directory, served with one).
+// Two URLs name the same artifact: the same resolved path, ignoring a query or a fragment (a
+// cache-buster such as ?v=1) and a trailing "/" (a bundle is a directory, served with one).
 function sameArtifact(a, b, base) {
-  const norm = u => { const x = new URL(u, base); x.hash = ""; return x.href.replace(/\/+$/, ""); };
+  const norm = u => { const x = new URL(u, base); x.hash = ""; x.search = ""; return x.href.replace(/\/+$/, ""); };
   try { return norm(a) === norm(b); } catch (e) { return false; }
 }
 
@@ -34,6 +34,20 @@ function notice(name, run, href, base) {
 function concerns(run, href, base) {
   return !!(run && Array.isArray(run.artifacts) &&
             run.artifacts.some(a => a && typeof a.url === "string" && sameArtifact(a.url, href, base)));
+}
+
+// The run in a /api/runs listing that holds the artifact at `href`, or null.
+function holder(runs, href, base) {
+  return (Array.isArray(runs) && runs.find(r => concerns(r, href, base))) || null;
+}
+
+// What the bar says after the stream reconnects, when events may have been missed: the run as
+// /api/runs lists it now (or null) against `known`, the version this page last knew (null: the run
+// was gone). Null for no bar.
+function recheck(known, run) {
+  if (!run) return known === null ? null : "This run was removed from the server.";
+  if (run.status === "running" || run.version === known) return null;
+  return "This run has a newer version.";
 }
 
 function bar(text) {
@@ -71,17 +85,35 @@ function watch(param) {
   try { href = new URL(v, location.href); } catch (e) { return null; }
   if (href.origin !== location.origin) return null;
   const es = new EventSource("/api/events");
+  // The run's version, as this page last knew it: undefined until the first connection lists it,
+  // null while the run is gone. Events keep it current; a reconnect compares the listing with it.
+  let known;
+  es.onopen = async () => {
+    let runs;
+    try {
+      const r = await fetch("/api/runs", { cache: "no-store" });
+      if (!r.ok) return;
+      runs = (await r.json()).runs;
+    } catch (e) { return; }
+    const run = holder(runs, href.href, location.href);
+    if (known !== undefined) {
+      const text = recheck(known, run);
+      if (text) bar(text);
+    }
+    known = run ? run.version : null;
+  };
   for (const name of ["run-added", "run-changed", "run-removed"])
     es.addEventListener(name, ev => {
       let d;
       try { d = JSON.parse(ev.data); } catch (e) { return; }
       const text = notice(name, d && d.run, href.href, location.href);
+      if (concerns(d && d.run, href.href, location.href)) known = name === "run-removed" ? null : d.run.version;
       if (text) bar(text);
     });
   return es;
 }
 
-const api = { watch, notice, concerns, sameArtifact };
+const api = { watch, notice, recheck, holder, concerns, sameArtifact };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else root.MflowLive = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -148,9 +148,12 @@ def discover_runs(root):
         manifest = next((e for e in entries if e.name == "run.json"), None)
         # A run.json that is a link is not read: it could publish a manifest from outside the root.
         if manifest is not None and not manifest.is_symlink() and manifest.is_file():
+            # The version first: if run.json is replaced after it is read, the next poll still
+            # sees a version this one did not, and sends the change.
+            version = _version(Path(d) / "run.json")
             m = _json(Path(d) / "run.json")
             if isinstance(m, dict) and m.get("format") == "kpu-run":
-                runs.append(_run(root, Path(d), m))
+                runs.append(_run(root, Path(d), m, version))
                 return
         for e in entries:
             if e.is_symlink():
@@ -172,7 +175,7 @@ def discover_runs(root):
     return runs
 
 
-def _run(root, d, m):
+def _run(root, d, m, version):
     arts = []
     named = m.get("artifacts") if isinstance(m.get("artifacts"), dict) else {}
     for name, f in sorted(named.items()):
@@ -185,7 +188,7 @@ def _run(root, d, m):
         arts.append(_artifact(root, p, kind, name))
     return {"id": _rel(root, d), "kind": m.get("kind", "run"), "status": m.get("status"),
             "device": m.get("device"), "started": m.get("started"), "seconds": m.get("seconds"),
-            "build": m.get("build"), "git": m.get("git"), "version": _version(d / "run.json"), "artifacts": arts}
+            "build": m.get("build"), "git": m.get("git"), "version": version, "artifacts": arts}
 
 
 def _bare(root, p, kind):
