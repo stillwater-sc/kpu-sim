@@ -6,8 +6,8 @@
 // writeback, L2 -> L3. It executes the program's Moves and Writebacks (l2_program.hpp) in order, one
 // at a time.
 //
-// A MOVE waits for its slot's credit (the BlockMover holds every slot's at the start, and a
-// Release returns one), spends it, and then, each clock:
+// A MOVE waits for its slot's credit (the BlockMover holds every slot's at the start but those whose
+// first producer is a Result, the Streamer's; a Release returns one), spends it, and then, each clock:
 //   - asks L3 for its next row (row k at l3_address + k * l3_pitch: the stride), while it has a row
 //     buffer free and the request link a credit;
 //   - takes one beat of `bus_bytes` from L3 into the row it belongs to (one beat a clock: the bus
@@ -64,6 +64,7 @@ public:
                                         ": slots, rows, row buffers and the read window must be positive, and a row "
                                         "whole beats of the bus");
         validate_l2_program(program, cfg.slots, cfg.rows_per_slot, cfg.row_bytes, "cycle::BlockMover " + this->name());
+        program_ = program;
         for (std::size_t i = 0; i < program.size(); ++i)
             if (program[i].kind == L2Action::Kind::Move || program[i].kind == L2Action::Kind::Writeback)
                 actions_.push_back({i, program[i]});   // the Feeds are the Streamer's, the Releases the L2's
@@ -280,6 +281,7 @@ private:
 
     void clear() {
         held_.assign(config_.slots, true);
+        for (std::uint32_t s = 0; s < config_.slots; ++s) held_[s] = !streamer_holds_at_start(program_, s);
         head_ = 0;
         started_ = false;
         requested_ = done_ = 0;
@@ -288,6 +290,7 @@ private:
     }
 
     Config config_;
+    L2Program program_;
     std::vector<Action> actions_;
     std::vector<bool> held_;     // the slots whose credit the mover holds
     std::size_t head_ = 0;

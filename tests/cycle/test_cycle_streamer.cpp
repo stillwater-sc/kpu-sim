@@ -71,7 +71,7 @@ L2Program l2_program(const Chain& c) {
 StreamerProgram commands(const Chain& c) {
     StreamerProgram p;
     for (std::uint32_t n = 0; n < c.blocks; ++n)
-        p.push_back({{0, kTileA, n * c.h, c.h}, {1, kTileB, n * c.w, c.w}, c.k, n == 0, n + 1 == c.blocks});
+        p.push_back({{0, kTileA, n * c.h, c.h}, {1, kTileB, n * c.w, c.w}, c.k, n == 0, n + 1 == c.blocks, std::nullopt});
     return p;
 }
 
@@ -331,7 +331,7 @@ TEST_CASE("A tile moved into its slot again is read only after its own Move: a t
         p.push_back(l2_release(0, kTileA));
         p.push_back(l2_release(1, kTileB));
     }
-    const StreamerCommand cmd{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true};
+    const StreamerCommand cmd{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true, std::nullopt};
     StreamerRig r(p, {cmd, cmd}, options());
     load(r, Chain{4, 4, 16, 2});
     REQUIRE(r.sim.run_until_idle(kLimit));
@@ -373,7 +373,7 @@ TEST_CASE("The Streamer's program is checked before anything runs", "[cycle][str
     Domain d = Domain::from_ghz("kpu", 1.0);
     const Streamer::Config cfg{};
     const auto cmd = [](std::uint32_t h, std::uint32_t w, std::uint32_t k) {
-        return StreamerCommand{{0, kTileA, 0, h}, {1, kTileB, 0, w}, k, true, true};
+        return StreamerCommand{{0, kTileA, 0, h}, {1, kTileB, 0, w}, k, true, true, std::nullopt};
     };
     CHECK_NOTHROW(Streamer("st", d, cfg, {cmd(4, 4, 16)}));
     CHECK_THROWS_WITH(Streamer("st", d, cfg, {cmd(5, 4, 16)}), ContainsSubstring("5 A lanes, the array has 1 to 4"));
@@ -408,8 +408,8 @@ TEST_CASE("The Streamer's program is checked before anything runs", "[cycle][str
                         l2_feed(1, kTileB, 4), l2_release(0, kTileA), l2_release(1, kTileB),
                         l2_move(0, a1, kA, kRow, 4), l2_move(1, b1, kB, kRow, 4), l2_feed(0, a1, 4),
                         l2_feed(1, b1, 4), l2_release(0, a1), l2_release(1, b1)};
-    const StreamerCommand first{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true};
-    const StreamerCommand second{{0, a1, 0, 4}, {1, b1, 0, 4}, 16, true, true};
+    const StreamerCommand first{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true, std::nullopt};
+    const StreamerCommand second{{0, a1, 0, 4}, {1, b1, 0, 4}, 16, true, true, std::nullopt};
     CHECK_NOTHROW(check_feeds({first, second}, two));
     CHECK_THROWS_WITH(check_feeds({second, first}, two),
                       ContainsSubstring("slot 0: read 0 is of A[1,0,0] by the commands, of A[0,0,0] by the L2"));
@@ -420,13 +420,13 @@ TEST_CASE("The Streamer's program is checked before anything runs", "[cycle][str
                           l2_feed(1, kTileB, 4), l2_release(0, kTileA), l2_release(1, kTileB),
                           l2_move(0, a1, kA, kRow, 4), l2_move(2, b1, kB, kRow, 4), l2_feed(0, a1, 4),
                           l2_feed(2, b1, 4), l2_release(0, a1), l2_release(2, b1)};
-    const StreamerCommand x{{0, kTileA, 0, 4}, {2, b1, 0, 4}, 16, true, true};
-    const StreamerCommand y{{0, a1, 0, 4}, {1, kTileB, 0, 4}, 16, true, true};
+    const StreamerCommand x{{0, kTileA, 0, 4}, {2, b1, 0, 4}, 16, true, true, std::nullopt};
+    const StreamerCommand y{{0, a1, 0, 4}, {1, kTileB, 0, 4}, 16, true, true, std::nullopt};
     CHECK_THROWS_WITH(check_feeds({x, y}, three),
                       ContainsSubstring("the schedule cannot complete: the Streamer waits at command 0") &&
                           ContainsSubstring("the BlockMover at action 6 (Move A[1,0,0] in slot 0)"));
-    const StreamerCommand x_ok{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true};
-    const StreamerCommand y_ok{{0, a1, 0, 4}, {2, b1, 0, 4}, 16, true, true};
+    const StreamerCommand x_ok{{0, kTileA, 0, 4}, {1, kTileB, 0, 4}, 16, true, true, std::nullopt};
+    const StreamerCommand y_ok{{0, a1, 0, 4}, {2, b1, 0, 4}, 16, true, true, std::nullopt};
     CHECK_NOTHROW(check_feeds({x_ok, y_ok}, three));
     // A Writeback is a consumer the Release waits for, as the L2 counts it.
     const L2Program wb{l2_move(0, kTileA, kA, kRow, 4), l2_move(1, kTileB, kB, kRow, 4), l2_feed(0, kTileA, 4),

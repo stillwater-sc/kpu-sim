@@ -255,3 +255,12 @@ kpu_set_target_options(test_cycle_pe_array)
 set_target_properties(test_cycle_pe_array PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_pe_array COMMAND test_cycle_pe_array)
 set_tests_properties(test_cycle_pe_array PROPERTIES LABELS "cycle;array;compute;v0.10")
+
+# Step 2d (#545): the north result FIFOs and the Combiner, L3 to L3.
+add_executable(test_cycle_combiner test_cycle_combiner.cpp)
+target_link_libraries(test_cycle_combiner PRIVATE Catch2::Catch2WithMain kpu_program)
+target_include_directories(test_cycle_combiner PRIVATE ${CMAKE_SOURCE_DIR}/include)
+kpu_set_target_options(test_cycle_combiner)
+set_target_properties(test_cycle_combiner PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_combiner COMMAND test_cycle_combiner)
+set_tests_properties(test_cycle_combiner PROPERTIES LABELS "cycle;combiner;compute;v0.10")

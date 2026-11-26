@@ -12,6 +12,10 @@
 // writes each: one whose bank has no port left this clock waits, and so does every request behind
 // it (a stall, counted on its bank).
 //
+// TWO WRITERS: the BlockMover's Moves and the Combiner's result rows (connect_combiner, #545). They
+// share the banks' write ports, the Combiner's first: the result path cannot wait, so the
+// BlockMover writes in the ports it leaves free, as in the RTL.
+//
 // TWO READERS: the BlockMover's Writebacks and the Streamer's commands (connect_streamer), each with
 // its own request and data links, served in its own order. They share the banks' read ports: each
 // clock the readers take turns at the ports, the first in turn alternating clock by clock.
@@ -27,8 +31,9 @@
 // SLOTS follow #387's protocol (timing/slot_pool.hpp, l2_program.hpp): a Move's first row ACQUIREs
 // the slot, its last SIGNALs it READY and sends the Streamer the tile-ready token (SlotReady); a
 // consumer's first read (a Writeback's, or a Streamer command's of one operand) TAKEs it (READING)
-// and its last row's departure is DONE; a Release frees it and pushes its credit back to the
-// BlockMover. A row of
+// and its last row's departure is DONE; a Release frees it and pushes its credit to the slot's next
+// producer: the BlockMover for a Move, the Streamer for a Result (l2_program.hpp). A Result's rows
+// (the Combiner's) ACQUIRE and SIGNAL the slot as a Move's do. A row of
 // another tile into a live slot, or a transition from the wrong state, is a SlotFault. A read waits,
 // with no fault, until its slot holds its tile, READY: the tile-ready token. The L2 executes the
 // program's Releases in order, one at a time; each waits until its slot is READY with its tile and
@@ -97,14 +102,22 @@ public:
         feeds_.assign(cfg.slots, {});
         for (std::size_t i = 0; i < program.size(); ++i) {
             const L2Action& a = program[i];
-            if (a.kind == L2Action::Kind::Move) {
+            if (is_producer(a.kind)) {
                 consumers[a.slot] = 0;
                 feeds_[a.slot].push_back(0);
             } else if (a.kind == L2Action::Kind::Writeback || a.kind == L2Action::Kind::Feed) {
                 ++consumers[a.slot];
                 if (a.kind == L2Action::Kind::Feed) ++feeds_[a.slot].back();
+            } else {
+                // Its credit goes to the slot's next producer: the Streamer's for a Result.
+                bool to_streamer = false;
+                for (std::size_t n = i + 1; n < program.size(); ++n)
+                    if (program[n].slot == a.slot && is_producer(program[n].kind)) {
+                        to_streamer = program[n].kind == L2Action::Kind::Result;
+                        break;
+                    }
+                releases_.push_back({i, a.slot, a.tile, consumers[a.slot], to_streamer});
             }
-            else releases_.push_back({i, a.slot, a.tile, consumers[a.slot]});
         }
         clear();
     }
@@ -119,10 +132,17 @@ public:
     }
     // The Streamer's side (#543). reads: its commands' row requests; data: their rows back; ready:
     // the tile-ready tokens.
-    void connect_streamer(Link<L2RowRead>& reads, Link<L2RowData>& data, Link<SlotReady>& ready) {
+    // credits: the result slots' credits, for the Streamer's commands that produce results (#545).
+    void connect_streamer(Link<L2RowRead>& reads, Link<L2RowData>& data, Link<SlotReady>& ready,
+                          Link<SlotCredit>* credits = nullptr) {
         readers_[1].reads = &reads;
         readers_[1].data = &data;
         ready_ = &ready;
+        st_credits_ = credits;
+    }
+    // The Combiner's result rows (#545).
+    void connect_combiner(Link<L2RowWrite>& writes) {
+        result_writes_ = &writes;
     }
 
     void evaluate(Cycle now) override {
@@ -156,20 +176,23 @@ public:
             }
         }
 
-        // Writes, in arrival order, while the head's bank has a write port this clock.
-        while (writes_->can_pop(now)) {
-            const L2RowWrite& w = writes_->peek(now);
-            check_row(now, w.slot, w.row, "the write of " + w.tile.to_string());
-            const std::uint32_t b = bank(w.slot, w.row);
-            if (writes_now_[b] == config_.write_ports) {
-                ++banks_[b].stalls;
-                waiting(Stall::BankBusy);
-                break;
+        // Writes, each writer's in arrival order, while the head's bank has a write port this clock:
+        // the Combiner's first, then the BlockMover's.
+        for (Link<L2RowWrite>* writes : {result_writes_, writes_}) {
+            while (writes && writes->can_pop(now)) {
+                const L2RowWrite& w = writes->peek(now);
+                check_row(now, w.slot, w.row, "the write of " + w.tile.to_string());
+                const std::uint32_t b = bank(w.slot, w.row);
+                if (writes_now_[b] == config_.write_ports) {
+                    ++banks_[b].stalls;
+                    waiting(Stall::BankBusy);
+                    break;
+                }
+                write(now, writes->pop(now));
+                ++writes_now_[b];
+                ++banks_[b].writes;
+                moved = true;
             }
-            write(now, writes_->pop(now));
-            ++writes_now_[b];
-            ++banks_[b].writes;
-            moved = true;
         }
 
         // Each reader's reads, in its arrival order, while the head's slot holds its tile and its bank
@@ -193,11 +216,15 @@ public:
             const Release& c = releases_[head_];
             if (pool_.state(c.slot) == State::Ready && pool_.owner(c.slot) == c.tile &&
                 consumers_done_[c.slot] == c.consumers) {
-                if (credits_->can_push(now)) {
+                Link<SlotCredit>* to = c.to_streamer ? st_credits_ : credits_;
+                if (!to)
+                    throw std::logic_error(where(now) + ": slot " + std::to_string(c.slot) +
+                                           "'s next producer is a Result, and no Streamer takes its credit");
+                if (to->can_push(now)) {
                     pool_.release(c.slot, c.tile);
                     slots_[c.slot] = Slot{};
                     consumers_done_[c.slot] = 0;
-                    credits_->push(now, SlotCredit{++credit_id_, c.slot});
+                    to->push(now, SlotCredit{++credit_id_, c.slot});
                     counters().complete();
                     ++head_;
                     moved = true;
@@ -328,6 +355,7 @@ private:
         std::uint32_t slot;
         TileID tile;
         std::uint32_t consumers;   // the tile's Writebacks and Feeds before the Release
+        bool to_streamer;          // its credit goes to the Streamer: the slot's next producer is a Result
     };
     struct Slot {
         TileID tile{};
@@ -472,6 +500,8 @@ private:
     Link<L2RowWrite>* writes_ = nullptr;
     Link<SlotCredit>* credits_ = nullptr;
     Link<SlotReady>* ready_ = nullptr;
+    Link<SlotCredit>* st_credits_ = nullptr;
+    Link<L2RowWrite>* result_writes_ = nullptr;
 };
 
 }  // namespace sw::kpu::cycle

@@ -16,7 +16,14 @@
 //     CAM): it waits for its tiles, never reads early. A token admits its residency's Feeds, one per
 //     command, and is dropped when they are spent: it never admits a later residency of the tile;
 //   - the previous command's interval has passed: a >= a_prev + I_prev, I = max(K, h, w). This is
-//     what keeps the L1 credit: lane m's next block lands in the clock its last element leaves.
+//     what keeps the L1 credit: lane m's next block lands in the clock its last element leaves;
+//   - a command that produces a result tile (#545) holds its result slot's credit, and spends it as
+//     it starts: the RTL's ACQUIRE as the COMPUTE starts. The L2 returns the credit when the slot
+//     is released, and the Combiner writes the tile's rows (combiner.hpp);
+//   - a command that ends a reduction (and so launches results north) keeps the RTL's DRAIN RULE
+//     (streamer.py): each sets a countdown of K + 2R - 2, and the next fires only when its own K
+//     covers what is left. Their results then leave the array 2R - 1 clocks apart or more, and the
+//     north links never collide.
 //
 // ITS SCHEDULE is the RTL's, built as state: read slot m (A row m if m < h, B row m if m < w) goes to
 // L2 at a + 1 + m. Each row returns through the Streamer's read pipeline, `read_delay` (D) clocks
@@ -40,6 +47,7 @@
 #include <sw/kpu/cycle/compute/l1_lanes.hpp>
 #include <sw/kpu/cycle/compute/l2_program.hpp>
 #include <sw/kpu/cycle/link.hpp>
+#include <sw/kpu/cycle/memory/l3_program.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -61,9 +69,22 @@ struct StreamerCommand {
         std::uint32_t row = 0;     // lane m reads the slot's row `row + m`
         std::uint32_t lanes = 0;   // h for A, w for B
     };
+    // What the Combiner applies as it writes a result row (combiner.hpp): bias[j] added to column j
+    // (none if empty), then ReLU.
+    struct Epilogue {
+        std::vector<std::int32_t> bias;
+        bool relu = false;
+    };
+    // The command's result tile: h x w int32, into slot `slot` as `tile`.
+    struct Result {
+        std::uint32_t slot = 0;
+        TileID tile{};
+        Epilogue epilogue{};
+    };
     Operand a, b;
     std::uint32_t k = 0;                // elements per lane
     bool first = true, last = true;     // the reduction chain's first and last command
+    std::optional<Result> result;       // a reduction-ending command's tile, written by the Combiner
 };
 using StreamerProgram = std::vector<StreamerCommand>;
 
@@ -80,6 +101,9 @@ public:
         // Added to every interval, for the tests of the credit only: a negative value fires commands
         // early, and the lanes must fault.
         std::int32_t interval_adjust = 0;
+        // Added to the drain rule's countdown, for the tests of the north drain only: -1 lets
+        // results leave 2R - 2 clocks apart, and the array must fault.
+        std::int32_t drain_adjust = 0;
     };
     // A command's clocks: when it fired and when its last row loaded.
     struct Record {
@@ -93,7 +117,9 @@ public:
         std::uint32_t lane, command;
     };
 
-    Streamer(std::string name, Domain& d, Config cfg, StreamerProgram program)
+    // `l2`: the L2's program, which says the result slots whose credit the Streamer holds at the
+    // start (those whose first producer is a Result).
+    Streamer(std::string name, Domain& d, Config cfg, StreamerProgram program, const L2Program& l2 = {})
         : Component(std::move(name), d),
           config_(cfg),
           program_(std::move(program)),
@@ -103,13 +129,16 @@ public:
             throw std::invalid_argument("cycle::Streamer " + this->name() +
                                         ": the lanes, slots, rows and the read delay must be positive");
         validate(program_);
+        initial_.assign(cfg.slots, false);
+        for (std::uint32_t s = 0; s < cfg.slots; ++s) initial_[s] = streamer_holds_at_start(l2, s);
         clear();
     }
 
     // reads: row requests to L2; data: the rows back; ready: L2's tile-ready tokens; a_out, b_out:
-    // one link per lane into the array.
+    // one link per lane into the array; credits: the result slots' credits back from L2.
     void connect(Link<L2RowRead>& reads, Link<L2RowData>& data, Link<SlotReady>& ready,
-                 std::vector<Link<L1Element>*> a_out, std::vector<Link<L1Element>*> b_out) {
+                 std::vector<Link<L1Element>*> a_out, std::vector<Link<L1Element>*> b_out,
+                 Link<SlotCredit>* credits = nullptr) {
         if (a_out.size() != config_.a_lanes || b_out.size() != config_.b_lanes)
             throw std::invalid_argument("cycle::Streamer " + name() + ": " + std::to_string(a_out.size()) + " A and " +
                                         std::to_string(b_out.size()) + " B lane links, for " +
@@ -120,6 +149,7 @@ public:
         ready_ = &ready;
         a_out_ = std::move(a_out);
         b_out_ = std::move(b_out);
+        credits_ = credits;
     }
 
     void evaluate(Cycle now) override {
@@ -136,6 +166,14 @@ public:
                                             ? ", which still holds " + tokens_[t.slot]->tile.to_string() + "'s"
                                             : std::string()));
             tokens_[t.slot] = Token{t.tile, t.feeds};
+        }
+        // The result slots' credits, back from their Releases.
+        while (credits_ && credits_->can_pop(now)) {
+            const SlotCredit c = credits_->pop(now);
+            if (c.slot >= config_.slots || held_[c.slot])
+                throw std::logic_error(where(now) + ": a credit for slot " + std::to_string(c.slot) + ", which " +
+                                       (c.slot >= config_.slots ? "does not exist" : "it already holds"));
+            held_[c.slot] = true;
         }
         // Rows back from L2, in the order they were asked for, into the read pipeline.
         while (data_->can_pop(now)) {
@@ -193,22 +231,27 @@ public:
             pending_.pop_front();
             moved = true;
         }
-        // The head command, when its tiles are ready and the previous command's interval has passed.
-        bool waiting_for_tiles = false;
+        // The head command, when its tiles are ready, its result slot's credit is held, the previous
+        // command's interval has passed and, if it ends a reduction, the drain rule allows it.
+        std::optional<Stall> wait;
         if (head_ < program_.size()) {
             const StreamerCommand& c = program_[head_];
             const bool interval = !last_ || std::int64_t(now) >= std::int64_t(last_->accepted) + last_->interval +
                                                                      config_.interval_adjust;
             const bool tiles = holds(c.a) && holds(c.b);
-            if (interval && tiles) {
+            const bool slot = !c.result || held_[c.result->slot];
+            const bool drain = !c.last || std::int64_t(c.k) >= drain_left(now);
+            if (interval && tiles && slot && drain) {
                 fire(now, c);
                 moved = true;
             } else if (!tiles) {
-                waiting_for_tiles = true;
+                wait = Stall::NoData;
+            } else if (!slot) {
+                wait = Stall::NoCredit;
             }
         }
         if (moved || !pending_.empty() || !awaited_.empty() || !a_.empty() || !b_.empty()) counters().busy();
-        else if (waiting_for_tiles) counters().stall(Stall::NoData);
+        else if (wait) counters().stall(*wait);
     }
 
     [[nodiscard]] bool idle() const override {
@@ -259,6 +302,8 @@ public:
     // The longest a row took to come back from L2, in the Streamer's clocks: the least read delay
     // this run could have kept.
     [[nodiscard]] Cycle max_round_trip() const { return max_round_trip_; }
+    // Holds slot `slot`'s credit: free for the result tile of a command still to fire.
+    [[nodiscard]] bool holds_credit(std::uint32_t slot) const { return held_.at(slot); }
 
     // The commands' elements per lane, at most: one L2 row's.
     static std::uint32_t elements_per_row(const Config& c) {
@@ -291,6 +336,17 @@ private:
     struct Last {
         Cycle accepted;
         std::int64_t interval;
+    };
+    // The drain rule's countdown: K + 2R - 2 at the clock after a reduction-ending command fired,
+    // one less each clock after.
+    [[nodiscard]] std::int64_t drain_left(Cycle now) const {
+        if (!drain_) return 0;
+        const std::int64_t gone = std::int64_t(now) - std::int64_t(drain_->accepted) - 1;
+        return std::max<std::int64_t>(0, drain_->wait - gone);
+    }
+    struct Drain {
+        Cycle accepted;
+        std::int64_t wait;
     };
 
     [[nodiscard]] std::string where(Cycle now) const {
@@ -328,6 +384,18 @@ private:
             if (c.k == 0 || c.k > kb)
                 throw std::invalid_argument(at + ": K = " + std::to_string(c.k) + ", a row holds 1 to " + std::to_string(kb) +
                                             " elements");
+            if (c.result) {
+                const StreamerCommand::Result& r = *c.result;
+                if (!c.last) throw std::invalid_argument(at + ": a result tile on a command that does not end its chain");
+                if (r.slot >= config_.slots)
+                    throw std::invalid_argument(at + ": its result in slot " + std::to_string(r.slot) + ", there are " +
+                                                std::to_string(config_.slots));
+                if (r.slot == c.a.slot || r.slot == c.b.slot)
+                    throw std::invalid_argument(at + ": its result in an operand's slot");
+                if (!r.epilogue.bias.empty() && r.epilogue.bias.size() != c.b.lanes)
+                    throw std::invalid_argument(at + ": a bias of " + std::to_string(r.epilogue.bias.size()) +
+                                                " for " + std::to_string(c.b.lanes) + " columns");
+            }
             if (c.first == open)
                 throw std::invalid_argument(at + (open ? ": opens a chain inside the open one before it"
                                                        : ": continues a chain no command opened"));
@@ -355,6 +423,8 @@ private:
         loads_left_[n] = c.a.lanes + c.b.lanes;
         records_[n].accepted = now;
         last_ = Last{now, std::int64_t(std::max({c.k, c.a.lanes, c.b.lanes}))};
+        if (c.last) drain_ = Drain{now, std::int64_t(c.k) + 2 * std::int64_t(config_.a_lanes) - 2 + config_.drain_adjust};
+        if (c.result) held_[c.result->slot] = false;   // the ACQUIRE, as the producing command starts
         counters().accept();
         ++head_;
     }
@@ -382,6 +452,8 @@ private:
         records_.assign(program_.size(), Record{});
         issues_.clear();
         last_.reset();
+        drain_.reset();
+        held_ = initial_;
         head_ = 0;
         id_ = 0;
         max_round_trip_ = 0;
@@ -396,12 +468,15 @@ private:
     std::vector<Record> records_;
     std::vector<Issue> issues_;
     std::optional<Last> last_;
+    std::optional<Drain> drain_;
+    std::vector<bool> initial_, held_;   // by slot: the result slots' credits, at the start and now
     std::size_t head_ = 0;
     std::uint64_t id_ = 0;
     Cycle max_round_trip_ = 0;
     Link<L2RowRead>* reads_ = nullptr;
     Link<L2RowData>* data_ = nullptr;
     Link<SlotReady>* ready_ = nullptr;
+    Link<SlotCredit>* credits_ = nullptr;
     std::vector<Link<L1Element>*> a_out_, b_out_;
 };
 
@@ -413,9 +488,12 @@ private:
 //      operands, so one that needs a tile whose Move is queued behind another slot's Release, which
 //      waits for this very command, never fires. The check steps the protocol without time, as the
 //      components execute it: the BlockMover's Moves and Writebacks in program order (a Move waits
-//      for its slot to be free), the L2's Releases in program order (each waits for its residency's
-//      consumers), and the commands in order (each waits for both operands' residencies, with a
-//      Feed left on each). Whatever cannot proceed when nothing else can is a deadlock.
+//      for its slot's credit), the L2's Releases in program order (each waits for its residency's
+//      consumers, and passes the slot's credit to its next producer), and the commands in order
+//      (each waits for both operands' residencies, with a Feed left on each, and a producing one
+//      for its result slot's credit). A slot's credit starts with its first producer's owner, as
+//      the components' do (CodeRabbit, #595). Whatever cannot proceed when nothing else can is a
+//      deadlock.
 // Raises std::invalid_argument naming the slot and the first read that differs, or where each of
 // the three is stuck.
 inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
@@ -454,14 +532,16 @@ inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
         std::uint32_t feeds = 0, consumers = 0;   // Feeds left to admit, consumers left before the Release
     };
     std::vector<std::size_t> mover, releases;    // the program's indices, in order
-    std::map<std::size_t, Residency> of_move;    // each Move's residency, from the program
+    std::map<std::size_t, Residency> of_move;    // each producer's residency, from the program
     std::map<std::uint32_t, std::size_t> last_move;
+    std::map<std::uint32_t, std::vector<std::size_t>> results;   // by slot: its Results, in order
     for (std::size_t i = 0; i < l2.size(); ++i) {
         const L2Action& a = l2[i];
-        if (a.kind == L2Action::Kind::Move) {
+        if (is_producer(a.kind)) {
             of_move[i] = Residency{a.tile, 0, 0};
             last_move[a.slot] = i;
         }
+        if (a.kind == L2Action::Kind::Result) results[a.slot].push_back(i);
         if (a.kind == L2Action::Kind::Move || a.kind == L2Action::Kind::Writeback) mover.push_back(i);
         if (a.kind == L2Action::Kind::Release) releases.push_back(i);
         if ((a.kind == L2Action::Kind::Feed || a.kind == L2Action::Kind::Writeback) && last_move.count(a.slot)) {
@@ -469,18 +549,62 @@ inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
             if (a.kind == L2Action::Kind::Feed) ++of_move[last_move[a.slot]].feeds;
         }
     }
+    // Each producing command's Result: the n-th command producing into a slot is its n-th Result.
+    std::vector<std::optional<std::size_t>> produces(commands.size());
+    {
+        std::map<std::uint32_t, std::size_t> n;
+        for (std::size_t i = 0; i < commands.size(); ++i) {
+            if (!commands[i].result) continue;
+            const StreamerCommand::Result& res = *commands[i].result;
+            const std::vector<std::size_t>& v = results[res.slot];
+            const std::size_t at = n[res.slot]++;
+            const std::string slot = "check_feeds: slot " + std::to_string(res.slot) + ": ";
+            if (at >= v.size())
+                throw std::invalid_argument(slot + "command " + std::to_string(i) + "'s result tile " +
+                                            res.tile.to_string() + " has no Result in the L2 program");
+            const L2Action& a = l2[v[at]];
+            if (!(a.tile == res.tile) || a.rows != commands[i].a.lanes)
+                throw std::invalid_argument(slot + "command " + std::to_string(i) + "'s result is " +
+                                            res.tile.to_string() + ", " + std::to_string(commands[i].a.lanes) +
+                                            " rows; the L2 program's Result is " + a.tile.to_string() + ", " +
+                                            std::to_string(a.rows) + " rows");
+            produces[i] = v[at];
+        }
+        for (const auto& [slot, v] : results)
+            if (n[slot] != v.size())
+                throw std::invalid_argument("check_feeds: slot " + std::to_string(slot) + ": the L2 program has " +
+                                            std::to_string(v.size()) + " Results, the commands produce " +
+                                            std::to_string(n[slot]));
+    }
     std::map<std::uint32_t, Residency> live;   // by slot
+    // Each slot's credit: the BlockMover's, the Streamer's, or spent on a live residency.
+    enum class Owner { Mover, Streamer, Spent };
+    std::map<std::uint32_t, Owner> credit;
+    const auto owner = [&](std::uint32_t slot) {
+        const auto it = credit.find(slot);
+        if (it != credit.end()) return it->second;
+        return credit[slot] = streamer_holds_at_start(l2, slot) ? Owner::Streamer : Owner::Mover;
+    };
+    // The owner a Release at program index `i` passes its slot's credit to: the next producer's.
+    const auto next_owner = [&](std::size_t i) {
+        for (std::size_t n = i + 1; n < l2.size(); ++n)
+            if (l2[n].slot == l2[i].slot && is_producer(l2[n].kind))
+                return l2[n].kind == L2Action::Kind::Result ? Owner::Streamer : Owner::Mover;
+        return Owner::Mover;
+    };
     std::size_t m = 0, r = 0, c = 0;
     for (bool progress = true; progress;) {
         progress = false;
         while (m < mover.size()) {   // the BlockMover
             const L2Action& a = l2[mover[m]];
             if (a.kind == L2Action::Kind::Move) {
-                if (live.count(a.slot)) break;   // waits for the slot's credit
+                if (owner(a.slot) != Owner::Mover) break;   // waits for the slot's credit
+                credit[a.slot] = Owner::Spent;
                 live[a.slot] = of_move[mover[m]];
-            } else {   // a Writeback: its Move is before it in the mover's order
-                if (!live.count(a.slot)) break;
-                --live[a.slot].consumers;
+            } else {   // a Writeback: of the residency live in its slot, once its producer has filled it
+                const auto it = live.find(a.slot);
+                if (it == live.end() || !(it->second.tile == a.tile)) break;
+                --it->second.consumers;
             }
             ++m;
             progress = true;
@@ -490,6 +614,7 @@ inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
             const auto it = live.find(a.slot);
             if (it == live.end() || !(it->second.tile == a.tile) || it->second.consumers != 0) break;
             live.erase(it);
+            credit[a.slot] = next_owner(releases[r]);
             ++r;
             progress = true;
         }
@@ -500,9 +625,14 @@ inline void check_feeds(const StreamerProgram& commands, const L2Program& l2) {
                 return it != live.end() && it->second.tile == o.tile && it->second.feeds > 0;
             };
             if (!ready(k.a) || !ready(k.b)) break;
+            if (k.result && owner(k.result->slot) != Owner::Streamer) break;   // waits for its result slot's credit
             for (const StreamerCommand::Operand* o : {&k.a, &k.b}) {
                 --live[o->slot].feeds;
                 --live[o->slot].consumers;
+            }
+            if (k.result) {   // its Result's residency
+                credit[k.result->slot] = Owner::Spent;
+                live[k.result->slot] = of_move[*produces[c]];
             }
             ++c;
             progress = true;

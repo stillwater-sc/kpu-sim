@@ -300,7 +300,7 @@ TEST_CASE("The whole path, L3 to the array: one command's int32 results exact, a
         for (std::uint32_t n = 0; n < blocks; ++n) {
             p.push_back(l2_feed(0, ta, 4));
             p.push_back(l2_feed(1, tb, 4));
-            cmds.push_back({{0, ta, n * 4, 4}, {1, tb, n * 4, 4}, 16, n == 0, n + 1 == blocks});
+            cmds.push_back({{0, ta, n * 4, 4}, {1, tb, n * 4, 4}, 16, n == 0, n + 1 == blocks, std::nullopt});
         }
         p.push_back(l2_release(0, ta));
         p.push_back(l2_release(1, tb));
