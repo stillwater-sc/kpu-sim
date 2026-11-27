@@ -26,3 +26,8 @@ tests/program/deploy/*.json -text
 # retired (kpu-run-csp-programs step 4e): its columns are binary and its manifest gives byte
 # offsets into them, so git must never transform any of it.
 tests/program/tflow/*.tflow/* -text
+
+# The level-2 CSP samples (#605): test_csp_distributed edits their text line by line to build its
+# refusals, so a CRLF rewrite on a Windows checkout broke that test there and nowhere else (CI on
+# #631). The reader itself accepts CRLF, and test_csp_distributed checks that separately.
+tests/program/csp/distributed/*.dcsp -text

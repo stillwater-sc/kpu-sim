@@ -197,3 +197,13 @@ TEST_CASE("an accumulating call merges into a live result and names no channel",
                                  "    call gemm(l2[1]:0, l2[1]:1) acc l2[0]:2;\n")),
                ContainsSubstring("a call accumulates into its own compute tile's L2"));
 }
+
+TEST_CASE("a program with CRLF line endings reads as the same program", "[program][csp][distributed]") {
+    const std::string lf = read_file(std::string(kDir) + "gemm_one_tile_node1.dcsp");
+    std::string crlf;
+    for (char c : lf) {
+        if (c == '\n') crlf += '\r';
+        crlf += c;
+    }
+    CHECK(print_distributed(parse_distributed(crlf)) == print_distributed(parse_distributed(lf)));
+}
