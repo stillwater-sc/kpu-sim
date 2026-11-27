@@ -176,6 +176,15 @@ set_tests_properties(test_fabric_pipeline PROPERTIES
 
 # L2 staging: `stage ... in l2 { }` at L-B, in the trace and at every level
 # (docs/plans/l2-reuse-and-fabric-pipeline-view.md step 3)
+kpu_add_component_test(test_csp_distributed "program"
+    test_csp_distributed.cpp
+)
+
+set_tests_properties(test_csp_distributed PROPERTIES
+    LABELS "program;csp;distributed"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 kpu_add_component_test(test_csp_l2_staging "program"
     test_csp_l2_staging.cpp
 )

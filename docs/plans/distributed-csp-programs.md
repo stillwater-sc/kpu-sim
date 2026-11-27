@@ -152,6 +152,17 @@ Every process runs its own list. A Push waits for its channel's credit and spend
 freed slot's credit, on the credit mesh, to that slot's producer. There is no global order and no shared
 sequencer: the leaf Calls' releases pace everything above them.
 
+**As built (#605).** `include/sw/kpu/program/csp/distributed.hpp` and the text form `dcsp 1`
+(`csp/lang/distributed_text.hpp`) refine this sketch in three ways:
+- **A channel owns its slots.** Each channel lists the receiving pool's slots it owns, so a slot's credit
+  always returns to one sender. A channel into a DMA engine (a Store's path out of an edge port) has
+  `credits` instead: the store buffer.
+- **No Release action.** Every write that fills a slot states the reads its residency serves
+  (`reads n`, with 0 holding the tile to the end). The n-th read frees the slot and returns its credit,
+  as level 1 records the consumers per residency. The actions are Load, Push, Feed, Drain, Store and
+  Call; an accumulating Call merges into a live result and spends no credit.
+- **The values' source comes with L-B (#606).** A program declares its operands as level 1 does.
+
 ### 3.3 The checker
 
 A static check, run on every generated program before any simulation:
@@ -217,7 +228,8 @@ A "needs" against one hop or eight movers goes to the user before the NoC rework
    writes it in `kpu-structure` v1, so the floorplan viewer draws the nodes, the data mesh and the credit
    mesh (`include/sw/kpu/program/platform/`, `src/program/floorplan.cpp`).
 2. **The level-2 program**: `include/sw/kpu/program/csp/distributed.hpp` (§3.2), its printer, and a text form
-   for hand-written programs, so a person can write and read one (`csp/lang/`).
+   for hand-written programs, so a person can write and read one (`csp/lang/`). **Done: #605**
+   (`dcsp 1`, samples in `tests/program/csp/distributed/`).
 3. **L-B for level 2**: `csp/distributed_behavioral.hpp` executes the processes with bounded channels and
    computes the values. Checks D5 and D6.
 4. **The checker**: `csp/distributed_check.hpp` (D1–D4), and `kpu-csp-check --distributed`.
@@ -249,8 +261,8 @@ P1's values at L-B equal level 1's, bit for bit (the same computation, distribut
   credit.
 - **One flow, one CSP.** A mover runs exactly one channel's sends; no flow shares a CSP.
 - **The program places.** Every packet names its destination slot; no receiver chooses one.
-- **Credits start at the leaves.** Every slot's credit is returned by its consumer's Release to its one
-  producer, on the credit mesh.
+- **Credits start at the leaves.** Every slot's credit is returned, when its residency's last read is done,
+  to its one producer, on the credit mesh.
 - **Values answer to L-B.** A distributed program computes exactly what its level-1 form computes.
 
 ## 7. Decisions

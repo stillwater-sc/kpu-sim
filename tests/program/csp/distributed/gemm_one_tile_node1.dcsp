@@ -1,0 +1,42 @@
+dcsp 1
+// One output tile on node 1 of a 2x2 mesh: A and B load into node 1's L3, the feed movers copy
+// them into its compute tile's L2, one gemm, the drain mover brings C back to L3, and node 1's
+// north send mover pushes it out of its edge port to the DMA engine that stores it.
+program gemm_one_tile_node1 machine mesh(2x2) {
+  tensor A[16,16] int8 tile 16x16 in;
+  tensor B[16,16] int8 tile 16x16 in;
+  tensor C[16,16] int32 tile 16x16 out;
+
+  channel ld : dma[0, 0] -> l3[1] slots 0, 1;
+  channel fa : bm.a[1] -> l2[1] slots 0;
+  channel fb : bm.b[1] -> l2[1] slots 1;
+  channel cc : cf[1] -> l2[1] slots 2;
+  channel dc : bm.c[1] -> l3[1] slots 2;
+  channel st : bm.N[1] -> dma[0, 0] credits 2;
+
+  process dma[0, 0] {
+    load A[0,0] to l3[1]:0 reads 1 via ld;
+    load B[0,0] to l3[1]:1 reads 1 via ld;
+    store C[0,0] via st;
+  }
+
+  process bm.a[1] {
+    feed A[0,0] from l3[1]:0 to l2[1]:0 reads 1 via fa;
+  }
+
+  process bm.b[1] {
+    feed B[0,0] from l3[1]:1 to l2[1]:1 reads 1 via fb;
+  }
+
+  process cf[1] {
+    call gemm(l2[1]:0, l2[1]:1) to C[0,0] at l2[1]:2 reads 1 via cc;
+  }
+
+  process bm.c[1] {
+    drain C[0,0] from l2[1]:2 to l3[1]:2 reads 1 via dc;
+  }
+
+  process bm.N[1] {
+    push C[0,0] from l3[1]:2 to dma[0, 0] via st;
+  }
+}

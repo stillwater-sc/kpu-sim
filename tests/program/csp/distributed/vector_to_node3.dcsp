@@ -1,0 +1,23 @@
+dcsp 1
+// One vector, traced by hand (docs/plans/retire-concurrent-timing-executor.md, track A): DRAM ->
+// controller 0's DMA engine -> the periphery -> edge node 0's L3, then one hop east to node 1 and
+// one hop south to node 3, the far corner of a 2x2 mesh. Each hop lands in the next node's L3.
+program vector_to_node3 machine mesh(2x2) {
+  tensor A[16,16] int8 tile 16x16 in;
+
+  channel ld0 : dma[0, 0] -> l3[0] slots 0;
+  channel e01 : bm.E[0] -> l3[1] slots 0;
+  channel s13 : bm.S[1] -> l3[3] slots 0;
+
+  process dma[0, 0] {
+    load A[0,0] to l3[0]:0 reads 1 via ld0;
+  }
+
+  process bm.E[0] {
+    push A[0,0] from l3[0]:0 to l3[1]:0 reads 1 via e01;
+  }
+
+  process bm.S[1] {
+    push A[0,0] from l3[1]:0 to l3[3]:0 reads 0 via s13;     // held at node 3 to the end
+  }
+}
