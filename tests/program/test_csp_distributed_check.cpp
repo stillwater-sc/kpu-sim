@@ -150,3 +150,32 @@ TEST_CASE("D4: slots fit, and each slot's reads and merges are the ones its resi
     CHECK_THAT(violations(wrong, "kpu_dmm_2x2.json"),
                ContainsSubstring("D4 slot l3[1]:0: A[1,0] is read from it, but no write places A[1,0] there"));
 }
+
+// ---- regressions from the review of #634
+
+TEST_CASE("D3: a store receives from its channel, and does not make it used", "[program][csp][distributed][check]") {
+    // The push out of the edge port removed: only the DMA engine's store names `st`.
+    std::string t = sample("gemm_one_tile_node1.dcsp");
+    t = with(t, "  process bm.N[1] {\n    push C[0,0] from l3[1]:2 to dma[0, 0] via st;\n  }\n", "");
+    t = with(t, "drain C[0,0] from l2[1]:2 to l3[1]:2 reads 1 via dc;", "drain C[0,0] from l2[1]:2 to l3[1]:2 reads 0 via dc;");
+    const std::string v = violations(t, "kpu_dmm_2x2.json");
+    CHECK_THAT(v, ContainsSubstring("D3 channel st is never used"));
+    // A push without its store, and a store without its push, are unmatched.
+    const std::string extra = with(sample("gemm_one_tile_node1.dcsp"), "    store C[0,0] via st;\n", "    store C[0,0] via st;\n    store C[0,0] via st;\n");
+    CHECK_THAT(violations(extra, "kpu_dmm_2x2.json"),
+               ContainsSubstring("D3 channel st delivers 1 tile(s) to dma[0, 0], which stores 2"));
+    CHECK(violations(sample("gemm_one_tile_node1.dcsp"), "kpu_dmm_2x2.json").empty());
+}
+
+TEST_CASE("D4: the residencies before a held one must have all their reads", "[program][csp][distributed][check]") {
+    // Two loads into one slot: the first declares a read nobody makes, the second is held.
+    std::string t = sample("vector_to_node3.dcsp");
+    t = with(t, "tensor A[16,16] int8 tile 16x16 in;", "tensor A[32,16] int8 tile 16x16 in;");
+    t = with(t, "  channel e01 : bm.E[0] -> l3[1] slots 0;\n", "");
+    t = with(t, "  channel s13 : bm.S[1] -> l3[3] slots 0;\n", "");
+    t = with(t, "    load A[0,0] to l3[0]:0 reads 1 via ld0;\n", "    load A[0,0] to l3[0]:0 reads 1 via ld0;\n    load A[1,0] to l3[0]:0 reads 0 via ld0;\n");
+    t = with(t, "  process bm.E[0] {\n    push A[0,0] from l3[0]:0 to l3[1]:0 reads 1 via e01;\n  }\n\n", "");
+    t = with(t, "  process bm.S[1] {\n    push A[0,0] from l3[1]:0 to l3[3]:0 reads 0 via s13;     // held at node 3 to the end\n  }\n", "");
+    CHECK_THAT(violations(t, "kpu_dmm_2x2.json"),
+               ContainsSubstring("D4 slot l3[0]:0: its residencies before the held one declare 1 read(s), and the program makes 0"));
+}

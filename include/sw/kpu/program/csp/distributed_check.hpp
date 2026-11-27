@@ -141,13 +141,28 @@ inline std::vector<DistributedViolation> check_distributed(const DistributedProg
     }
 
     // ---- D3 credits
+    // A channel is used by its sender's actions; a Store receives from its channel and does not count.
     std::set<std::size_t> used;
-    for (const Action2& a : p.actions)
-        if (a.channel != kNoChannel) used.insert(a.channel);
-    for (std::size_t i = 0; i < p.channels.size(); ++i)
+    std::map<std::size_t, std::size_t> delivered, stored;     // a channel into a DMA engine: pushes, stores
+    for (const Action2& a : p.actions) {
+        if (a.channel == kNoChannel) continue;
+        if (a.kind == Action2::Kind::Store) {
+            ++stored[a.channel];
+            continue;
+        }
+        used.insert(a.channel);
+        if (!a.to) ++delivered[a.channel];
+    }
+    for (std::size_t i = 0; i < p.channels.size(); ++i) {
+        const Channel2& c = p.channels[i];
         if (!used.count(i))
-            fail("D3", "channel " + p.channels[i].name + " is never used: its " + std::to_string(p.channels[i].credit_count()) +
+            fail("D3", "channel " + c.name + " is never used: its " + std::to_string(c.credit_count()) +
                            " credit(s) would be held by a flow that never sends");
+        else if (c.to == Channel2::To::Dma && delivered[i] != stored[i])
+            fail("D3", "channel " + c.name + " delivers " + std::to_string(delivered[i]) + " tile(s) to " + c.destination() +
+                           ", which stores " + std::to_string(stored[i]) +
+                           ": an unmatched store waits forever, an unmatched push holds a store-buffer credit");
+    }
 
     // ---- D4 placement
     const Dim l3_per_tile = d.l3.capacity_tiles && d.l3.tiles ? d.l3.capacity_tiles / *d.l3.tiles : 0;
@@ -200,6 +215,11 @@ inline std::vector<DistributedViolation> check_distributed(const DistributedProg
         if (!s.held && s.made != s.declared)
             fail("D4", w + ": its residencies declare " + std::to_string(s.declared) + " read(s), and the program makes " +
                            std::to_string(s.made));
+        // A held residency is the slot's last: the ones before it must have all their reads, or its
+        // write never gets the credit (the held one may take any number of reads after them).
+        if (s.held && s.made < s.declared)
+            fail("D4", w + ": its residencies before the held one declare " + std::to_string(s.declared) +
+                           " read(s), and the program makes " + std::to_string(s.made) + ", so the held write never gets its credit");
         if (s.merges_made != s.merges_declared)
             fail("D4", w + ": its results expect " + std::to_string(s.merges_declared) + " merge(s), and the program makes " +
                            std::to_string(s.merges_made));
