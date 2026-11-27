@@ -471,8 +471,9 @@ inline std::string mesh_problem(const DeviceSpecification& d) {
             return "periphery applies to the dmm_mesh topology, not '" + d.topology + "'";
         return {};
     }
-    if (!d.array.rows)
-        return "a dmm_mesh declares its array.rows and array.cols: the nodes of the mesh";
+    // Checked here, not only in validate(): MeshLayout::of calls this directly.
+    if (!d.array.rows || !d.array.cols || *d.array.rows == 0 || *d.array.cols == 0)
+        return "a dmm_mesh declares its array.rows and array.cols, both non-zero: the nodes of the mesh";
     const std::uint64_t nodes = static_cast<std::uint64_t>(*d.array.rows) * *d.array.cols;
     if (nodes != d.compute_tiles)
         return "a dmm_mesh of " + std::to_string(*d.array.rows) + "x" + std::to_string(*d.array.cols) +
@@ -488,8 +489,13 @@ inline std::string mesh_problem(const DeviceSpecification& d) {
     if (p.queue_blocks < 2)
         return "periphery.queue_blocks (" + std::to_string(p.queue_blocks) + ") must be at least two: "
                "one for the block, one for the bubble that keeps the ring moving";
+    // Declared, not defaulted: the naming map names controllers and their DMA engines only when
+    // the count is declared, and the periphery has to place every one of them.
+    if (!d.memory.controllers || *d.memory.controllers == 0)
+        return "a dmm_mesh declares memory.controllers: the periphery ring joins their DMA engines "
+               "to the edge ports";
     const std::uint64_t ports = 2ull * (*d.array.rows + *d.array.cols);
-    const Dim mcs = d.memory.controllers.value_or(1);
+    const Dim mcs = *d.memory.controllers;
     if (mcs > ports)
         return std::to_string(mcs) + " memory controllers, but the periphery has only " +
                std::to_string(ports) + " edge ports to place them between";

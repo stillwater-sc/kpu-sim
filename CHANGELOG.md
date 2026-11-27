@@ -23,8 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Names:** the naming map names `l3[t]/bm[0..7]` and the edge ports `noc/port[k]`. A mesh has no
     routers.
   - **The floorplan:** `kpu-floorplan` places every resource once and draws the mesh, credit, edge and
-    periphery wires. Its structure record has three networks, `mesh`, `credit` and `periphery`, and the
-    floorplan viewer draws each as a layer.
+    periphery wires. Its structure record has up to three networks: `mesh` (with the edge ports),
+    `periphery`, and `credit` when the mesh has more than one node. A record writes a network only
+    when it has links. Each mesh, credit and edge wire is written in both directions. The floorplan
+    viewer draws each network as a layer.
+  - **The record's origin:** both producers now write the structure record with its origin at the die's
+    lower-left, as `shared-structure-record.md` §2.2 defines it. Before, they wrote top-left, and the
+    viewer drew the floorplan upside down. `kpu_t4.structure.json` is regenerated.
   - **Fixtures:** `tests/program/deploy/kpu_dmm_{2x2,4x4}.json` and
     `tests/program/structure/kpu_dmm_4x4.structure.json`.
   - No level times the mesh yet; the NoC rework is #618.

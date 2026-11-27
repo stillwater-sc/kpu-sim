@@ -224,3 +224,126 @@ TEST_CASE("an imported mesh floorplan whose ring joins the wrong blocks is refus
     CHECK_THAT(validate_floorplan(fp, s), ContainsSubstring("periphery link"));
     CHECK_THAT(validate_floorplan(fp, s), ContainsSubstring("joins the wrong kinds of block"));
 }
+
+// ---- regressions from the review of #630
+
+TEST_CASE("MeshLayout refuses a mesh missing one of its dimensions, rather than reading it", "[program][platform][mesh]") {
+    DeviceSpecification d = dmm2x2().device(0);
+    d.array.cols.reset();                                  // rows declared, cols not: validate() is bypassed here
+    std::string why;
+    CHECK_FALSE(MeshLayout::of(d, &why).has_value());
+    CHECK_THAT(why, ContainsSubstring("declares its array.rows and array.cols, both non-zero"));
+    d.array.cols = 0;
+    CHECK_FALSE(MeshLayout::of(d, &why).has_value());
+}
+
+TEST_CASE("a dmm_mesh declares its memory controllers, so every one it places has a name", "[program][platform][mesh]") {
+    CHECK_THAT(problem([](auto& d) { d.memory.controllers.reset(); }), ContainsSubstring("declares memory.controllers"));
+    DeviceSpecification d = dmm2x2().device(0);
+    d.memory.controllers.reset();
+    std::string why;
+    CHECK_FALSE(MeshLayout::of(d, &why).has_value());
+    CHECK_THAT(why, ContainsSubstring("declares memory.controllers"));
+}
+
+TEST_CASE("every DMA engine keeps a positive width, however many a controller has", "[program][platform][mesh][floorplan]") {
+    DeploymentSpec s = dmm2x2();
+    s.device(0).dma.engines = 64;                          // 32 per controller: wider than the style's gaps allow
+    REQUIRE(s.validate().empty());
+    const SocFloorplan fp = generate_floorplan(s);
+    CHECK(validate_floorplan(fp, s).empty());
+    CHECK_NOTHROW(floorplan_from_json(floorplan_to_json(fp), s));
+    // The checkerboard's controllers share the rule.
+    DeploymentSpec t4 = read_spec_file(std::string(kDeploy) + "kpu_t4.json");
+    t4.device(0).dma.engines = 64;
+    REQUIRE(t4.validate().empty());
+    CHECK(validate_floorplan(generate_floorplan(t4), t4).empty());
+}
+
+TEST_CASE("an imported mesh floorplan must have exactly its layout's wires", "[program][platform][mesh][floorplan]") {
+    const DeploymentSpec s = dmm4x4();
+    const SocFloorplan base = generate_floorplan(s);
+    auto first = [](SocFloorplan& fp, NocLink::Kind k) -> NocLink& {
+        for (NocLink& l : fp.noc)
+            if (l.kind == k) return l;
+        FAIL("no link of that kind");
+        return fp.noc.front();
+    };
+    {   // two L3 tiles, but not neighbours
+        SocFloorplan fp = base;
+        first(fp, NocLink::Kind::Mesh).b = "dmm4x4/l3[15]";
+        CHECK_THAT(validate_floorplan(fp, s), ContainsSubstring("does not join one-hop neighbours of the mesh"));
+    }
+    {   // a ring segment from a stop to itself
+        SocFloorplan fp = base;
+        NocLink& l = first(fp, NocLink::Kind::Periphery);
+        l.b = l.a;
+        CHECK_THAT(validate_floorplan(fp, s), ContainsSubstring("does not join consecutive stops of the periphery ring"));
+    }
+    {   // an edge port wired to another node
+        SocFloorplan fp = base;
+        first(fp, NocLink::Kind::Edge).b = "dmm4x4/l3[5]";
+        CHECK_THAT(validate_floorplan(fp, s), ContainsSubstring("does not join an edge port to its own node"));
+    }
+    {   // a wire drawn twice, and a wire left out
+        SocFloorplan fp = base;
+        fp.noc.push_back(first(fp, NocLink::Kind::Credit));
+        CHECK_THAT(validate_floorplan(fp, s), ContainsSubstring("appears twice"));
+        SocFloorplan gap = base;
+        for (std::size_t i = 0; i < gap.noc.size(); ++i)
+            if (gap.noc[i].kind == NocLink::Kind::Periphery) { gap.noc.erase(gap.noc.begin() + static_cast<long>(i)); break; }
+        CHECK_THAT(validate_floorplan(gap, s), ContainsSubstring("is missing"));
+    }
+    {   // a mesh wire on a checkerboard
+        const DeploymentSpec t4 = read_spec_file(std::string(kDeploy) + "kpu_t4.json");
+        SocFloorplan fp = generate_floorplan(t4);
+        fp.noc.push_back({NocLink::Kind::Mesh, "t4/l3[0]", "t4/l3[1]", {{0, 0}, {1, 1}}});
+        CHECK_THAT(validate_floorplan(fp, t4), ContainsSubstring("is a dmm_mesh wire, and device \"t4\" is not a dmm_mesh"));
+    }
+    // The neighbour pair may be written either way round.
+    SocFloorplan swapped = base;
+    std::swap(first(swapped, NocLink::Kind::Mesh).a, first(swapped, NocLink::Kind::Mesh).b);
+    CHECK(validate_floorplan(swapped, s).empty());
+}
+
+TEST_CASE("the structure record states both directions of every mesh, credit and edge wire",
+          "[program][platform][mesh][floorplan]") {
+    const nlohmann::json rec = nlohmann::json::parse(floorplan_to_structure(generate_floorplan(dmm2x2())));
+    for (const char* net : {"mesh", "credit"}) {
+        std::set<std::pair<std::string, std::string>> dirs;
+        for (const auto& n : rec.at("networks"))
+            if (n.at("id") == net)
+                for (const auto& l : n.at("links")) dirs.insert({l.at("from").get<std::string>(), l.at("to").get<std::string>()});
+        INFO(net);
+        CHECK(dirs.count({"dmm2x2/l3[0]", "dmm2x2/l3[1]"}));
+        CHECK(dirs.count({"dmm2x2/l3[1]", "dmm2x2/l3[0]"}));
+        CHECK(dirs.count({"dmm2x2/l3[0]", "dmm2x2/l3[2]"}));
+        CHECK(dirs.count({"dmm2x2/l3[2]", "dmm2x2/l3[0]"}));
+    }
+    std::set<std::pair<std::string, std::string>> edge;
+    for (const auto& n : rec.at("networks"))
+        if (n.at("id") == "mesh")
+            for (const auto& l : n.at("links")) edge.insert({l.at("from").get<std::string>(), l.at("to").get<std::string>()});
+    CHECK(edge.count({"dmm2x2/noc/port[0]", "dmm2x2/l3[0]"}));
+    CHECK(edge.count({"dmm2x2/l3[0]", "dmm2x2/noc/port[0]"}));
+}
+
+TEST_CASE("the structure record's origin is the die's lower-left: north is up", "[program][platform][mesh][floorplan]") {
+    const SocFloorplan fp = generate_floorplan(dmm4x4());
+    const nlohmann::json rec = nlohmann::json::parse(floorplan_to_structure(fp));
+    std::map<std::string, std::vector<double>> rect;
+    for (const auto& b : rec.at("blocks")) rect[b.at("id")] = b.at("rect").get<std::vector<double>>();
+    const auto& die = rect.at("dmm4x4/die");
+    CHECK(die[0] == 0.0);
+    CHECK(die[1] == 0.0);
+    // Row 0 is the north row: in a lower-left frame it lies above row 3, and N0 above both.
+    CHECK(rect.at("dmm4x4/l3[0]")[1] > rect.at("dmm4x4/l3[12]")[1]);
+    CHECK(rect.at("dmm4x4/noc/port[0]")[1] > rect.at("dmm4x4/l3[0]")[1]);
+    CHECK(rect.at("dmm4x4/noc/port[11]")[1] < rect.at("dmm4x4/l3[12]")[1]);   // S0, below the south row
+    // Every block stays on the die.
+    for (const auto& [id, r] : rect) {
+        INFO(id);
+        CHECK(r[1] >= -1e-9);
+        CHECK(r[1] + r[3] <= die[3] + 1e-9);
+    }
+}

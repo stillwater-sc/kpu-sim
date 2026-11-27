@@ -188,6 +188,11 @@ Dim isqrt_ceil(Dim n) {
     return c;
 }
 
+// The gap between a controller's DMA engines, along a run of `len`: the style's gap, narrowed when
+// `per` engines would not fit with it, so every engine keeps a positive width (len / 2per at least)
+// for any count the spec accepts.
+double engine_gap(double len, Dim per, double g) { return std::min(g, len / (2.0 * (per + 1))); }
+
 // An L3 tile's banks, in the tile at (x, y) of side s.
 void add_l3_banks(FloorplanBlock& tile, const DeviceSpecification& d, Dim t, double x, double y, double s) {
     if (!d.l3.banks) return;
@@ -343,9 +348,9 @@ SocFloorplan generate_mesh_floorplan(const DeviceSpecification& d, const MeshLay
         }
         fp.blocks.push_back(group(d.name + "/phy[" + std::to_string(m) + "]", BlockKind::DramPhy, pr, "PHY"));
         FloorplanBlock mc = hw(d.name, BlockKind::MemoryController, {m}, "dram", mr, "MC" + std::to_string(m));
-        const double dl = (len - g * (per + 1)) / per, dd = 0.35 * mcH;
+        const double ge = engine_gap(len, per, g), dl = (len - ge * (per + 1)) / per, dd = 0.35 * mcH;
         for (Dim e = 0; e < per; ++e) {
-            const double o = g + e * (dl + g);
+            const double o = ge + e * (dl + ge);
             const Rect er = horiz ? R(mr.x_um + o, mr.y_um + (mcH - dd) / 2, dl, dd)
                                   : R(mr.x_um + (mcH - dd) / 2, mr.y_um + o, dd, dl);
             mc.children.push_back(hw(d.name, BlockKind::DmaEngine, {m, e}, "dram", er, "DMA" + std::to_string(e)));
@@ -538,10 +543,11 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
                                           BlockKind::DramPhy, R(x, phy_y, w, phyH), "PHY"));
                 FloorplanBlock mc = hw(d.name, BlockKind::MemoryController, {m}, "dram",
                                        R(x, mc_y, w, mcH), "MC" + std::to_string(m));
-                const double dh = 0.35 * mcH, dw = (w - g * (per + 1)) / per;
+                const double ge = engine_gap(w, per, g);
+                const double dh = 0.35 * mcH, dw = (w - ge * (per + 1)) / per;
                 for (Dim e = 0; e < per; ++e)
                     mc.children.push_back(hw(d.name, BlockKind::DmaEngine, {m, e}, "dram",
-                                             R(x + g + e * (dw + g), mc_y + mcH - dh - g, dw, dh),
+                                             R(x + ge + e * (dw + ge), mc_y + mcH - dh - g, dw, dh),
                                              "DMA" + std::to_string(e)));
                 mc_rect[m] = mc.rect;
                 mc_side.emplace_back(m, top);
@@ -738,6 +744,60 @@ std::string validate_floorplan(const SocFloorplan& fp, const DeploymentSpec& spe
         if (!ok) return w + " joins the wrong kinds of block";
         if (l.route_um.size() < 2) return w + " has no route";
     }
+
+    // A dmm_mesh's wires are exactly its layout's (mesh_layout.hpp): every neighbour pair once as a
+    // mesh wire and once as a credit wire, every edge port to its own node, and the periphery ring's
+    // consecutive stops, in ring order, closing. Any other device has none of them.
+    const DeviceSpecification& dev = spec.device(static_cast<Dim>(di));
+    const auto ML = MeshLayout::of(dev);
+    const auto mesh_kind = [](NocLink::Kind k) {
+        return k == NocLink::Kind::Mesh || k == NocLink::Kind::Credit || k == NocLink::Kind::Edge ||
+               k == NocLink::Kind::Periphery;
+    };
+    if (!ML) {
+        for (const NocLink& l : fp.noc)
+            if (mesh_kind(l.kind))
+                return std::string(to_string(l.kind)) + " link " + l.a + " -- " + l.b +
+                       " is a dmm_mesh wire, and device \"" + dev.name + "\" is not a dmm_mesh";
+        return {};
+    }
+    using Pair = std::pair<std::string, std::string>;
+    const auto l3n = [&](Dim t) { return format(ResourceName{dev.name, ResourceKind::L3Tile, {t}, 0}); };
+    const auto portn = [&](Dim k) { return format(ResourceName{dev.name, ResourceKind::NocPort, {k}, 0}); };
+    const auto mcn = [&](Dim m) { return format(ResourceName{dev.name, ResourceKind::MemoryController, {m}, 0}); };
+    const auto unordered = [](std::string a, std::string b) { return a < b ? Pair{a, b} : Pair{b, a}; };
+    std::map<NocLink::Kind, std::map<Pair, int>> want;
+    for (const MeshLink& k : ML->links())
+        if (k.dir == Edge::E || k.dir == Edge::S) {
+            want[NocLink::Kind::Mesh][unordered(l3n(k.from), l3n(k.to))] = 1;
+            want[NocLink::Kind::Credit][unordered(l3n(k.from), l3n(k.to))] = 1;
+        }
+    for (const EdgePort& e : ML->edge_ports()) want[NocLink::Kind::Edge][{portn(e.index), l3n(e.node)}] = 1;
+    const auto& stops = ML->stops();
+    const auto stop_name = [&](const PeripheryStop& st) {
+        return st.kind == PeripheryStop::Kind::EdgePort ? portn(st.of) : mcn(st.of);
+    };
+    for (std::size_t i = 0; i < stops.size(); ++i)
+        want[NocLink::Kind::Periphery][{stop_name(stops[i]), stop_name(stops[(i + 1) % stops.size()])}] = 1;
+    std::map<NocLink::Kind, std::map<Pair, int>> have;
+    for (const NocLink& l : fp.noc) {
+        const std::string w = std::string(to_string(l.kind)) + " link " + l.a + " -- " + l.b;
+        if (!mesh_kind(l.kind))
+            return w + ": a dmm_mesh has no torus; its DMA engines reach the edge ports over the periphery";
+        const bool sym = l.kind == NocLink::Kind::Mesh || l.kind == NocLink::Kind::Credit;
+        const Pair key = sym ? unordered(l.a, l.b) : Pair{l.a, l.b};
+        if (!want[l.kind].count(key)) {
+            if (sym) return w + " does not join one-hop neighbours of the mesh";
+            if (l.kind == NocLink::Kind::Edge) return w + " does not join an edge port to its own node";
+            return w + " does not join consecutive stops of the periphery ring, in ring order";
+        }
+        if (++have[l.kind][key] > 1) return w + " appears twice";
+    }
+    for (const auto& [kind, pairs] : want)
+        for (const auto& [key, n] : pairs)
+            if (!have[kind].count(key))
+                return std::string("the ") + to_string(kind) + " link " + key.first + " -- " + key.second +
+                       " is missing; a dmm_mesh's floorplan draws every wire its layout has";
     return {};
 }
 
@@ -840,8 +900,11 @@ std::string floorplan_to_json(const SocFloorplan& fp) {
 
 std::string floorplan_to_structure(const SocFloorplan& fp) {
     constexpr double mm = 1e-3;                               // um -> mm
+    // The floorplan is drawn from the top-left (SVG); the record's origin is the die's lower-left
+    // (shared-structure-record.md §2.2), so every y flips about the die's top edge.
+    const double top = fp.die.y_um + fp.die.h_um;
     const auto rect_mm = [&](const Rect& r) {
-        return std::array<double, 4>{r.x_um * mm, r.y_um * mm, r.w_um * mm, r.h_um * mm};
+        return std::array<double, 4>{r.x_um * mm, (top - r.y_um - r.h_um) * mm, r.w_um * mm, r.h_um * mm};
     };
     const auto rect_out = [](const std::array<double, 4>& r) { return json::array({r[0], r[1], r[2], r[3]}); };
 
@@ -914,11 +977,11 @@ std::string floorplan_to_structure(const SocFloorplan& fp) {
             nodes.push_back(n);
         }
         json link = json{{"id", std::string(to_string(l.kind)) + "_" + std::to_string(i)}, {"from", l.a}, {"to", l.b}};
+        json pts = json::array();
+        double length = 0;
         if (!l.route_um.empty()) {
-            json pts = json::array();
-            double length = 0;
             for (std::size_t p = 0; p < l.route_um.size(); ++p) {
-                const double x = l.route_um[p].first * mm, y = l.route_um[p].second * mm;
+                const double x = l.route_um[p].first * mm, y = (top - l.route_um[p].second) * mm;
                 pts.push_back(json::array({x, y}));
                 if (p) length += std::abs(x - pts[p - 1][0].get<double>()) + std::abs(y - pts[p - 1][1].get<double>());
             }
@@ -926,6 +989,19 @@ std::string floorplan_to_structure(const SocFloorplan& fp) {
             link["length"] = length;
         }
         links.push_back(link);
+        // A mesh, credit or edge wire carries both directions (mesh_layout.hpp); the record states each
+        // as its own link, so a reader recovers every direction from from/to. The periphery ring and the
+        // torus's wires stay as drawn.
+        if (l.kind == NocLink::Kind::Mesh || l.kind == NocLink::Kind::Credit || l.kind == NocLink::Kind::Edge) {
+            json back = json{{"id", std::string(to_string(l.kind)) + "_" + std::to_string(i) + "r"}, {"from", l.b}, {"to", l.a}};
+            if (!pts.empty()) {
+                json rev = json::array();
+                for (std::size_t p = pts.size(); p-- > 0;) rev.push_back(pts[p]);
+                back["points"] = rev;
+                back["length"] = length;
+            }
+            links.push_back(back);
+        }
     }
     json networks = json::array();
     struct NetInfo { const char* id; const char* kind; const char* routing; const char* description; };

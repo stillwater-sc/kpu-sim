@@ -134,9 +134,13 @@ def from_sim(d: dict) -> dict:
     if d.get("units") != "um":
         raise ConvertError(f"kpu-floorplan units '{d.get('units')}': this converter reads um")
     k = 1e-3                                           # um -> mm
+    # kpu-floorplan draws from the top-left (SVG); the record's origin is the die's lower-left
+    # (shared-structure-record.md §2.2), so every y flips about the die's top edge.
+    top = d["die"][1] + d["die"][3]
 
     def rect(r):
-        return [v * k for v in r]
+        x, y, w, h = r
+        return [x * k, (top - y - h) * k, w * k, h * k]
 
     blocks = []
 
@@ -188,10 +192,17 @@ def from_sim(d: dict) -> dict:
                 nodes[end] = node
         link = {"id": f"{ln['kind']}_{i}", "from": ln["a"], "to": ln["b"]}
         if ln.get("route"):
-            pts = [[p[0] * k, p[1] * k] for p in ln["route"]]
+            pts = [[p[0] * k, (top - p[1]) * k] for p in ln["route"]]
             link["points"] = pts
             link["length"] = sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in zip(pts, pts[1:]))
         links.append(link)
+        # A mesh, credit or edge wire carries both directions: each is its own link in the record.
+        if ln["kind"] in ("mesh", "credit", "edge"):
+            back = {"id": f"{ln['kind']}_{i}r", "from": ln["b"], "to": ln["a"]}
+            if "points" in link:
+                back["points"] = list(reversed(link["points"]))
+                back["length"] = link["length"]
+            links.append(back)
     info = [
         ("noc", "noc", "ring", "the NoC's ring, port and attach links (kpu-floorplan)"),
         ("mesh", "noc", "one_hop", "the dmm_mesh's one-hop data links, each pair both ways, and its edge ports (kpu-floorplan)"),

@@ -70,7 +70,9 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=generated:dmm_mesh
             -P ${_expect}
     )
-    set_tests_properties(kpu_floorplan_dmm4x4_import PROPERTIES DEPENDS kpu_floorplan_dmm4x4)
+    # A fixture, not DEPENDS: `ctest -R kpu_floorplan_dmm4x4_import` alone still writes what it reads.
+    set_tests_properties(kpu_floorplan_dmm4x4 PROPERTIES FIXTURES_SETUP dmm4x4_floorplan)
+    set_tests_properties(kpu_floorplan_dmm4x4_import PROPERTIES FIXTURES_REQUIRED dmm4x4_floorplan)
 
     # The shared structure record (#392; docs/plans/shared-structure-record.md): the model's T4
     # floorplan converted and checked; the checker's self-test, over the samples from both
@@ -97,7 +99,6 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/t4.structure.json)
         set_tests_properties(structure_native_t4 PROPERTIES FIXTURES_REQUIRED "t4_floorplan;t4_structure")
         # The mesh's record: native and converted agree, and both check clean.
-        set_tests_properties(kpu_floorplan_dmm4x4 PROPERTIES FIXTURES_SETUP dmm4x4_floorplan)
         add_test(NAME structure_record_dmm4x4
             COMMAND ${_struct_py} ${_trace}/structure_from_floorplan.py ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_floorplan.json
                     -o ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4.structure.json)

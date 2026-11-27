@@ -180,7 +180,7 @@ inline std::optional<MeshLayout> MeshLayout::of(const DeviceSpecification& d, st
     // floor((2m + 1) P / 2M). mesh_problem() has checked M <= P, so the positions are strictly
     // increasing and below P.
     const Dim P = static_cast<Dim>(L.ports_.size());
-    const Dim M = d.memory.controllers.value_or(1);
+    const Dim M = *d.memory.controllers;          // declared: mesh_problem() requires it
     const auto& declared = d.periphery ? d.periphery->mc_after_port : std::vector<Dim>{};
     for (Dim m = 0; m < M; ++m)
         L.mc_after_.push_back(declared.empty()
