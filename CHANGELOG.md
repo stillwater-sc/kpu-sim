@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Plans: distributed CSP programs, and retiring ConcurrentTimingExecutor** (#603, #619). Decision 5 is
+  taken: the cycle core replaces `ConcurrentTimingExecutor`, which was built on the wrong resource model.
+  - `docs/plans/distributed-csp-programs.md` comes first. Can level-2 CSP programs be generated for the
+    pattern classes P1–P9, on a one-hop, push-only XY mesh of L3+CT nodes? Each node has 8 BlockMovers and
+    the credits travel on a separate network. The DMA engines sit on the memory controllers and reach the
+    mesh's edge ports over a periphery ring, on the memory controllers' clock.
+  - `docs/plans/retire-concurrent-timing-executor.md` follows it, after the NoC rework (#618). It holds the
+    hand-traced memory-path programs, the shared kpu-sim/RTL views of that path, and steps R0–R6.
+
 - **The join, Phase 3, step 3d: the evaluation** (#548): `docs/analysis/cycle-prototype-evaluation.md`.
   It covers where the cycles go, which components bound the run, and the RTL's 907/744 against the core,
   and gives a recommendation on decision 5 (the cycle core as L-CA), which is the user's to make.
