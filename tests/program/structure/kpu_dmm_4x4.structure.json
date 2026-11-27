@@ -7,7 +7,7 @@
   "configuration": "dmm4x4",
   "details": {
    "layout": "generated:dmm_mesh",
-   "floorplan_digest": "101b45521d9c7239"
+   "floorplan_digest": "6931e5ad263724a3"
   }
  },
  "units": {
@@ -40,9 +40,22 @@
    "area": 32.0
   },
   {
+   "id": "dmm4x4/cluster[0]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[0]",
+   "rect": [
+    4.73,
+    4.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[0]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[0]",
    "label": "l3[0]",
    "resource": "dmm4x4/l3[0]",
    "clock_domain": "l3",
@@ -246,7 +259,7 @@
   {
    "id": "dmm4x4/cf[0]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[0]",
    "label": "cf[0]",
    "resource": "dmm4x4/cf[0]",
    "clock_domain": "cf",
@@ -366,9 +379,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[1]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[1]",
+   "rect": [
+    6.73,
+    4.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[1]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[1]",
    "label": "l3[1]",
    "resource": "dmm4x4/l3[1]",
    "clock_domain": "l3",
@@ -572,7 +598,7 @@
   {
    "id": "dmm4x4/cf[1]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[1]",
    "label": "cf[1]",
    "resource": "dmm4x4/cf[1]",
    "clock_domain": "cf",
@@ -692,9 +718,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[2]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[2]",
+   "rect": [
+    8.73,
+    4.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[2]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[2]",
    "label": "l3[2]",
    "resource": "dmm4x4/l3[2]",
    "clock_domain": "l3",
@@ -898,7 +937,7 @@
   {
    "id": "dmm4x4/cf[2]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[2]",
    "label": "cf[2]",
    "resource": "dmm4x4/cf[2]",
    "clock_domain": "cf",
@@ -1018,9 +1057,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[3]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[3]",
+   "rect": [
+    10.73,
+    4.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[3]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[3]",
    "label": "l3[3]",
    "resource": "dmm4x4/l3[3]",
    "clock_domain": "l3",
@@ -1224,7 +1276,7 @@
   {
    "id": "dmm4x4/cf[3]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[3]",
    "label": "cf[3]",
    "resource": "dmm4x4/cf[3]",
    "clock_domain": "cf",
@@ -1344,9 +1396,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[4]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[4]",
+   "rect": [
+    4.73,
+    3.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[4]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[4]",
    "label": "l3[4]",
    "resource": "dmm4x4/l3[4]",
    "clock_domain": "l3",
@@ -1550,7 +1615,7 @@
   {
    "id": "dmm4x4/cf[4]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[4]",
    "label": "cf[4]",
    "resource": "dmm4x4/cf[4]",
    "clock_domain": "cf",
@@ -1670,9 +1735,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[5]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[5]",
+   "rect": [
+    6.73,
+    3.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[5]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[5]",
    "label": "l3[5]",
    "resource": "dmm4x4/l3[5]",
    "clock_domain": "l3",
@@ -1876,7 +1954,7 @@
   {
    "id": "dmm4x4/cf[5]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[5]",
    "label": "cf[5]",
    "resource": "dmm4x4/cf[5]",
    "clock_domain": "cf",
@@ -1996,9 +2074,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[6]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[6]",
+   "rect": [
+    8.73,
+    3.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[6]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[6]",
    "label": "l3[6]",
    "resource": "dmm4x4/l3[6]",
    "clock_domain": "l3",
@@ -2202,7 +2293,7 @@
   {
    "id": "dmm4x4/cf[6]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[6]",
    "label": "cf[6]",
    "resource": "dmm4x4/cf[6]",
    "clock_domain": "cf",
@@ -2322,9 +2413,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[7]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[7]",
+   "rect": [
+    10.73,
+    3.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[7]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[7]",
    "label": "l3[7]",
    "resource": "dmm4x4/l3[7]",
    "clock_domain": "l3",
@@ -2528,7 +2632,7 @@
   {
    "id": "dmm4x4/cf[7]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[7]",
    "label": "cf[7]",
    "resource": "dmm4x4/cf[7]",
    "clock_domain": "cf",
@@ -2648,9 +2752,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[8]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[8]",
+   "rect": [
+    4.73,
+    2.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[8]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[8]",
    "label": "l3[8]",
    "resource": "dmm4x4/l3[8]",
    "clock_domain": "l3",
@@ -2854,7 +2971,7 @@
   {
    "id": "dmm4x4/cf[8]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[8]",
    "label": "cf[8]",
    "resource": "dmm4x4/cf[8]",
    "clock_domain": "cf",
@@ -2974,9 +3091,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[9]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[9]",
+   "rect": [
+    6.73,
+    2.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[9]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[9]",
    "label": "l3[9]",
    "resource": "dmm4x4/l3[9]",
    "clock_domain": "l3",
@@ -3180,7 +3310,7 @@
   {
    "id": "dmm4x4/cf[9]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[9]",
    "label": "cf[9]",
    "resource": "dmm4x4/cf[9]",
    "clock_domain": "cf",
@@ -3300,9 +3430,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[10]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[10]",
+   "rect": [
+    8.73,
+    2.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[10]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[10]",
    "label": "l3[10]",
    "resource": "dmm4x4/l3[10]",
    "clock_domain": "l3",
@@ -3506,7 +3649,7 @@
   {
    "id": "dmm4x4/cf[10]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[10]",
    "label": "cf[10]",
    "resource": "dmm4x4/cf[10]",
    "clock_domain": "cf",
@@ -3626,9 +3769,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[11]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[11]",
+   "rect": [
+    10.73,
+    2.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[11]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[11]",
    "label": "l3[11]",
    "resource": "dmm4x4/l3[11]",
    "clock_domain": "l3",
@@ -3832,7 +3988,7 @@
   {
    "id": "dmm4x4/cf[11]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[11]",
    "label": "cf[11]",
    "resource": "dmm4x4/cf[11]",
    "clock_domain": "cf",
@@ -3952,9 +4108,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[12]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[12]",
+   "rect": [
+    4.73,
+    1.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[12]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[12]",
    "label": "l3[12]",
    "resource": "dmm4x4/l3[12]",
    "clock_domain": "l3",
@@ -4158,7 +4327,7 @@
   {
    "id": "dmm4x4/cf[12]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[12]",
    "label": "cf[12]",
    "resource": "dmm4x4/cf[12]",
    "clock_domain": "cf",
@@ -4278,9 +4447,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[13]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[13]",
+   "rect": [
+    6.73,
+    1.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[13]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[13]",
    "label": "l3[13]",
    "resource": "dmm4x4/l3[13]",
    "clock_domain": "l3",
@@ -4484,7 +4666,7 @@
   {
    "id": "dmm4x4/cf[13]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[13]",
    "label": "cf[13]",
    "resource": "dmm4x4/cf[13]",
    "clock_domain": "cf",
@@ -4604,9 +4786,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[14]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[14]",
+   "rect": [
+    8.73,
+    1.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[14]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[14]",
    "label": "l3[14]",
    "resource": "dmm4x4/l3[14]",
    "clock_domain": "l3",
@@ -4810,7 +5005,7 @@
   {
    "id": "dmm4x4/cf[14]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[14]",
    "label": "cf[14]",
    "resource": "dmm4x4/cf[14]",
    "clock_domain": "cf",
@@ -4930,9 +5125,22 @@
    "layer": "l1"
   },
   {
+   "id": "dmm4x4/cluster[15]",
+   "kind": "cluster",
+   "parent": "dmm4x4/array",
+   "label": "cluster[15]",
+   "rect": [
+    10.73,
+    1.93,
+    2.0,
+    1.0
+   ],
+   "area": 2.0
+  },
+  {
    "id": "dmm4x4/l3[15]",
    "kind": "l3_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[15]",
    "label": "l3[15]",
    "resource": "dmm4x4/l3[15]",
    "clock_domain": "l3",
@@ -5136,7 +5344,7 @@
   {
    "id": "dmm4x4/cf[15]",
    "kind": "compute_tile",
-   "parent": "dmm4x4/array",
+   "parent": "dmm4x4/cluster[15]",
    "label": "cf[15]",
    "resource": "dmm4x4/cf[15]",
    "clock_domain": "cf",

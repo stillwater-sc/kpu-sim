@@ -48,6 +48,7 @@ const std::vector<KindName>& kind_names() {
         {BlockKind::DmaEngine, "dma_engine"}, {BlockKind::CpuHart, "cpu_hart"},
         {BlockKind::CpuSram, "cpu_sram"},    {BlockKind::DescriptorRing, "descriptor_ring"},
         {BlockKind::CompletionRing, "completion_ring"},
+        {BlockKind::Cluster, "cluster"},
     };
     return k;
 }
@@ -70,7 +71,8 @@ std::optional<ResourceKind> resource_kind_of(BlockKind k) {
         case BlockKind::Array:
         case BlockKind::Cpu:
         case BlockKind::DramPhy:
-        case BlockKind::Io:               return std::nullopt;
+        case BlockKind::Io:
+        case BlockKind::Cluster:          return std::nullopt;
         case BlockKind::L3Tile:           return ResourceKind::L3Tile;
         case BlockKind::L3Bank:           return ResourceKind::L3Bank;
         case BlockKind::BlockMover:       return ResourceKind::BlockMover;
@@ -304,8 +306,12 @@ SocFloorplan generate_mesh_floorplan(const DeviceSpecification& d, const MeshLay
                                        to_string(static_cast<MoverRole>(k))));
         add_l3_banks(tile, d, t, x, y, s);
         l3_rect[t] = tile.rect;
-        array.children.push_back(std::move(tile));
-        array.children.push_back(compute_tile_block(d, t, x + P, y, s));
+        // The node is the cluster (#635): its L3 tile and its compute tile, one block over both.
+        FloorplanBlock node = group(d.name + "/cluster[" + std::to_string(t) + "]", BlockKind::Cluster,
+                                    R(ax + p.c * nw, ay + p.r * P, nw, P), "cluster[" + std::to_string(t) + "]");
+        node.children.push_back(std::move(tile));
+        node.children.push_back(compute_tile_block(d, t, x + P, y, s));
+        array.children.push_back(std::move(node));
     }
     fp.blocks.push_back(std::move(array));
 
@@ -1113,6 +1119,7 @@ const char* fill_of(BlockKind k) {
         case BlockKind::Cpu:              return "#dcdfe9";
         case BlockKind::DramPhy:          return "#e3e5e8";
         case BlockKind::Io:               return "#eceef0";
+        case BlockKind::Cluster:          return "none";
         case BlockKind::L3Tile:           return "#dfe3e8";
         case BlockKind::L3Bank:           return "#f4f6f8";
         case BlockKind::BlockMover:       return "#7b828c";

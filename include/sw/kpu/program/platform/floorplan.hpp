@@ -51,6 +51,9 @@ enum class BlockKind : std::uint8_t {
     ComputeTile, L2Bank, L1Vector, RegisterFile,
     MemoryController, DmaEngine,
     CpuHart, CpuSram, DescriptorRing, CompletionRing,
+    // a group: a dmm_mesh node, its L3 tile and its compute tile (#635); appended, so the kinds
+    // before it keep their values
+    Cluster,
 };
 
 const char* to_string(BlockKind k);
