@@ -409,6 +409,34 @@ if(KPU_BUILD_TESTS)
                              FIXTURES_REQUIRED system_s1_run_dir)
     endif()
 
+    # #601's review: two artifact paths that name one file through a symbolic link are refused, before
+    # anything is written (a link `latest` -> `logs`). Not on Windows, where links need privileges.
+    if(NOT WIN32)
+        set(_alias ${CMAKE_CURRENT_BINARY_DIR}/runs/alias)
+        add_test(NAME kpu_run_alias_setup
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${_alias}/logs)
+        add_test(NAME kpu_run_alias_link
+            COMMAND ${CMAKE_COMMAND} -E create_symlink ${_alias}/logs ${_alias}/latest)
+        set_tests_properties(kpu_run_alias_setup PROPERTIES FIXTURES_SETUP alias_dirs)
+        set_tests_properties(kpu_run_alias_link PROPERTIES FIXTURES_SETUP alias_dirs DEPENDS kpu_run_alias_setup)
+        add_test(NAME kpu_run_system_artifacts_through_a_link
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--system$<SEMICOLON>--system-trace$<SEMICOLON>${_alias}/logs/t.json$<SEMICOLON>--system-counters$<SEMICOLON>${_alias}/latest/t.json
+                -DEXPECT_CODE=2
+                -DMUST_MATCH=name.the.same.file
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+        add_test(NAME kpu_run_compute_artifacts_through_a_link
+            COMMAND ${CMAKE_COMMAND}
+                -DCMD=$<TARGET_FILE:run>
+                -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--compute-subsystem$<SEMICOLON>--compute-trace$<SEMICOLON>${_alias}/logs/c.json$<SEMICOLON>--compute-counters$<SEMICOLON>${_alias}/latest/c.json
+                -DEXPECT_CODE=2
+                -DMUST_MATCH=name.the.same.file
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+        set_tests_properties(kpu_run_system_artifacts_through_a_link kpu_run_compute_artifacts_through_a_link
+                             PROPERTIES LABELS "program;driver;cycle;system" FIXTURES_REQUIRED alias_dirs)
+    endif()
+
     # A level with no interpreter must be refused, NOT silently substituted -- and the
     # assertion has to be able to tell those apart. PASS_REGULAR_EXPRESSION cannot: it
     # makes CTest ignore the exit code, and the string "not implemented (#283)" appears in

@@ -742,6 +742,16 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
     }
 }
 
+// A path as the file it names: absolute, its links resolved as far as they exist (weakly_canonical),
+// so two paths to one file through a link compare equal. Never throws (it runs before the run's try).
+std::string resolved_path(const std::string& path) {
+    std::error_code ec;
+    std::filesystem::path p = std::filesystem::absolute(path, ec);
+    if (ec) p = path;
+    const std::filesystem::path r = std::filesystem::weakly_canonical(p, ec);
+    return (ec ? p : r).lexically_normal().string();
+}
+
 // --compute-subsystem: the program's compute traffic on the cycle core (#547).
 int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast, const platform::DeviceSpecification* device) {
     static const std::set<std::string> kCompute = {"--program", "--deploy", "--compute-subsystem", "--compute-trace",
@@ -794,11 +804,7 @@ int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast
                                          {"--compute-counters", &counters_path},
                                          {"--compute-heatmap", &heatmap_path},
                                          {"--compute-heatmap's .svg", &heatmap_svg}})
-            if (!path->empty()) {
-                std::error_code ec;
-                const std::filesystem::path abs = std::filesystem::absolute(*path, ec);
-                outs.push_back({what, (ec ? std::filesystem::path(*path) : abs).lexically_normal().string()});
-            }
+            if (!path->empty()) outs.push_back({what, resolved_path(*path)});
         for (std::size_t i = 0; i < outs.size(); ++i)
             for (std::size_t k = i + 1; k < outs.size(); ++k)
                 if (outs[i].second == outs[k].second) {
@@ -893,8 +899,7 @@ int run_system_level(const std::vector<std::string>& a, const csp::lang::Program
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
-    if (!trace_path.empty() && !counters_path.empty() &&
-        std::filesystem::absolute(trace_path).lexically_normal() == std::filesystem::absolute(counters_path).lexically_normal()) {
+    if (!trace_path.empty() && !counters_path.empty() && resolved_path(trace_path) == resolved_path(counters_path)) {
         std::cerr << "kpu-run: --system-trace and --system-counters name the same file\n";
         return 2;
     }
