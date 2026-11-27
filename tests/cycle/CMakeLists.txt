@@ -284,6 +284,9 @@ target_include_directories(test_cycle_compute_subsystem PRIVATE ${CMAKE_SOURCE_D
 target_compile_definitions(test_cycle_compute_subsystem PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
                            KPU_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 kpu_set_target_options(test_cycle_compute_subsystem)
+if(MSVC)
+    target_compile_options(test_cycle_compute_subsystem PRIVATE /bigobj)   # as kpu-run (C1128)
+endif()
 set_target_properties(test_cycle_compute_subsystem PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_compute_subsystem COMMAND test_cycle_compute_subsystem)
 set_tests_properties(test_cycle_compute_subsystem PROPERTIES LABELS "cycle;compute;counters;v0.10")
