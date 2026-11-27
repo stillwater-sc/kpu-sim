@@ -250,3 +250,16 @@ TEST_CASE("an operand near the 32-bit maximum still has its tiles", "[program][c
     CHECK(p.operands[0].tile_grid_rows() == 268435456u);   // ceil(4294967295 / 16)
     CHECK(p.operands[0].tile_grid_cols() == 1u);
 }
+
+TEST_CASE("every action has exactly one place, in one process", "[program][csp][distributed]") {
+    DistributedProgram p = parse_distributed(read_file(std::string(kDir) + "gemm_one_tile_node1.dcsp"));
+    DistributedProgram twice = p;
+    twice.processes.back().actions.push_back(twice.processes.back().actions.front());   // the push, listed again
+    CHECK_THAT(validate_structure(twice), ContainsSubstring("is listed twice; an action has one place, in one process"));
+    DistributedProgram orphan = p;
+    orphan.processes.back().actions.clear();
+    CHECK_THAT(validate_structure(orphan), ContainsSubstring("is in no process, so it never runs"));
+    DistributedProgram ghost = p;
+    ghost.processes.back().actions.push_back(99);
+    CHECK_THAT(validate_structure(ghost), ContainsSubstring("lists action 99, which does not exist"));
+}

@@ -144,15 +144,17 @@ inline std::vector<DistributedViolation> check_distributed(const DistributedProg
     // A channel is used by its sender's actions; a Store receives from its channel and does not count.
     std::set<std::size_t> used;
     std::map<std::size_t, std::size_t> delivered, stored;     // a channel into a DMA engine: pushes, stores
-    for (const Action2& a : p.actions) {
-        if (a.channel == kNoChannel) continue;
-        if (a.kind == Action2::Kind::Store) {
-            ++stored[a.channel];
-            continue;
+    for (const Process2& pr : p.processes)                       // as executed: each process's own list
+        for (std::size_t ai : pr.actions) {
+            const Action2& a = p.actions[ai];
+            if (a.channel == kNoChannel) continue;
+            if (a.kind == Action2::Kind::Store) {
+                ++stored[a.channel];
+                continue;
+            }
+            used.insert(a.channel);
+            if (!a.to) ++delivered[a.channel];
         }
-        used.insert(a.channel);
-        if (!a.to) ++delivered[a.channel];
-    }
     for (std::size_t i = 0; i < p.channels.size(); ++i) {
         const Channel2& c = p.channels[i];
         if (!used.count(i))
