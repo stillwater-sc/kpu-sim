@@ -83,7 +83,7 @@ TEST_CASE("D1: every process exists, and a mover carries one flow", "[program][c
     p.processes[2].actions.push_back(p.actions.size() - 1);
     std::string got;
     for (const auto& v : check_distributed(p, device("kpu_dmm_2x2.json"))) got += v.rule + " " + v.message + "\n";
-    CHECK_THAT(got, ContainsSubstring("D1 bm.S[1] sends on 2 channels (s13, s13b): a mover is one CSP, and one CSP carries one flow"));
+    CHECK_THAT(got, ContainsSubstring("D1 bm.S[1] sends on 2 channels (s13, s13b): one CSP carries one flow"));
 }
 
 TEST_CASE("D2: one hop, to the neighbour on the mover's side, or out of an edge port to a DMA engine",
@@ -178,4 +178,30 @@ TEST_CASE("D4: the residencies before a held one must have all their reads", "[p
     t = with(t, "  process bm.S[1] {\n    push A[0,0] from l3[1]:0 to l3[3]:0 reads 0 via s13;     // held at node 3 to the end\n  }\n", "");
     CHECK_THAT(violations(t, "kpu_dmm_2x2.json"),
                ContainsSubstring("D4 slot l3[0]:0: its residencies before the held one declare 1 read(s), and the program makes 0"));
+}
+
+TEST_CASE("D1: a DMA engine carries one flow too", "[program][csp][distributed][check]") {
+    // dma[0, 0] loading into two edge nodes through two channels: one CSP, two flows.
+    std::string t = sample("vector_to_node3.dcsp");
+    t = with(t, "tensor A[16,16] int8 tile 16x16 in;", "tensor A[32,16] int8 tile 16x16 in;");
+    t = with(t, "  channel ld0 : dma[0, 0] -> l3[0] slots 0;\n",
+             "  channel ld0 : dma[0, 0] -> l3[0] slots 0;\n  channel ld2 : dma[0, 0] -> l3[2] slots 4;\n");
+    t = with(t, "    load A[0,0] to l3[0]:0 reads 1 via ld0;\n",
+             "    load A[0,0] to l3[0]:0 reads 1 via ld0;\n    load A[1,0] to l3[2]:4 reads 0 via ld2;\n");
+    CHECK_THAT(violations(t, "kpu_dmm_2x2.json"),
+               ContainsSubstring("D1 dma[0, 0] sends on 2 channels (ld0, ld2): one CSP carries one flow"));
+    // One channel owning both slots is one flow.
+    std::string one = sample("gemm_one_tile_node1.dcsp");
+    CHECK(violations(one, "kpu_dmm_2x2.json").empty());
+}
+
+TEST_CASE("D4: a declared capacity that rounds to no slot per tile bounds at zero, not unbounded",
+          "[program][csp][distributed][check]") {
+    platform::DeviceSpecification d = device("kpu_dmm_2x2.json");
+    d.l3.capacity_tiles = 1;                                   // 1 over 4 tiles: 0 per tile
+    std::string got;
+    for (const auto& v : check_distributed(parse_distributed(sample("vector_to_node3.dcsp")), d)) got += v.rule + " " + v.message + "\n";
+    CHECK_THAT(got, ContainsSubstring("D4 channel ld0: slot 0 of l3[0] is outside its 0 slot(s)"));
+    d.l3.capacity_tiles = 0;                                   // explicitly unbounded
+    CHECK(check_distributed(parse_distributed(sample("vector_to_node3.dcsp")), d).empty());
 }

@@ -6,7 +6,8 @@
 //
 //   D0 machine     the program's mesh is the deployment's (a dmm_mesh, rows x cols)
 //   D1 resources   every process exists on the deployment (a node's movers, its compute tile, a
-//                  controller's DMA engine); a mover sends on at most one channel (one flow per CSP)
+//                  controller's DMA engine); a mover or a DMA engine sends on at most one channel:
+//                  one CSP per packet flow, so no flow waits behind another's credit
 //   D2 one hop     a send mover reaches only the neighbour on its side, or, where it has none, a DMA
 //                  engine through its edge port onto the periphery; a feed mover and the compute
 //                  tile fill their own compute tile's L2, the drain mover its own L3; a DMA engine
@@ -98,11 +99,11 @@ inline std::vector<DistributedViolation> check_distributed(const DistributedProg
             fail("D1", "channel " + c.name + ": " + c.destination() + " does not exist on the device");
     }
     for (const auto& [proc, chans] : sends) {
-        if (proc.rfind("bm.", 0) != 0 || chans.size() <= 1) continue;
+        if ((proc.rfind("bm.", 0) != 0 && proc.rfind("dma[", 0) != 0) || chans.size() <= 1) continue;
         std::string list;
         for (const std::string& c : chans) list += (list.empty() ? "" : ", ") + c;
         fail("D1", proc + " sends on " + std::to_string(chans.size()) + " channels (" + list +
-                       "): a mover is one CSP, and one CSP carries one flow");
+                       "): one CSP carries one flow, so neither waits behind the other's credit");
     }
 
     // ---- D2 one hop
@@ -167,12 +168,17 @@ inline std::vector<DistributedViolation> check_distributed(const DistributedProg
     }
 
     // ---- D4 placement
-    const Dim l3_per_tile = d.l3.capacity_tiles && d.l3.tiles ? d.l3.capacity_tiles / *d.l3.tiles : 0;
-    const Dim l2_slots = d.systolic ? d.systolic->l2_slots : 0;
+    // Bounded when declared: capacity_tiles 0 is unbounded, and a declared capacity that gives a
+    // tile no slot bounds it at zero (every slot is outside), not at "unbounded".
+    const bool l3_bounded = d.l3.capacity_tiles != 0 && d.l3.tiles.has_value();
+    const Dim l3_per_tile = l3_bounded ? d.l3.capacity_tiles / *d.l3.tiles : 0;
+    const bool l2_bounded = d.systolic.has_value();
+    const Dim l2_slots = l2_bounded ? d.systolic->l2_slots : 0;
     for (const Channel2& c : p.channels) {
         if (c.to == Channel2::To::Dma) continue;
+        const bool bounded = c.to == Channel2::To::L3 ? l3_bounded : l2_bounded;
         const Dim cap = c.to == Channel2::To::L3 ? l3_per_tile : l2_slots;
-        if (!cap) continue;                                       // undeclared: unbounded
+        if (!bounded) continue;                                   // undeclared: unbounded
         for (std::uint32_t s : c.slots)
             if (s >= cap)
                 fail("D4", "channel " + c.name + ": slot " + std::to_string(s) + " of " + c.destination() + " is outside its " +
