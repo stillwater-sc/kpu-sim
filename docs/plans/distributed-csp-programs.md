@@ -237,7 +237,9 @@ A "needs" against one hop or eight movers goes to the user before the NoC rework
 3. **L-B for level 2**: `csp/distributed_behavioral.hpp` executes the processes with bounded channels and
    computes the values. Checks D5 and D6. **Done: #606** (round robin, so no process starves; a deadlock
    names every stuck process, with its line and what it waits for; `compare_values` is D6, bit for bit).
-4. **The checker**: `csp/distributed_check.hpp` (D1–D4), and `kpu-csp-check --distributed`.
+4. **The checker**: `csp/distributed_check.hpp` (D1–D4), and `kpu-csp-check --distributed`. **Done: #607** (also
+   D0, the program's mesh is the deployment's; D4 counts each slot's reads and merges across processes, a
+   call's operand once per mention).
 5. **The generators**, one PR per class, in the order that builds on what came before: P1, P5, P6, P3, P2,
    P7, P8, P9, P4 (`csp/gen/distributed/`). Each is tested on 1×1, 2×2 and 4×4 meshes, checked with D1–D6,
    and its row added to the coverage report.

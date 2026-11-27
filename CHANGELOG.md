@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The distributed checker, D0-D4, and `kpu-csp-check`** (#607; distributed CSP programs, step 4).
+  `csp/distributed_check.hpp` checks a level-2 program against its deployment's mesh before any
+  simulation:
+  - **D0:** the program's mesh is the device's.
+  - **D1:** every process exists on the device, and a mover carries one flow.
+  - **D2, one hop:** a send mover reaches only its neighbour, or, at the boundary, a DMA engine through
+    its edge port. Feeds and calls fill their own compute tile's L2, and a drain its own L3. A DMA
+    engine reaches only an edge node, and edge-to-edge over the periphery is refused.
+  - **D3:** every channel is used.
+  - **D4:** slots fit the tile's capacity. Each slot's reads and merges are the ones its residencies
+    declare, counted across processes, with a call's operand counted once per mention. A held residency
+    is its slot's last, and every tile read from a slot was written there.
+  - **The CLI:** `kpu-csp-check --distributed P.dcsp --deploy S.json [--run]` adds L-B's D5 with
+    `--run`. Exit codes are 0, 1 for a violation, and 2 for unreadable input.
+  - **A new deployment:** `kpu_dmm_1x1.json`.
+
 - **L-B for level-2 programs** (#606; distributed CSP programs, step 3): `csp/distributed_behavioral.hpp`
   runs every process through channels bounded by their credits, with real tile values.
   - **The interleaving:** round robin, so no process starves. An action waits for its destination's

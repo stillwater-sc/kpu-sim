@@ -245,6 +245,16 @@ inline std::string validate_structure(const DistributedProgram& p) {
             if (!fresh) return w + ": slot " + r.to_string() + " belongs to channel " + it->second + " already";
         }
     }
+    // Every action has exactly one place, in one process: an index listed twice would run twice, and
+    // one listed nowhere would never run, while each counts once in the program's action list.
+    std::vector<std::size_t> placed(p.actions.size(), 0);
+    for (const Process2& pr : p.processes)
+        for (std::size_t ai : pr.actions) {
+            if (ai >= p.actions.size()) return "process " + pr.id.to_string() + " lists action " + std::to_string(ai) + ", which does not exist";
+            if (++placed[ai] > 1) return "action " + std::to_string(ai) + " is listed twice; an action has one place, in one process";
+        }
+    for (std::size_t i = 0; i < placed.size(); ++i)
+        if (!placed[i]) return "action " + std::to_string(i) + " is in no process, so it never runs";
     std::set<std::string> procs;
     for (const Process2& pr : p.processes) {
         const std::string pw = "process " + pr.id.to_string();
