@@ -16,8 +16,8 @@
   WHAT IT SHOWS
     - The die and every placed block, in mm, origin at the die's lower-left.
     - The record's networks drawn over the blocks (NoC request and response, the control tree,
-      DRAM to L3), each a layer with show/hide and opacity; they default to 45% so they read as
-      context.
+      DRAM to L3; a DMM mesh's one-hop mesh, credit network and periphery ring), each a layer
+      with show/hide and opacity; they default to 45% so they read as context.
     - The die's size and its area breakdown, and the change from a second record (Compare).
     - The selected block's footprint, area, kind, resources and the routers that stand for it.
   It draws what the record holds and nothing else; an estimated floorplan says so.
@@ -31,7 +31,7 @@
   --line: #d9dce0; --die: #eceef0; --sel: #d03b3b; --accent: #2a5db0;
   --k-array: #f7f8f9; --k-compute: #e6e2da; --k-l3: #dfe3e8; --k-mem: #f0f2f4; --k-move: #d6e4f5;
   --k-noc: #e9dff3; --k-ctl: #f3e8d6; --k-periph: #e3e5e8; --k-cpu: #dcdfe9;
-  --n-noc_request: #2a78d6; --n-noc_response: #1f9e74; --n-noc: #2a78d6; --n-ring: #2a78d6;
+  --n-noc_request: #2a78d6; --n-noc_response: #1f9e74; --n-noc: #2a78d6; --n-ring: #0e8f9a; --n-credit: #c2255c;
   --n-control_tree: #c47a12; --n-dram_l3: #8a4fc7;
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-data: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
@@ -42,7 +42,7 @@
     --line: #2e3237; --die: #202327; --sel: #f06a6a; --accent: #7aa7ea;
     --k-array: #1d2023; --k-compute: #322e28; --k-l3: #2a3038; --k-mem: #24282d; --k-move: #233246;
     --k-noc: #2e2838; --k-ctl: #352d22; --k-periph: #2a2d33; --k-cpu: #282c38;
-    --n-noc_request: #5a9de8; --n-noc_response: #3cc596; --n-noc: #5a9de8; --n-ring: #5a9de8;
+    --n-noc_request: #5a9de8; --n-noc_response: #3cc596; --n-noc: #5a9de8; --n-ring: #3bc9db; --n-credit: #f06595;
     --n-control_tree: #e0a040; --n-dram_l3: #b183e6;
     color-scheme: dark;
   }
@@ -52,7 +52,7 @@
     --line: #2e3237; --die: #202327; --sel: #f06a6a; --accent: #7aa7ea;
     --k-array: #1d2023; --k-compute: #322e28; --k-l3: #2a3038; --k-mem: #24282d; --k-move: #233246;
     --k-noc: #2e2838; --k-ctl: #352d22; --k-periph: #2a2d33; --k-cpu: #282c38;
-    --n-noc_request: #5a9de8; --n-noc_response: #3cc596; --n-noc: #5a9de8; --n-ring: #5a9de8;
+    --n-noc_request: #5a9de8; --n-noc_response: #3cc596; --n-noc: #5a9de8; --n-ring: #3bc9db; --n-credit: #f06595;
     --n-control_tree: #e0a040; --n-dram_l3: #b183e6;
     color-scheme: dark;
 }

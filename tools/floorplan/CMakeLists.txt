@@ -52,6 +52,28 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_floorplan_t4_import PROPERTIES DEPENDS kpu_floorplan_t4)
 
+    # A DMM mesh (#604; docs/plans/distributed-csp-programs.md): nodes of an L3 tile and its compute
+    # tile, one-hop links, eight BlockMovers per node, and the periphery ring.
+    add_test(NAME kpu_floorplan_dmm4x4
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:floorplan>
+            -DARGS=--deploy$<SEMICOLON>${_deploy}/kpu_dmm_4x4.json$<SEMICOLON>--json$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_floorplan.json$<SEMICOLON>--svg$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_floorplan.svg$<SEMICOLON>--structure$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_native.structure.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=ring.of.24.stops:.16.edge.ports.and.8.memory.controller
+            -P ${_expect}
+    )
+    add_test(NAME kpu_floorplan_dmm4x4_import
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:floorplan>
+            -DARGS=--deploy$<SEMICOLON>${_deploy}/kpu_dmm_4x4.json$<SEMICOLON>--import$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_floorplan.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=generated:dmm_mesh
+            -P ${_expect}
+    )
+    # A fixture, not DEPENDS: `ctest -R kpu_floorplan_dmm4x4_import` alone still writes what it reads.
+    set_tests_properties(kpu_floorplan_dmm4x4 PROPERTIES FIXTURES_SETUP dmm4x4_floorplan)
+    set_tests_properties(kpu_floorplan_dmm4x4_import PROPERTIES FIXTURES_REQUIRED dmm4x4_floorplan)
+
     # The shared structure record (#392; docs/plans/shared-structure-record.md): the model's T4
     # floorplan converted and checked; the checker's self-test, over the samples from both
     # producers (the model's, and the RTL generator's converted from its floorplan.json v1).
@@ -76,6 +98,24 @@ if(KPU_BUILD_TESTS)
             COMMAND ${_struct_py} ${_trace}/structure_diff.py ${CMAKE_CURRENT_BINARY_DIR}/t4_native.structure.json
                     ${CMAKE_CURRENT_BINARY_DIR}/t4.structure.json)
         set_tests_properties(structure_native_t4 PROPERTIES FIXTURES_REQUIRED "t4_floorplan;t4_structure")
+        # The mesh's record: native and converted agree, and both check clean.
+        add_test(NAME structure_record_dmm4x4
+            COMMAND ${_struct_py} ${_trace}/structure_from_floorplan.py ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_floorplan.json
+                    -o ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4.structure.json)
+        set_tests_properties(structure_record_dmm4x4 PROPERTIES FIXTURES_REQUIRED dmm4x4_floorplan FIXTURES_SETUP dmm4x4_structure)
+        add_test(NAME structure_check_native_dmm4x4
+            COMMAND ${_struct_py} ${_trace}/structure_check.py ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_native.structure.json)
+        set_tests_properties(structure_check_native_dmm4x4 PROPERTIES FIXTURES_REQUIRED dmm4x4_floorplan)
+        add_test(NAME structure_native_dmm4x4
+            COMMAND ${_struct_py} ${_trace}/structure_diff.py ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_native.structure.json
+                    ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4.structure.json)
+        set_tests_properties(structure_native_dmm4x4 PROPERTIES FIXTURES_REQUIRED "dmm4x4_floorplan;dmm4x4_structure")
+        # The converter writes a die-local record, wherever the die sits.
+        add_test(NAME structure_from_floorplan_die_local
+            COMMAND ${_struct_py} ${_trace}/test_structure_from_floorplan.py ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_floorplan.json)
+        set_tests_properties(structure_from_floorplan_die_local PROPERTIES FIXTURES_REQUIRED dmm4x4_floorplan)
+        set_tests_properties(structure_record_dmm4x4 structure_check_native_dmm4x4 structure_native_dmm4x4
+            structure_from_floorplan_die_local PROPERTIES LABELS "program;records;structure;mesh")
         add_test(NAME structure_check_selftest
             COMMAND ${_struct_py} ${_trace}/test_structure_check.py ${CMAKE_SOURCE_DIR}/tests/program/structure)
         # The floorplan view (#447): pack.py over every sample; with Playwright, the page itself.
@@ -116,5 +156,6 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_floorplan_t64 kpu_floorplan_t64_import kpu_floorplan_t4 kpu_floorplan_t4_import
         kpu_floorplan_t16 kpu_floorplan_t16_import kpu_floorplan_refuses_no_layout
+        kpu_floorplan_dmm4x4 kpu_floorplan_dmm4x4_import
         PROPERTIES LABELS "program;platform;floorplan")
 endif()

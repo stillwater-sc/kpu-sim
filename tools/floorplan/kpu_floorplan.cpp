@@ -15,6 +15,7 @@
 #include <sw/kpu/program/platform/array_layout.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
 #include <sw/kpu/program/platform/floorplan.hpp>
+#include <sw/kpu/program/platform/mesh_layout.hpp>
 
 #include <fstream>
 #include <functional>
@@ -145,9 +146,19 @@ int main(int argc, char** argv) {
     std::cout << "  blocks       " << fp.block_count() << ":";
     for (const auto& [k, n] : kinds) std::cout << " " << to_string(k) << "=" << n;
     std::cout << "\n";
-    std::size_t attached = 0;
-    for (const NocLink& l : fp.noc) attached += l.kind == NocLink::Kind::Attach;
-    std::cout << "  dma ports    " << attached << " DMA attachment(s) (first pass)\n";
+    if (const auto ML = MeshLayout::of(d)) {
+        std::cout << "  mesh         " << ML->rows() << "x" << ML->cols() << ": " << ML->node_count()
+                  << " nodes (an L3 tile and its compute tile each), " << kMeshMovers << " BlockMovers per node, "
+                  << ML->links().size() << " one-hop links and their credit links, " << ML->edge_ports().size()
+                  << " edge ports\n";
+        std::cout << "  periphery    " << d.periphery.value_or(DeviceSpecification::Periphery{}).topology << " of "
+                  << ML->stops().size() << " stops: " << ML->edge_ports().size() << " edge ports and "
+                  << ML->controller_count() << " memory controller(s), on the controllers' clock\n";
+    } else {
+        std::size_t attached = 0;
+        for (const NocLink& l : fp.noc) attached += l.kind == NocLink::Kind::Attach;
+        std::cout << "  dma ports    " << attached << " DMA attachment(s) (first pass)\n";
+    }
     std::cout << "  die          " << fp.die.w_um << " x " << fp.die.h_um << " um (illustrative)\n";
     std::cout << "  digest       " << fp.digest() << "\n";
     for (const std::string& n : layout_notes(d)) std::cout << "  note         " << n << "\n";

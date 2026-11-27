@@ -134,9 +134,14 @@ def from_sim(d: dict) -> dict:
     if d.get("units") != "um":
         raise ConvertError(f"kpu-floorplan units '{d.get('units')}': this converter reads um")
     k = 1e-3                                           # um -> mm
+    # kpu-floorplan draws from the top-left (SVG); the record's origin is the die's lower-left
+    # (shared-structure-record.md §2.2), so every y flips about the die's top edge.
+    # Die-local too: x counts from the die's left edge.
+    top, left = d["die"][1] + d["die"][3], d["die"][0]
 
     def rect(r):
-        return [v * k for v in r]
+        x, y, w, h = r
+        return [(x - left) * k, (top - y - h) * k, w * k, h * k]
 
     blocks = []
 
@@ -168,14 +173,19 @@ def from_sim(d: dict) -> dict:
     blocks.append({"id": root, "kind": "die", "rect": die, "area": die[2] * die[3]})
     for b in d["blocks"]:
         walk(b, root)
-    # The NoC: one network, its nodes the blocks its links join (routers, ports, DMA attachments).
-    nodes, links = {}, []
+    # The networks, as kpu-floorplan --structure writes them: a checkerboard's NoC is one network,
+    # `noc`; a dmm_mesh's links make three, `mesh` (one hop, with its edge ports), `credit` and
+    # `periphery` (the ring). Each network's nodes are the blocks its links join.
+    net_of = {"mesh": "mesh", "edge": "mesh", "credit": "credit", "periphery": "periphery"}
+    node_kind = {"noc_router": "router", "noc_port": "port", "l3_tile": "node", "memory_controller": "stop"}
+    nets = {}
     by_id = {b["id"]: b for b in blocks}
     for i, ln in enumerate(d.get("noc", [])):
+        nodes, links = nets.setdefault(net_of.get(ln["kind"], "noc"), ({}, []))
         for end in (ln["a"], ln["b"]):
             if end not in nodes:
                 blk = by_id.get(end)
-                kind = {"noc_router": "router", "noc_port": "port"}.get(blk["kind"] if blk else "", "attach")
+                kind = node_kind.get(blk["kind"] if blk else "", "attach")
                 node = {"id": end, "kind": kind, "block": end}
                 if blk and "rect" in blk:
                     x, y, w, h = blk["rect"]
@@ -183,15 +193,28 @@ def from_sim(d: dict) -> dict:
                 nodes[end] = node
         link = {"id": f"{ln['kind']}_{i}", "from": ln["a"], "to": ln["b"]}
         if ln.get("route"):
-            pts = [[p[0] * k, p[1] * k] for p in ln["route"]]
+            pts = [[(p[0] - left) * k, (top - p[1]) * k] for p in ln["route"]]
             link["points"] = pts
             link["length"] = sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in zip(pts, pts[1:]))
         links.append(link)
+        # A mesh, credit or edge wire carries both directions: each is its own link in the record.
+        if ln["kind"] in ("mesh", "credit", "edge"):
+            back = {"id": f"{ln['kind']}_{i}r", "from": ln["b"], "to": ln["a"]}
+            if "points" in link:
+                back["points"] = list(reversed(link["points"]))
+                back["length"] = link["length"]
+            links.append(back)
+    info = [
+        ("noc", "noc", "ring", "the NoC's ring, port and attach links (kpu-floorplan)"),
+        ("mesh", "noc", "one_hop", "the dmm_mesh's one-hop data links, each pair both ways, and its edge ports (kpu-floorplan)"),
+        ("credit", "credit", "one_hop", "the credit network: each data link's credits, the other way (kpu-floorplan)"),
+        ("periphery", "ring", "ring", "the periphery ring, on the memory controllers' clock: edge ports and controllers, clockwise (kpu-floorplan)"),
+    ]
     networks = []
-    if links:
-        networks.append({"id": "noc", "kind": "noc", "routing": "ring",
-                         "description": "the NoC's ring, port and attach links (kpu-floorplan)",
-                         "nodes": list(nodes.values()), "links": links})
+    for nid, kind, routing, desc in info:
+        if nid in nets and nets[nid][1]:
+            networks.append({"id": nid, "kind": kind, "routing": routing, "description": desc,
+                             "nodes": list(nets[nid][0].values()), "links": nets[nid][1]})
     w, h = die[2], die[3]
     return {
         "format": FORMAT,

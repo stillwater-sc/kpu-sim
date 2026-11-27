@@ -205,6 +205,9 @@ branes-ai/embodied-ai-soc-generator#90 (§7).
 `tests/program/structure/`, the checker's and the viewers' fixtures:
 - `kpu_t4.structure.json`: the model's T4 (`kpu-floorplan --deploy tests/program/deploy/kpu_t4.json`,
   converted);
+- `kpu_dmm_4x4.structure.json`: the model's DMM mesh (#604; `kpu-floorplan --deploy
+  tests/program/deploy/kpu_dmm_4x4.json --structure tests/program/structure/kpu_dmm_4x4.structure.json`): three networks, `mesh` (one hop, with its edge
+  ports), `credit` and `periphery` (the ring joining the edge ports to the memory controllers);
 - `kpugen_kpu_2x2_systolic.structure.json` and `kpugen_kpu_edge_hetero.structure.json`: the RTL
   generator's `kpu_2x2_systolic` and `kpu_edge_hetero`, converted from their `floorplan.json` v1
   (kpu-gen 756039f, as their manifests record).
