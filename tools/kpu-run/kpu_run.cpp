@@ -761,6 +761,27 @@ std::string resolved_path(const std::string& path) {
     return (ec ? p : r).lexically_normal().string();
 }
 
+// Every artifact a run writes is its own file: two destinations naming one file (by a link, a
+// run directory's own included) would leave only the last written. False, with the reason on stderr,
+// if two do. `run_dir`: its summary.txt and run.json are destinations too.
+bool distinct_artifacts(std::vector<std::pair<std::string, std::string>> outs, const std::string& run_dir) {
+    if (!run_dir.empty()) {
+        outs.push_back({"the run directory's summary.txt", run_dir + "/summary.txt"});
+        outs.push_back({"the run directory's run.json", run_dir + "/run.json"});
+    }
+    std::vector<std::pair<std::string, std::string>> resolved;
+    for (const auto& [what, path] : outs)
+        if (!path.empty()) resolved.push_back({what, resolved_path(path)});
+    for (std::size_t i = 0; i < resolved.size(); ++i)
+        for (std::size_t k = i + 1; k < resolved.size(); ++k)
+            if (resolved[i].second == resolved[k].second) {
+                std::cerr << "kpu-run: " << resolved[i].first << " and " << resolved[k].first << " name the same file, "
+                          << resolved[i].second << "\n";
+                return false;
+            }
+    return true;
+}
+
 // --compute-subsystem: the program's compute traffic on the cycle core (#547).
 int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast, const platform::DeviceSpecification* device) {
     static const std::set<std::string> kCompute = {"--program", "--deploy", "--compute-subsystem", "--compute-trace",
@@ -804,22 +825,12 @@ int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast
         std::cerr << "kpu-run: --compute-heatmap names the .json; its .svg is written beside it\n";
         return 2;
     }
-    {
-        // Every artifact its own file: two paths naming one file would leave only the last written.
-        std::vector<std::pair<std::string, std::string>> outs;
-        for (const auto& [what, path] : {std::pair<const char*, const std::string*>{"--compute-trace", &trace_path},
-                                         {"--compute-counters", &counters_path},
-                                         {"--compute-heatmap", &heatmap_path},
-                                         {"--compute-heatmap's .svg", &heatmap_svg}})
-            if (!path->empty()) outs.push_back({what, resolved_path(*path)});
-        for (std::size_t i = 0; i < outs.size(); ++i)
-            for (std::size_t k = i + 1; k < outs.size(); ++k)
-                if (outs[i].second == outs[k].second) {
-                    std::cerr << "kpu-run: " << outs[i].first << " and " << outs[k].first << " name the same file, "
-                              << outs[i].second << "\n";
-                    return 2;
-                }
-    }
+    if (!distinct_artifacts({{"--compute-trace", trace_path},
+                             {"--compute-counters", counters_path},
+                             {"--compute-heatmap", heatmap_path},
+                             {"--compute-heatmap's .svg", heatmap_svg}},
+                            run_dir))
+        return 2;
     // After the checks on the final destinations: a refused run writes no run.json.
     if (!run_dir.empty()) {
         manifest.emplace(run_dir, a, device->name, "compute-subsystem");
@@ -928,10 +939,7 @@ int run_system_level(const std::vector<std::string>& a, const csp::lang::Program
         counters_path = run_dir + "/counters.json";
     }
     // On the final destinations (a run directory's own, links and all), before anything is written.
-    if (!trace_path.empty() && !counters_path.empty() && resolved_path(trace_path) == resolved_path(counters_path)) {
-        std::cerr << "kpu-run: the trace and the counters name the same file, " << resolved_path(trace_path) << "\n";
-        return 2;
-    }
+    if (!distinct_artifacts({{"--system-trace", trace_path}, {"--system-counters", counters_path}}, run_dir)) return 2;
     if (!run_dir.empty()) {
         manifest.emplace(run_dir, a, device->name, "system");
         if (!manifest->write()) return 2;

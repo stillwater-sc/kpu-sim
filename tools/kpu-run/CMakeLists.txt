@@ -436,21 +436,33 @@ if(KPU_BUILD_TESTS)
                 -DEXPECT_CODE=2
                 -DMUST_MATCH=name.the.same.file
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
-        # A run directory whose trace.json is already a link to its counters.json (#601's review):
-        # the check runs on the directory's own paths, before its run.json is written.
-        add_test(NAME kpu_run_alias_run_dir_link
-            COMMAND ${CMAKE_COMMAND} -E create_symlink counters.json ${_alias}/logs/trace.json)
-        set_tests_properties(kpu_run_alias_run_dir_link PROPERTIES FIXTURES_SETUP alias_dirs DEPENDS kpu_run_alias_setup)
-        foreach(_mode system compute-subsystem)
-            add_test(NAME kpu_run_${_mode}_run_dir_through_a_link
-                COMMAND ${CMAKE_COMMAND}
-                    -DCMD=$<TARGET_FILE:run>
-                    -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--${_mode}$<SEMICOLON>--run-dir$<SEMICOLON>${_alias}/logs
-                    -DEXPECT_CODE=2
-                    -DMUST_MATCH=name.the.same.file
-                    -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
-            set_tests_properties(kpu_run_${_mode}_run_dir_through_a_link PROPERTIES FIXTURES_REQUIRED alias_dirs
-                                 LABELS "program;driver;cycle;system")
+        # A run directory whose trace.json is already a link to another of its own files (#601's
+        # reviews): its counters.json, its summary.txt or its run.json. Each is refused on the
+        # directory's own paths, before its run.json is written.
+        foreach(_target counters summary run)
+            set(_ext json)
+            if(_target STREQUAL "summary")
+                set(_ext txt)
+            endif()
+            add_test(NAME kpu_run_alias_run_dir_${_target}
+                COMMAND ${CMAKE_COMMAND} -E create_symlink ${_target}.${_ext} ${_alias}/to_${_target}/trace.json)
+            add_test(NAME kpu_run_alias_run_dir_${_target}_dir
+                COMMAND ${CMAKE_COMMAND} -E make_directory ${_alias}/to_${_target})
+            set_tests_properties(kpu_run_alias_run_dir_${_target}_dir PROPERTIES FIXTURES_SETUP alias_dirs
+                                 DEPENDS kpu_run_alias_clean)
+            set_tests_properties(kpu_run_alias_run_dir_${_target} PROPERTIES FIXTURES_SETUP alias_dirs
+                                 DEPENDS kpu_run_alias_run_dir_${_target}_dir)
+            foreach(_mode system compute-subsystem)
+                add_test(NAME kpu_run_${_mode}_run_dir_trace_to_${_target}
+                    COMMAND ${CMAKE_COMMAND}
+                        -DCMD=$<TARGET_FILE:run>
+                        -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--${_mode}$<SEMICOLON>--run-dir$<SEMICOLON>${_alias}/to_${_target}
+                        -DEXPECT_CODE=2
+                        -DMUST_MATCH=name.the.same.file
+                        -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+                set_tests_properties(kpu_run_${_mode}_run_dir_trace_to_${_target} PROPERTIES FIXTURES_REQUIRED alias_dirs
+                                     LABELS "program;driver;cycle;system")
+            endforeach()
         endforeach()
         set_tests_properties(kpu_run_system_artifacts_through_a_link kpu_run_compute_artifacts_through_a_link
                              PROPERTIES LABELS "program;driver;cycle;system" FIXTURES_REQUIRED alias_dirs)
