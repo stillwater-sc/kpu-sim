@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **12, the guide** (#573): `docs/02-simulation/debugging-a-cycle-core-run.md`, run, check, serve and
     view.
 
-- **The compute subsystem on the cycle core, Phase 2 steps 2a–2d** (#542–#545; epic #532,
+- **The compute subsystem on the cycle core, Phase 2 steps 2a–2e** (#542–#546; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §5).
   - **2a, the L2 and the BlockMover** (#542, #592): `cycle/compute/l2.hpp`, `block_mover.hpp` and
     `l2_program.hpp`.
@@ -93,6 +93,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       cycle that no two hold one and neither while the slot is live.
     - The RTL's drain rule (a countdown of K + 2R − 2): back-to-back commands run with no bubble, and
       one-element reductions are held 2R − 1 apart; a forced 2R − 2 collides.
+  - **2e, CSP orchestration** (#546): `cycle/compute/csp_compute_program.hpp`. The walker's Move, Feed,
+    Call, Drain, Writeback and L2Release actions become the BlockMover's, the L2's and the Streamer's
+    programs, and the whole path runs from a CSP program. The L3 starts with A and B in the program's slots,
+    in the L2's lane layout. C in L3 equals L-B's per tile, int32 exact.
+    - Rung 5: the RTL's 8×8×16 int8 matmul single- and double-buffered in L2 (`l2 = 3` and `l2 = 6`).
+      Double buffering cuts the run from 1060 to 688 clocks. Each chain's operand slots are freed before
+      its `result` (early release).
+    - Rung 6: the 8×8×16 on `kpu_soc_2x2`'s 4×4 array, and an int8 64³ on `kpu_s1`'s 128×64 array with its
+      16×16 tiles on the corner. The 64³ is mover-bound: its commands run 68 clocks apart where the array
+      needs 16.
+    - A chain ends at its last call, as the RTL's `last` launches its results north. A Drain the program
+      defers (`store … late`) is the same L2 Result, in program order.
+    - Refused before any cycle: a call reading A and B from one L2 slot (the Streamer reads both in the
+      same clocks: `l2 = 2`, or `l2 = 3` with late stores), an L3 slot holding two residencies (the Loads
+      run in time at the join), merges, init streams, stages, and anything but an int8 OS gemm.
 - **The memory subsystem on the cycle core, Phase 1 steps 1b–1e** (#538–#541; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §4). DRAM, the DMA engine, the NoC and the L3 tile, built
   bottom-up on the cycle core and checked bit for bit against L-B's data.

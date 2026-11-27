@@ -8,7 +8,7 @@
 // THE STAND-IN L3 holds bytes at addresses, loaded directly (plan §5.2: "the L3s start with A and B
 // in the slots the program places them in ... or the same state loaded directly"). It serves the
 // BlockMover's row reads in order, one beat of the bus a clock, and takes its writeback one beat a
-// clock. Phase 1's L3Tile gets the BlockMover's ports at the join (step 2e), where their contention
+// clock. Phase 1's L3Tile gets the BlockMover's ports at the join (step 3), where their contention
 // with the DMA engine's can be measured; until then this stand-in is the BlockMover's L3.
 //
 // The rig registers check_l2_slot_credits as an invariant, so it holds every cycle of every run.
