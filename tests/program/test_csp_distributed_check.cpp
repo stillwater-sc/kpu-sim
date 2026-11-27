@@ -66,10 +66,10 @@ TEST_CASE("D0: the program's mesh is the device's", "[program][csp][distributed]
 }
 
 TEST_CASE("D1: every process exists, and a mover carries one flow", "[program][csp][distributed][check]") {
-    // The 2x2 has two controllers with one engine each: dma[0, 1] is not there.
-    const std::string engine = with(with(sample("vector_to_node3.dcsp"), "channel ld0 : dma[0, 0]", "channel ld0 : dma[0, 1]"),
-                                    "process dma[0, 0]", "process dma[0, 1]");
-    CHECK_THAT(violations(engine, "kpu_dmm_2x2.json"), ContainsSubstring("D1 dma[0, 1] does not exist on device \"dmm2x2\""));
+    // The 2x2 has two controllers with two engines each: dma[0, 2] is not there.
+    const std::string engine = with(with(sample("vector_to_node3.dcsp"), "channel ld0 : dma[0, 0]", "channel ld0 : dma[0, 2]"),
+                                    "process dma[0, 0]", "process dma[0, 2]");
+    CHECK_THAT(violations(engine, "kpu_dmm_2x2.json"), ContainsSubstring("D1 dma[0, 2] does not exist on device \"dmm2x2\""));
     // One mover on two channels.
     // (built directly: a second channel from bm.S[1], with a push on it)
     DistributedProgram p = parse_distributed(sample("vector_to_node3.dcsp"));

@@ -190,7 +190,7 @@ the send movers a node uses at once.
 
 | Class | DMM algorithm, nearest neighbour only | Sends | Feeds + drain | Risk |
 |---|---|---|---|---|
-| P1 GEMM | systolic 2D: A streams in from the W edge and moves E, B from the N edge and moves S, C stays and drains to an edge | E, S | a, b, c | Cannon needs wraparound shifts, which a mesh without wraparound does not have in one hop; the edge-streamed systolic form does not need them |
+| P1 GEMM | **built (#608):** systolic 2D: A streams in from the W edge and moves E, B from the N edge and moves S, C stays, then drains north to row 0 and out of its edge port | E, S, N | a, b, c | Cannon needs wraparound shifts, which a mesh without wraparound does not have in one hop; the edge-streamed systolic form does not need them |
 | P2 sliding window | halo exchange with 4 neighbours (corners in two steps); weights broadcast by a pipeline | N, E, S, W | a, b, c | the tightest: 4 + 3 = 7 movers |
 | P3 row reduction | a chain reduce along the row, then a pipelined broadcast back | E, W | a, c | the row's length is the latency |
 | P4 gather/scatter | index-driven DMA into an edge node, then forwarded; or a permutation across the mesh | ≤ 2 | a, c | **the indices are run-time data**, and a static program has to state every move. See §7, decision 2 |

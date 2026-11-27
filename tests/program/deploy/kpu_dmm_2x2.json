@@ -57,7 +57,7 @@
       "map": "co:ch:rk:bg:ba:mc:ro"
     },
     "dma": {
-      "engines_per_controller": 1,
+      "engines_per_controller": 2,
       "bytes_per_cycle": 64
     },
     "periphery": {

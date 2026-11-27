@@ -72,4 +72,22 @@ if(KPU_BUILD_TESTS)
     set_tests_properties(csp_gen_matmul csp_gen_lu_from_target csp_gen_refuses_small_l3
         csp_gen_refuses_misplaced_stage csp_gen_rejects_bad_option csp_gen_rejects_missing_value
         PROPERTIES LABELS "program;csp;gen;v0.9")
+    # A level-2 matmul for a mesh (#608): the P1 schedule, as dcsp text.
+    add_test(NAME csp_gen_distributed_matmul
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:csp-gen>
+            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--target$<SEMICOLON>${_deploy}/kpu_dmm_2x2.json$<SEMICOLON>--distributed
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=program.matmul.machine.mesh.2x2.*channel.a0to1.:.bm.E.0.
+            -P ${_expect}
+    )
+    add_test(NAME csp_gen_distributed_needs_a_mesh
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:csp-gen>
+            -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--target$<SEMICOLON>${_deploy}/kpu_t4.json$<SEMICOLON>--distributed
+            -DEXPECT_CODE=1
+            -DMUST_MATCH=not.a.mesh
+            -P ${_expect}
+    )
+    set_tests_properties(csp_gen_distributed_matmul csp_gen_distributed_needs_a_mesh PROPERTIES LABELS "program;csp;distributed;gen")
 endif()

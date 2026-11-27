@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P1, distributed GEMM** (#608; distributed CSP programs, step 5).
+  `csp/gen/distributed_gemm.hpp` writes C = A · B as a level-2 program on a DMM mesh. It is
+  edge-streamed and systolic, and every hop is one hop:
+  - **C** is stationary and block-distributed over the nodes.
+  - **A** enters each mesh row at its west edge through a DMA engine and moves east.
+  - **B** enters each column at its north edge and moves south.
+  - **Each node** feeds both into its compute tile, accumulates its C block in L2 over K, drains it,
+    and sends it north. Row 0 pushes it out of its edge port to the DMA engine that stores it.
+  - **DMA engines:** one per input edge node, on one channel (D1).
+  - **Refusals:** a C that does not divide over the mesh, slots the cluster does not have, too few
+    engines.
+
+  `kpu-csp-gen --algo matmul --distributed --target <dmm_mesh.json>` writes it as `dcsp 1`. On the
+  1x1, 2x2 and 4x4 meshes every generated program passes D0-D4, runs on L-B (D5), and gives the L0
+  kernels' C bit for bit (D6). `kpu_dmm_2x2.json` now has 2 engines per controller.
+
 - **The `dmm_mesh` deployment is a hierarchical SoC spec** (#635). The levels are SoC, cluster,
   sub-cluster and resource, so every resource has one owner.
   - **`cluster`**, the same for every node, has two sub-clusters:
