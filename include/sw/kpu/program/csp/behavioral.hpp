@@ -66,6 +66,11 @@ inline L3Geometry l3_geometry(const CspProgram& p) {
 
 class BehavioralInterpreter {
 public:
+    // A tile's words out of an operand, and back in (row-major within the tile). Level 2's L-B
+    // (distributed_behavioral.hpp) moves tiles with the same copies.
+    static std::vector<float> extract_tile(const TensorOperand& op, Dim ti, Dim tj) { return extract(op, ti, tj); }
+    static void insert_tile(TensorOperand& op, Dim ti, Dim tj, const std::vector<float>& v) { insert(op, ti, tj, v); }
+
     struct Summary {
         std::size_t actions = 0, calls = 0;
         std::size_t peak_l3 = 0;            // L3 slots tagged at once, as executed

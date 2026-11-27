@@ -318,6 +318,10 @@ private:
                 a.tile = tile(p);
                 expect_word("at");
                 a.to = slot();
+                if (word("merges")) {
+                    take();
+                    a.merges = static_cast<std::uint32_t>(integer("the merges the result expects"));
+                }
                 a.reads = reads();
                 a.channel = via(p);
             }
@@ -387,7 +391,10 @@ inline std::string print_distributed(const DistributedProgram& p) {
                     for (std::size_t i = 0; i < a.args.size(); ++i) o << (i ? ", " : "") << a.args[i].to_string();
                     o << ")";
                     if (a.accumulate) o << " acc " << a.to->to_string();
-                    else o << " to " << tile(a.tile) << " at " << a.to->to_string() << " reads " << a.reads << via(a.channel);
+                    else
+                        o << " to " << tile(a.tile) << " at " << a.to->to_string()
+                          << (a.merges ? " merges " + std::to_string(a.merges) : std::string()) << " reads " << a.reads
+                          << via(a.channel);
                     break;
             }
             o << ";\n";

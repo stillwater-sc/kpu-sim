@@ -162,6 +162,10 @@ sequencer: the leaf Calls' releases pace everything above them.
   as level 1 records the consumers per residency. The actions are Load, Push, Feed, Drain, Store and
   Call; an accumulating Call merges into a live result and spends no credit.
 - **The values' source comes with L-B (#606).** A program declares its operands as level 1 does.
+- **A result that accumulates expects its merges (#606).** `call ... to T at l2[t]:s merges k` makes
+  every read of the result wait until k accumulating calls have landed, as the Combiner signals a tile
+  ready only after its last merge. Without it a drain could take a partial, and level-2 L-B showed that
+  race.
 
 ### 3.3 The checker
 
@@ -231,7 +235,8 @@ A "needs" against one hop or eight movers goes to the user before the NoC rework
    for hand-written programs, so a person can write and read one (`csp/lang/`). **Done: #605**
    (`dcsp 1`, samples in `tests/program/csp/distributed/`).
 3. **L-B for level 2**: `csp/distributed_behavioral.hpp` executes the processes with bounded channels and
-   computes the values. Checks D5 and D6.
+   computes the values. Checks D5 and D6. **Done: #606** (round robin, so no process starves; a deadlock
+   names every stuck process, with its line and what it waits for; `compare_values` is D6, bit for bit).
 4. **The checker**: `csp/distributed_check.hpp` (D1–D4), and `kpu-csp-check --distributed`.
 5. **The generators**, one PR per class, in the order that builds on what came before: P1, P5, P6, P3, P2,
    P7, P8, P9, P4 (`csp/gen/distributed/`). Each is tested on 1×1, 2×2 and 4×4 meshes, checked with D1–D6,

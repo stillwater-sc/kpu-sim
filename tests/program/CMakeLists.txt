@@ -185,6 +185,15 @@ set_tests_properties(test_csp_distributed PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+kpu_add_component_test(test_csp_distributed_behavioral "program"
+    test_csp_distributed_behavioral.cpp
+)
+
+set_tests_properties(test_csp_distributed_behavioral PROPERTIES
+    LABELS "program;csp;distributed;behavioral"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 kpu_add_component_test(test_csp_l2_staging "program"
     test_csp_l2_staging.cpp
 )
