@@ -40,6 +40,7 @@
 #pragma once
 
 #include <sw/kpu/program/platform/array_layout.hpp>
+#include <sw/kpu/program/platform/mesh_layout.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
 
 #include <cstdint>
@@ -64,9 +65,11 @@ enum class ResourceKind {
     RegisterFile,   // dev/cf[c]/regs
     // ---- the physical shape (#286 step 1). Appended, so existing kinds keep their values,
     //      and named only when the spec declares what they need (array_layout.hpp).
-    BlockMover,     // dev/l3[t]/bm[e]       -- e = the edge it sits on: 0 N, 1 E, 2 S, 3 W
+    BlockMover,     // dev/l3[t]/bm[e]       -- e = the edge it sits on: 0 N, 1 E, 2 S, 3 W;
+                    //                          on a dmm_mesh, bm[0..7] (mesh_layout.hpp)
     NocRouter,      // dev/l3[t]/noc         -- the L3 tile's hub on the folded torus
-    NocPort,        // dev/noc/port[k]       -- a fold-end port, where traffic enters a loop
+    NocPort,        // dev/noc/port[k]       -- a fold-end port, where traffic enters a loop;
+                    //                          on a dmm_mesh, an edge port onto the periphery
     MemoryController, // dev/mc[m]
     DmaEngine,      // dev/mc[m]/dma[d]      -- a DMA engine belongs to one controller
     CpuHart,        // dev/cpu/hart[h]       -- the attached RV64 orchestrator (ADR 0003)
@@ -468,6 +471,25 @@ public:
             case ResourceKind::BlockMover:
             case ResourceKind::NocRouter:
             case ResourceKind::NocPort: {
+                if (d.topology == "dmm_mesh") {
+                    std::string mw;
+                    const auto L = MeshLayout::of(d, &mw);
+                    if (!L) return std::string(to_string(n.kind)) + ": this device has no mesh layout, because " + mw;
+                    if (n.kind == ResourceKind::NocRouter)
+                        return "noc: a dmm_mesh has no routers; its links are one hop, between neighbours";
+                    if (n.kind == ResourceKind::NocPort)
+                        return n.path[0] < L->edge_ports().size()
+                                   ? std::string{}
+                                   : "port[" + std::to_string(n.path[0]) + "]: the mesh has " +
+                                         std::to_string(L->edge_ports().size()) + " edge port(s)";
+                    if (n.path[0] >= L->node_count())
+                        return "l3[" + std::to_string(n.path[0]) + "]: the mesh has " +
+                               std::to_string(L->node_count()) + " node(s)";
+                    if (n.path[1] >= kMeshMovers)
+                        return "bm[" + std::to_string(n.path[1]) + "]: a mesh node has " + std::to_string(kMeshMovers) +
+                               " BlockMovers, 0-3 send N E S W, 4-6 feed a b x, 7 drain";
+                    return {};
+                }
                 // Named from the LAYOUT, so the reason a name is missing is usually that the
                 // device has none -- and that reason is the one worth reporting.
                 std::string lw;
@@ -569,6 +591,13 @@ private:
 
             // ---- the physical shape, AFTER every pre-existing kind, so a resource that had
             //      a dense index before this was added keeps it.
+            if (const auto L = MeshLayout::of(d)) {
+                for (Dim t = 0; t < L->node_count(); ++t)
+                    for (Dim k = 0; k < kMeshMovers; ++k)
+                        names_.push_back(ResourceName{d.name, ResourceKind::BlockMover, {t, k}, 0});
+                for (const EdgePort& p : L->edge_ports())
+                    names_.push_back(ResourceName{d.name, ResourceKind::NocPort, {p.index}, 0});
+            }
             if (const auto L = ArrayLayout::of(d)) {
                 for (const BlockMoverSite& m : L->block_movers())
                     names_.push_back(ResourceName{d.name, ResourceKind::BlockMover,

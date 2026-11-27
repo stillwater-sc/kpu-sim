@@ -159,6 +159,10 @@ inline bool level_models(ExecutionLevel l, platform::SpecField f) {
             // port processes (timing/noc_fabric.hpp) are not wired into the executor until
             // docs/plans/noc-port-arbitration.md step 4b.
             return false;
+        case SpecField::Periphery:
+            // The DMM mesh's periphery ring (docs/plans/distributed-csp-programs.md): declared and
+            // laid out (mesh_layout.hpp, the floorplan), timed by no level until the NoC rework (#618).
+            return false;
         case SpecField::Systolic:
             // The RTL tile's own configuration (#396): its slots, banks, latencies, widths and
             // dataflow. Declared and validated so a deployment derived from the generator states

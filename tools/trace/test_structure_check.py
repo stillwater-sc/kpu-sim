@@ -73,7 +73,8 @@ def main(samples: str) -> int:
     expect(sources == {"model", "rtl"}, "a sample from each producer, the model and the RTL")
 
     rtl = next(r for r in recs.values() if r["provenance"]["source"] == "rtl")
-    model = next(r for r in recs.values() if r["provenance"]["source"] == "model")
+    # The mutations below read the checkerboard's `noc` network: the T4 is the model sample they use.
+    model = recs.get("kpu_t4.structure.json") or next(r for r in recs.values() if r["provenance"]["source"] == "model")
 
     def broken(base, mutate):
         r = copy.deepcopy(base)

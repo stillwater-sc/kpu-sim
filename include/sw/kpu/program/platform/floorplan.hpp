@@ -30,6 +30,7 @@
 
 #include <sw/kpu/program/platform/array_layout.hpp>
 #include <sw/kpu/program/platform/deployment_spec.hpp>
+#include <sw/kpu/program/platform/mesh_layout.hpp>
 #include <sw/kpu/program/platform/resource_map.hpp>
 
 #include <cstddef>
@@ -84,6 +85,11 @@ struct NocLink {
         Ring,       // hub to hub, along a torus loop
         Port,       // a fold-end port to one of the two hubs of its fold link
         Attach,     // a DMA engine to the port it injects into (first pass, see generator)
+        // A dmm_mesh's (mesh_layout.hpp):
+        Mesh,       // L3 tile to its neighbour's: the one-hop data links, both directions
+        Credit,     // the same pair on the credit network: each data link's credits, the other way
+        Edge,       // an edge port to its node's L3 tile
+        Periphery,  // one segment of the periphery ring, stop to stop (edge ports, memory controllers)
     };
     Kind kind = Kind::Ring;
     std::string a, b;                         // block names
@@ -138,7 +144,8 @@ std::string floorplan_to_json(const SocFloorplan& fp);
 // The floorplan as a structure record, kpu-structure v1 (docs/plans/shared-structure-record.md,
 // #392): the format every view reads and the RTL generator writes too. Lengths in mm. The blocks
 // flatten into a tree linked by `parent`, under one `die` root; the NoC links become one network,
-// `noc`, routed `ring`; the geometry is flagged estimated, because the pitch is illustrative. It
+// `noc`, routed `ring` (a dmm_mesh's become three: `mesh`, one hop with its edge ports; `credit`;
+// and `periphery`, a ring); the geometry is flagged estimated, because the pitch is illustrative. It
 // is what tools/trace/structure_from_floorplan.py makes of floorplan_to_json's output, block for
 // block (CTest structure_native_t4); only the provenance differs. Throws FloorplanError when a block
 // is named `<device>/die`, the id the record gives the die root.

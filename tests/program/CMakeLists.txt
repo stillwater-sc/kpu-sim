@@ -399,6 +399,15 @@ kpu_add_component_test(test_floorplan "program"
     test_floorplan.cpp
 )
 
+kpu_add_component_test(test_mesh_layout "program"
+    test_mesh_layout.cpp
+)
+
+set_tests_properties(test_mesh_layout PROPERTIES
+    LABELS "program;platform;floorplan;mesh"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 set_tests_properties(test_floorplan PROPERTIES
     LABELS "program;platform;floorplan;v0.9"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

@@ -71,7 +71,7 @@ struct DeviceSpecification {
     // A name, because the naming map (#282 increment 3) addresses resources as
     // (device, kind, instance, offset) and a positional index is not a name.
     std::string name = "dev0";
-    std::string topology = "single";            // single | news | checkerboard
+    std::string topology = "single";            // single | news | checkerboard | dmm_mesh
     Dim compute_tiles = 1;
     double macs_per_cycle = 256.0;              // ONE compute tile's throughput
     // ONE compute tile's systolic array, in PEs (docs/plans/l2-reuse-and-fabric-pipeline-view.md
@@ -227,6 +227,25 @@ struct DeviceSpecification {
     };
     std::optional<Noc> noc;
 
+    // THE PERIPHERY NETWORK of a `dmm_mesh` (docs/plans/distributed-csp-programs.md §2, §3.1; #604).
+    // The mesh is one hop between neighbouring nodes, each an L3 tile with its own compute tile.
+    // The memory PHYs sit around the chip's edge, and a DMA engine may have to feed a node on the
+    // far side, so the DMA engines and the mesh's edge ports both attach to one network around
+    // the mesh. It runs on the memory controllers' clock, carries DMA flows only (decided
+    // 2026-11-27), and is push only. Absent on a dmm_mesh = the defaults below.
+    //   topology        "ring"; Clos and others are hypotheses (#603), not yet accepted
+    //   queue_blocks    blocks per stop input; at least two, one for the block and one for the
+    //                   bubble that keeps a ring moving
+    //   mc_after_port   memory controller m's stop follows edge port mc_after_port[m] on the
+    //                   ring (ports are numbered clockwise from the NW corner; mesh_layout.hpp).
+    //                   Empty = spread evenly. Strictly increasing when declared.
+    struct Periphery {
+        std::string topology = "ring";
+        Dim queue_blocks = 2;
+        std::vector<Dim> mc_after_port;
+    };
+    std::optional<Periphery> periphery;
+
     // Analytical-harness coefficients. The executors do not use these; the
     // first-order model is a different tier with a different job.
     struct Analytical {
@@ -278,7 +297,7 @@ struct DeploymentSpec {
 };
 
 inline bool known_topology_name(const std::string& t) {
-    return t == "single" || t == "news" || t == "checkerboard";
+    return t == "single" || t == "news" || t == "checkerboard" || t == "dmm_mesh";
 }
 
 // A device name is also an ADDRESS: the naming map spells a resource
@@ -440,6 +459,56 @@ inline std::string dram_problem(const DeviceSpecification& d) {
     return {};
 }
 
+// ----------------------------------------------------------------------------
+// The DMM mesh and its periphery (docs/plans/distributed-csp-programs.md §3.1)
+// ----------------------------------------------------------------------------
+inline bool known_periphery_topology(const std::string& t) { return t == "ring"; }
+
+// Empty when the device is no dmm_mesh and declares no periphery, or is a consistent one.
+inline std::string mesh_problem(const DeviceSpecification& d) {
+    if (d.topology != "dmm_mesh") {
+        if (d.periphery)
+            return "periphery applies to the dmm_mesh topology, not '" + d.topology + "'";
+        return {};
+    }
+    if (!d.array.rows)
+        return "a dmm_mesh declares its array.rows and array.cols: the nodes of the mesh";
+    const std::uint64_t nodes = static_cast<std::uint64_t>(*d.array.rows) * *d.array.cols;
+    if (nodes != d.compute_tiles)
+        return "a dmm_mesh of " + std::to_string(*d.array.rows) + "x" + std::to_string(*d.array.cols) +
+               " has " + std::to_string(nodes) + " nodes, each an L3 tile with its own compute tile, "
+               "but compute_tiles is " + std::to_string(d.compute_tiles);
+    if (!d.l3.tiles || *d.l3.tiles != d.compute_tiles)
+        return "a dmm_mesh node is an L3 tile with its own compute tile, so it declares "
+               "l3.tiles = compute_tiles (" + std::to_string(d.compute_tiles) + ")";
+    const DeviceSpecification::Periphery p = d.periphery.value_or(DeviceSpecification::Periphery{});
+    if (!known_periphery_topology(p.topology))
+        return "periphery.topology '" + p.topology + "' is not one of ring (a Clos network and "
+               "others are hypotheses, #603)";
+    if (p.queue_blocks < 2)
+        return "periphery.queue_blocks (" + std::to_string(p.queue_blocks) + ") must be at least two: "
+               "one for the block, one for the bubble that keeps the ring moving";
+    const std::uint64_t ports = 2ull * (*d.array.rows + *d.array.cols);
+    const Dim mcs = d.memory.controllers.value_or(1);
+    if (mcs > ports)
+        return std::to_string(mcs) + " memory controllers, but the periphery has only " +
+               std::to_string(ports) + " edge ports to place them between";
+    if (!p.mc_after_port.empty()) {
+        if (p.mc_after_port.size() != mcs)
+            return "periphery.mc_after_port lists " + std::to_string(p.mc_after_port.size()) +
+                   " position(s), one per memory controller, of which there are " + std::to_string(mcs);
+        for (std::size_t m = 0; m < p.mc_after_port.size(); ++m) {
+            if (p.mc_after_port[m] >= ports)
+                return "periphery.mc_after_port[" + std::to_string(m) + "] is " +
+                       std::to_string(p.mc_after_port[m]) + "; the edge ports are 0.." + std::to_string(ports - 1);
+            if (m && p.mc_after_port[m] <= p.mc_after_port[m - 1])
+                return "periphery.mc_after_port must be strictly increasing: the controllers' order "
+                       "around the ring is their index order";
+        }
+    }
+    return {};
+}
+
 inline std::string DeploymentSpec::validate() const {
     if (devices.empty()) return "a deployment needs at least one device";
     for (std::size_t i = 0; i < devices.size(); ++i) {
@@ -458,7 +527,7 @@ inline std::string DeploymentSpec::validate() const {
                    "address grammar";
         if (!known_topology_name(d.topology))
             return where + ": unknown topology '" + d.topology +
-                   "' (single | news | checkerboard)";
+                   "' (single | news | checkerboard | dmm_mesh)";
         if (d.compute_tiles == 0) return where + ": compute_tiles must be non-zero";
         if (d.element_bytes == 0) return where + ": element_bytes must be non-zero";
         // FINITE, not merely positive. `!(x > 0.0)` lets +inf through, and an infinite
@@ -580,9 +649,11 @@ inline std::string DeploymentSpec::validate() const {
         if (d.array.rows) {
             if (*d.array.rows == 0 || *d.array.cols == 0)
                 return where + ": array.rows and array.cols must be non-zero";
-            if (d.topology != "checkerboard")
-                return where + ": an array shape applies to the checkerboard topology, not '" +
+            if (d.topology != "checkerboard" && d.topology != "dmm_mesh")
+                return where + ": an array shape applies to the checkerboard and dmm_mesh topologies, not '" +
                        d.topology + "'";
+        }
+        if (d.array.rows && d.topology == "checkerboard") {
             if (*d.array.rows % 2 != 0 || *d.array.cols % 2 != 0)
                 return where + ": array.rows and array.cols must be even, because the folded "
                        "torus pairs rows and columns into loops";
@@ -607,6 +678,7 @@ inline std::string DeploymentSpec::validate() const {
                        "), because each DMA engine belongs to one memory controller";
         }
         if (d.cpu.harts && *d.cpu.harts == 0) return where + ": cpu.harts declared as zero";
+        if (std::string why = mesh_problem(d); !why.empty()) return where + ": " + why;
         if (std::string why = dram_problem(d); !why.empty()) return where + ": " + why;
         if (std::string why = noc_problem(d); !why.empty()) return where + ": " + why;
     }
@@ -617,7 +689,9 @@ inline DeviceDescriptor DeploymentSpec::device_view(Dim i) const {
     const DeviceSpecification& s = device(i);
     DeviceDescriptor d = DeviceDescriptor::single();
     if (s.topology == "news") d = DeviceDescriptor::news();
-    else if (s.topology == "checkerboard") d = DeviceDescriptor::checkerboard(s.compute_tiles);
+    // A dmm_mesh projects as a board of its tiles: L-B and L-T1 see counts and bandwidths only,
+    // and report the periphery as declared but not modelled.
+    else if (s.topology == "checkerboard" || s.topology == "dmm_mesh") d = DeviceDescriptor::checkerboard(s.compute_tiles);
 
     d.compute_tiles = s.compute_tiles;
     // Aggregate lanes, for the analytical harness only — the presets above already set
@@ -654,7 +728,7 @@ inline DeviceDescriptor DeploymentSpec::device_view(Dim i) const {
 // Named as data so the report and the "does this level model it" table cannot drift
 // apart — a table keyed on a string typed twice is a table that disagrees with itself.
 enum class SpecField { L3Tiles, L3Banks, L2BanksPerTile, L1Vectors, DmaBurst, L3Capacity, Dram,
-                       Noc, DmaWindow, Systolic };
+                       Noc, DmaWindow, Systolic, Periphery };
 
 inline const char* to_string(SpecField f) {
     switch (f) {
@@ -668,6 +742,7 @@ inline const char* to_string(SpecField f) {
         case SpecField::Dram:           return "memory.dram";
         case SpecField::Noc:            return "noc";
         case SpecField::Systolic:       return "systolic";
+        case SpecField::Periphery:      return "periphery";
     }
     return "?";
 }
@@ -687,6 +762,7 @@ inline bool declared(const DeviceSpecification& s, SpecField f) {
         case SpecField::Dram:           return s.memory.dram.has_value();
         case SpecField::Noc:            return s.noc.has_value();
         case SpecField::Systolic:       return s.systolic.has_value();
+        case SpecField::Periphery:      return s.periphery.has_value();
     }
     return false;
 }
@@ -724,6 +800,14 @@ inline std::string declared_value(const DeviceSpecification& s, SpecField f) {
                    ", " + std::to_string(y.l2_slots) + " L2 / " + std::to_string(y.acc_slots) + " acc slots, " +
                    std::to_string(y.sp_banks) + " sp / " + std::to_string(y.acc_banks) + " acc banks";
         }
+        case SpecField::Periphery: {
+            if (!s.periphery) return "0";
+            const auto& p = *s.periphery;
+            std::string at;
+            for (Dim k : p.mc_after_port) at += (at.empty() ? "" : ",") + std::to_string(k);
+            return p.topology + ", " + std::to_string(p.queue_blocks) + " blocks per input, controllers " +
+                   (at.empty() ? std::string("spread evenly") : "after ports " + at);
+        }
     }
     return "?";
 }
@@ -732,7 +816,7 @@ inline const std::vector<SpecField>& all_spec_fields() {
     static const std::vector<SpecField> f = {
         SpecField::L3Tiles, SpecField::L3Banks, SpecField::L2BanksPerTile,
         SpecField::L1Vectors, SpecField::DmaBurst, SpecField::L3Capacity, SpecField::Dram,
-        SpecField::Noc, SpecField::DmaWindow, SpecField::Systolic};
+        SpecField::Noc, SpecField::DmaWindow, SpecField::Systolic, SpecField::Periphery};
     return f;
 }
 

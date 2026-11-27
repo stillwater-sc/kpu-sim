@@ -1,0 +1,8448 @@
+{
+ "format": "kpu-structure",
+ "version": 1,
+ "provenance": {
+  "producer": "kpu-floorplan kpu-sim 0.9.0",
+  "source": "model",
+  "configuration": "dmm4x4",
+  "details": {
+   "layout": "generated:dmm_mesh",
+   "floorplan_digest": "101b45521d9c7239"
+  }
+ },
+ "units": {
+  "length": "mm",
+  "area": "mm2"
+ },
+ "blocks": [
+  {
+   "id": "dmm4x4/die",
+   "kind": "die",
+   "rect": [
+    0.0,
+    0.0,
+    14.66,
+    7.86
+   ],
+   "area": 115.22760000000001
+  },
+  {
+   "id": "dmm4x4/array",
+   "kind": "array",
+   "parent": "dmm4x4/die",
+   "label": "array",
+   "rect": [
+    4.73,
+    1.93,
+    8.0,
+    4.0
+   ],
+   "area": 32.0
+  },
+  {
+   "id": "dmm4x4/l3[0]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[0]",
+   "resource": "dmm4x4/l3[0]",
+   "clock_domain": "l3",
+   "rect": [
+    4.75,
+    1.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[0]",
+   "label": "N",
+   "resource": "dmm4x4/l3[0]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    5.038,
+    1.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[0]",
+   "label": "E",
+   "resource": "dmm4x4/l3[0]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    2.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[0]",
+   "label": "S",
+   "resource": "dmm4x4/l3[0]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    5.038,
+    2.8524000000000003,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[0]",
+   "label": "W",
+   "resource": "dmm4x4/l3[0]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    4.75,
+    2.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[0]",
+   "label": "a",
+   "resource": "dmm4x4/l3[0]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    2.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[0]",
+   "label": "b",
+   "resource": "dmm4x4/l3[0]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    2.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[0]",
+   "label": "x",
+   "resource": "dmm4x4/l3[0]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    2.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[0]",
+   "label": "c",
+   "resource": "dmm4x4/l3[0]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    2.7276,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[0]",
+   "resource": "dmm4x4/l3[0]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    4.846,
+    2.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[0]",
+   "resource": "dmm4x4/l3[0]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.2396,
+    2.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[0]",
+   "resource": "dmm4x4/l3[0]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    4.846,
+    2.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[0]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[0]",
+   "resource": "dmm4x4/l3[0]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    5.2396,
+    2.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[0]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[0]",
+   "resource": "dmm4x4/cf[0]",
+   "clock_domain": "cf",
+   "rect": [
+    5.75,
+    1.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[0]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[0]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[0]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    2.0460000000000003,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[0]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[0]",
+   "resource": "dmm4x4/cf[0]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    2.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[0]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[0]",
+   "resource": "dmm4x4/cf[0]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    6.0956,
+    2.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[0]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[0]",
+   "resource": "dmm4x4/cf[0]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    2.6795999999999998,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[0]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[0]",
+   "resource": "dmm4x4/cf[0]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    6.0956,
+    2.6795999999999998,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[0]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[0]",
+   "resource": "dmm4x4/cf[0]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    6.3740000000000006,
+    2.5260000000000002,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[0]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[0]",
+   "resource": "dmm4x4/cf[0]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    6.3740000000000006,
+    2.6795999999999998,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[1]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[1]",
+   "resource": "dmm4x4/l3[1]",
+   "clock_domain": "l3",
+   "rect": [
+    6.75,
+    1.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[1]",
+   "label": "N",
+   "resource": "dmm4x4/l3[1]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    7.038,
+    1.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[1]",
+   "label": "E",
+   "resource": "dmm4x4/l3[1]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    2.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[1]",
+   "label": "S",
+   "resource": "dmm4x4/l3[1]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    7.038,
+    2.8524000000000003,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[1]",
+   "label": "W",
+   "resource": "dmm4x4/l3[1]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    6.75,
+    2.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[1]",
+   "label": "a",
+   "resource": "dmm4x4/l3[1]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    2.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[1]",
+   "label": "b",
+   "resource": "dmm4x4/l3[1]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    2.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[1]",
+   "label": "x",
+   "resource": "dmm4x4/l3[1]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    2.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[1]",
+   "label": "c",
+   "resource": "dmm4x4/l3[1]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    2.7276,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[1]",
+   "resource": "dmm4x4/l3[1]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    6.846,
+    2.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[1]",
+   "resource": "dmm4x4/l3[1]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.2396,
+    2.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[1]",
+   "resource": "dmm4x4/l3[1]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    6.846,
+    2.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[1]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[1]",
+   "resource": "dmm4x4/l3[1]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    7.2396,
+    2.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[1]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[1]",
+   "resource": "dmm4x4/cf[1]",
+   "clock_domain": "cf",
+   "rect": [
+    7.75,
+    1.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[1]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[1]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[1]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    2.0460000000000003,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[1]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[1]",
+   "resource": "dmm4x4/cf[1]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    2.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[1]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[1]",
+   "resource": "dmm4x4/cf[1]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    8.095600000000001,
+    2.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[1]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[1]",
+   "resource": "dmm4x4/cf[1]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    2.6795999999999998,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[1]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[1]",
+   "resource": "dmm4x4/cf[1]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    8.095600000000001,
+    2.6795999999999998,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[1]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[1]",
+   "resource": "dmm4x4/cf[1]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    8.374,
+    2.5260000000000002,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[1]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[1]",
+   "resource": "dmm4x4/cf[1]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    8.374,
+    2.6795999999999998,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[2]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[2]",
+   "resource": "dmm4x4/l3[2]",
+   "clock_domain": "l3",
+   "rect": [
+    8.75,
+    1.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[2]",
+   "label": "N",
+   "resource": "dmm4x4/l3[2]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    9.038,
+    1.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[2]",
+   "label": "E",
+   "resource": "dmm4x4/l3[2]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    2.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[2]",
+   "label": "S",
+   "resource": "dmm4x4/l3[2]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    9.038,
+    2.8524000000000003,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[2]",
+   "label": "W",
+   "resource": "dmm4x4/l3[2]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    8.75,
+    2.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[2]",
+   "label": "a",
+   "resource": "dmm4x4/l3[2]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    2.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[2]",
+   "label": "b",
+   "resource": "dmm4x4/l3[2]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    2.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[2]",
+   "label": "x",
+   "resource": "dmm4x4/l3[2]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    2.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[2]",
+   "label": "c",
+   "resource": "dmm4x4/l3[2]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    2.7276,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[2]",
+   "resource": "dmm4x4/l3[2]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    8.846,
+    2.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[2]",
+   "resource": "dmm4x4/l3[2]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    9.239600000000001,
+    2.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[2]",
+   "resource": "dmm4x4/l3[2]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    8.846,
+    2.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[2]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[2]",
+   "resource": "dmm4x4/l3[2]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    9.239600000000001,
+    2.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[2]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[2]",
+   "resource": "dmm4x4/cf[2]",
+   "clock_domain": "cf",
+   "rect": [
+    9.75,
+    1.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[2]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[2]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[2]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    2.0460000000000003,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[2]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[2]",
+   "resource": "dmm4x4/cf[2]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    2.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[2]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[2]",
+   "resource": "dmm4x4/cf[2]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    10.095600000000001,
+    2.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[2]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[2]",
+   "resource": "dmm4x4/cf[2]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    2.6795999999999998,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[2]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[2]",
+   "resource": "dmm4x4/cf[2]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    10.095600000000001,
+    2.6795999999999998,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[2]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[2]",
+   "resource": "dmm4x4/cf[2]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    10.374,
+    2.5260000000000002,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[2]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[2]",
+   "resource": "dmm4x4/cf[2]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    10.374,
+    2.6795999999999998,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[3]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[3]",
+   "resource": "dmm4x4/l3[3]",
+   "clock_domain": "l3",
+   "rect": [
+    10.75,
+    1.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[3]",
+   "label": "N",
+   "resource": "dmm4x4/l3[3]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    11.038,
+    1.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[3]",
+   "label": "E",
+   "resource": "dmm4x4/l3[3]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    2.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[3]",
+   "label": "S",
+   "resource": "dmm4x4/l3[3]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    11.038,
+    2.8524000000000003,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[3]",
+   "label": "W",
+   "resource": "dmm4x4/l3[3]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    10.75,
+    2.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[3]",
+   "label": "a",
+   "resource": "dmm4x4/l3[3]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    2.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[3]",
+   "label": "b",
+   "resource": "dmm4x4/l3[3]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    2.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[3]",
+   "label": "x",
+   "resource": "dmm4x4/l3[3]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    2.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[3]",
+   "label": "c",
+   "resource": "dmm4x4/l3[3]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    2.7276,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[3]",
+   "resource": "dmm4x4/l3[3]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    10.846,
+    2.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[3]",
+   "resource": "dmm4x4/l3[3]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    11.239600000000001,
+    2.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[3]",
+   "resource": "dmm4x4/l3[3]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    10.846,
+    2.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[3]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[3]",
+   "resource": "dmm4x4/l3[3]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    11.239600000000001,
+    2.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[3]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[3]",
+   "resource": "dmm4x4/cf[3]",
+   "clock_domain": "cf",
+   "rect": [
+    11.75,
+    1.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[3]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[3]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[3]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    2.0460000000000003,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[3]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[3]",
+   "resource": "dmm4x4/cf[3]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    2.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[3]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[3]",
+   "resource": "dmm4x4/cf[3]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    12.095600000000001,
+    2.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[3]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[3]",
+   "resource": "dmm4x4/cf[3]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    2.6795999999999998,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[3]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[3]",
+   "resource": "dmm4x4/cf[3]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    12.095600000000001,
+    2.6795999999999998,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[3]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[3]",
+   "resource": "dmm4x4/cf[3]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    12.374,
+    2.5260000000000002,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[3]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[3]",
+   "resource": "dmm4x4/cf[3]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    12.374,
+    2.6795999999999998,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[4]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[4]",
+   "resource": "dmm4x4/l3[4]",
+   "clock_domain": "l3",
+   "rect": [
+    4.75,
+    2.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[4]",
+   "label": "N",
+   "resource": "dmm4x4/l3[4]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    5.038,
+    2.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[4]",
+   "label": "E",
+   "resource": "dmm4x4/l3[4]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    3.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[4]",
+   "label": "S",
+   "resource": "dmm4x4/l3[4]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    5.038,
+    3.8524000000000003,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[4]",
+   "label": "W",
+   "resource": "dmm4x4/l3[4]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    4.75,
+    3.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[4]",
+   "label": "a",
+   "resource": "dmm4x4/l3[4]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    3.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[4]",
+   "label": "b",
+   "resource": "dmm4x4/l3[4]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    3.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[4]",
+   "label": "x",
+   "resource": "dmm4x4/l3[4]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    3.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[4]",
+   "label": "c",
+   "resource": "dmm4x4/l3[4]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    3.7276,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[4]",
+   "resource": "dmm4x4/l3[4]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    4.846,
+    3.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[4]",
+   "resource": "dmm4x4/l3[4]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.2396,
+    3.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[4]",
+   "resource": "dmm4x4/l3[4]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    4.846,
+    3.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[4]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[4]",
+   "resource": "dmm4x4/l3[4]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    5.2396,
+    3.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[4]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[4]",
+   "resource": "dmm4x4/cf[4]",
+   "clock_domain": "cf",
+   "rect": [
+    5.75,
+    2.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[4]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[4]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[4]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    3.0460000000000003,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[4]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[4]",
+   "resource": "dmm4x4/cf[4]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    3.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[4]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[4]",
+   "resource": "dmm4x4/cf[4]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    6.0956,
+    3.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[4]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[4]",
+   "resource": "dmm4x4/cf[4]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    3.6796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[4]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[4]",
+   "resource": "dmm4x4/cf[4]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    6.0956,
+    3.6796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[4]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[4]",
+   "resource": "dmm4x4/cf[4]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    6.3740000000000006,
+    3.5260000000000002,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[4]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[4]",
+   "resource": "dmm4x4/cf[4]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    6.3740000000000006,
+    3.6796,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[5]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[5]",
+   "resource": "dmm4x4/l3[5]",
+   "clock_domain": "l3",
+   "rect": [
+    6.75,
+    2.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[5]",
+   "label": "N",
+   "resource": "dmm4x4/l3[5]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    7.038,
+    2.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[5]",
+   "label": "E",
+   "resource": "dmm4x4/l3[5]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    3.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[5]",
+   "label": "S",
+   "resource": "dmm4x4/l3[5]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    7.038,
+    3.8524000000000003,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[5]",
+   "label": "W",
+   "resource": "dmm4x4/l3[5]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    6.75,
+    3.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[5]",
+   "label": "a",
+   "resource": "dmm4x4/l3[5]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    3.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[5]",
+   "label": "b",
+   "resource": "dmm4x4/l3[5]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    3.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[5]",
+   "label": "x",
+   "resource": "dmm4x4/l3[5]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    3.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[5]",
+   "label": "c",
+   "resource": "dmm4x4/l3[5]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    3.7276,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[5]",
+   "resource": "dmm4x4/l3[5]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    6.846,
+    3.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[5]",
+   "resource": "dmm4x4/l3[5]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.2396,
+    3.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[5]",
+   "resource": "dmm4x4/l3[5]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    6.846,
+    3.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[5]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[5]",
+   "resource": "dmm4x4/l3[5]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    7.2396,
+    3.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[5]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[5]",
+   "resource": "dmm4x4/cf[5]",
+   "clock_domain": "cf",
+   "rect": [
+    7.75,
+    2.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[5]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[5]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[5]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    3.0460000000000003,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[5]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[5]",
+   "resource": "dmm4x4/cf[5]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    3.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[5]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[5]",
+   "resource": "dmm4x4/cf[5]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    8.095600000000001,
+    3.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[5]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[5]",
+   "resource": "dmm4x4/cf[5]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    3.6796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[5]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[5]",
+   "resource": "dmm4x4/cf[5]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    8.095600000000001,
+    3.6796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[5]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[5]",
+   "resource": "dmm4x4/cf[5]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    8.374,
+    3.5260000000000002,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[5]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[5]",
+   "resource": "dmm4x4/cf[5]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    8.374,
+    3.6796,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[6]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[6]",
+   "resource": "dmm4x4/l3[6]",
+   "clock_domain": "l3",
+   "rect": [
+    8.75,
+    2.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[6]",
+   "label": "N",
+   "resource": "dmm4x4/l3[6]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    9.038,
+    2.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[6]",
+   "label": "E",
+   "resource": "dmm4x4/l3[6]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    3.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[6]",
+   "label": "S",
+   "resource": "dmm4x4/l3[6]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    9.038,
+    3.8524000000000003,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[6]",
+   "label": "W",
+   "resource": "dmm4x4/l3[6]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    8.75,
+    3.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[6]",
+   "label": "a",
+   "resource": "dmm4x4/l3[6]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    3.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[6]",
+   "label": "b",
+   "resource": "dmm4x4/l3[6]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    3.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[6]",
+   "label": "x",
+   "resource": "dmm4x4/l3[6]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    3.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[6]",
+   "label": "c",
+   "resource": "dmm4x4/l3[6]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    3.7276,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[6]",
+   "resource": "dmm4x4/l3[6]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    8.846,
+    3.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[6]",
+   "resource": "dmm4x4/l3[6]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    9.239600000000001,
+    3.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[6]",
+   "resource": "dmm4x4/l3[6]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    8.846,
+    3.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[6]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[6]",
+   "resource": "dmm4x4/l3[6]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    9.239600000000001,
+    3.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[6]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[6]",
+   "resource": "dmm4x4/cf[6]",
+   "clock_domain": "cf",
+   "rect": [
+    9.75,
+    2.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[6]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[6]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[6]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    3.0460000000000003,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[6]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[6]",
+   "resource": "dmm4x4/cf[6]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    3.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[6]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[6]",
+   "resource": "dmm4x4/cf[6]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    10.095600000000001,
+    3.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[6]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[6]",
+   "resource": "dmm4x4/cf[6]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    3.6796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[6]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[6]",
+   "resource": "dmm4x4/cf[6]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    10.095600000000001,
+    3.6796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[6]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[6]",
+   "resource": "dmm4x4/cf[6]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    10.374,
+    3.5260000000000002,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[6]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[6]",
+   "resource": "dmm4x4/cf[6]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    10.374,
+    3.6796,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[7]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[7]",
+   "resource": "dmm4x4/l3[7]",
+   "clock_domain": "l3",
+   "rect": [
+    10.75,
+    2.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[7]",
+   "label": "N",
+   "resource": "dmm4x4/l3[7]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    11.038,
+    2.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[7]",
+   "label": "E",
+   "resource": "dmm4x4/l3[7]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    3.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[7]",
+   "label": "S",
+   "resource": "dmm4x4/l3[7]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    11.038,
+    3.8524000000000003,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[7]",
+   "label": "W",
+   "resource": "dmm4x4/l3[7]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    10.75,
+    3.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[7]",
+   "label": "a",
+   "resource": "dmm4x4/l3[7]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    3.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[7]",
+   "label": "b",
+   "resource": "dmm4x4/l3[7]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    3.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[7]",
+   "label": "x",
+   "resource": "dmm4x4/l3[7]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    3.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[7]",
+   "label": "c",
+   "resource": "dmm4x4/l3[7]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    3.7276,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[7]",
+   "resource": "dmm4x4/l3[7]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    10.846,
+    3.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[7]",
+   "resource": "dmm4x4/l3[7]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    11.239600000000001,
+    3.0460000000000003,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[7]",
+   "resource": "dmm4x4/l3[7]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    10.846,
+    3.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[7]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[7]",
+   "resource": "dmm4x4/l3[7]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    11.239600000000001,
+    3.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[7]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[7]",
+   "resource": "dmm4x4/cf[7]",
+   "clock_domain": "cf",
+   "rect": [
+    11.75,
+    2.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[7]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[7]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[7]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    3.0460000000000003,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[7]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[7]",
+   "resource": "dmm4x4/cf[7]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    3.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[7]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[7]",
+   "resource": "dmm4x4/cf[7]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    12.095600000000001,
+    3.5260000000000002,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[7]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[7]",
+   "resource": "dmm4x4/cf[7]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    3.6796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[7]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[7]",
+   "resource": "dmm4x4/cf[7]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    12.095600000000001,
+    3.6796,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[7]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[7]",
+   "resource": "dmm4x4/cf[7]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    12.374,
+    3.5260000000000002,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[7]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[7]",
+   "resource": "dmm4x4/cf[7]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    12.374,
+    3.6796,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[8]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[8]",
+   "resource": "dmm4x4/l3[8]",
+   "clock_domain": "l3",
+   "rect": [
+    4.75,
+    3.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[8]",
+   "label": "N",
+   "resource": "dmm4x4/l3[8]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    5.038,
+    3.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[8]",
+   "label": "E",
+   "resource": "dmm4x4/l3[8]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    4.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[8]",
+   "label": "S",
+   "resource": "dmm4x4/l3[8]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    5.038,
+    4.852399999999999,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[8]",
+   "label": "W",
+   "resource": "dmm4x4/l3[8]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    4.75,
+    4.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[8]",
+   "label": "a",
+   "resource": "dmm4x4/l3[8]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    4.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[8]",
+   "label": "b",
+   "resource": "dmm4x4/l3[8]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    4.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[8]",
+   "label": "x",
+   "resource": "dmm4x4/l3[8]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    4.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[8]",
+   "label": "c",
+   "resource": "dmm4x4/l3[8]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    4.727600000000001,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[8]",
+   "resource": "dmm4x4/l3[8]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    4.846,
+    4.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[8]",
+   "resource": "dmm4x4/l3[8]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.2396,
+    4.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[8]",
+   "resource": "dmm4x4/l3[8]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    4.846,
+    4.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[8]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[8]",
+   "resource": "dmm4x4/l3[8]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    5.2396,
+    4.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[8]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[8]",
+   "resource": "dmm4x4/cf[8]",
+   "clock_domain": "cf",
+   "rect": [
+    5.75,
+    3.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[8]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[8]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[8]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    4.046,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[8]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[8]",
+   "resource": "dmm4x4/cf[8]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    4.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[8]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[8]",
+   "resource": "dmm4x4/cf[8]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    6.0956,
+    4.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[8]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[8]",
+   "resource": "dmm4x4/cf[8]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    4.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[8]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[8]",
+   "resource": "dmm4x4/cf[8]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    6.0956,
+    4.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[8]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[8]",
+   "resource": "dmm4x4/cf[8]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    6.3740000000000006,
+    4.526,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[8]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[8]",
+   "resource": "dmm4x4/cf[8]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    6.3740000000000006,
+    4.679600000000001,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[9]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[9]",
+   "resource": "dmm4x4/l3[9]",
+   "clock_domain": "l3",
+   "rect": [
+    6.75,
+    3.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[9]",
+   "label": "N",
+   "resource": "dmm4x4/l3[9]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    7.038,
+    3.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[9]",
+   "label": "E",
+   "resource": "dmm4x4/l3[9]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    4.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[9]",
+   "label": "S",
+   "resource": "dmm4x4/l3[9]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    7.038,
+    4.852399999999999,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[9]",
+   "label": "W",
+   "resource": "dmm4x4/l3[9]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    6.75,
+    4.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[9]",
+   "label": "a",
+   "resource": "dmm4x4/l3[9]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    4.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[9]",
+   "label": "b",
+   "resource": "dmm4x4/l3[9]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    4.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[9]",
+   "label": "x",
+   "resource": "dmm4x4/l3[9]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    4.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[9]",
+   "label": "c",
+   "resource": "dmm4x4/l3[9]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    4.727600000000001,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[9]",
+   "resource": "dmm4x4/l3[9]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    6.846,
+    4.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[9]",
+   "resource": "dmm4x4/l3[9]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.2396,
+    4.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[9]",
+   "resource": "dmm4x4/l3[9]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    6.846,
+    4.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[9]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[9]",
+   "resource": "dmm4x4/l3[9]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    7.2396,
+    4.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[9]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[9]",
+   "resource": "dmm4x4/cf[9]",
+   "clock_domain": "cf",
+   "rect": [
+    7.75,
+    3.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[9]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[9]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[9]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    4.046,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[9]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[9]",
+   "resource": "dmm4x4/cf[9]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    4.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[9]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[9]",
+   "resource": "dmm4x4/cf[9]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    8.095600000000001,
+    4.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[9]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[9]",
+   "resource": "dmm4x4/cf[9]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    4.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[9]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[9]",
+   "resource": "dmm4x4/cf[9]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    8.095600000000001,
+    4.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[9]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[9]",
+   "resource": "dmm4x4/cf[9]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    8.374,
+    4.526,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[9]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[9]",
+   "resource": "dmm4x4/cf[9]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    8.374,
+    4.679600000000001,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[10]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[10]",
+   "resource": "dmm4x4/l3[10]",
+   "clock_domain": "l3",
+   "rect": [
+    8.75,
+    3.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[10]",
+   "label": "N",
+   "resource": "dmm4x4/l3[10]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    9.038,
+    3.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[10]",
+   "label": "E",
+   "resource": "dmm4x4/l3[10]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    4.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[10]",
+   "label": "S",
+   "resource": "dmm4x4/l3[10]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    9.038,
+    4.852399999999999,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[10]",
+   "label": "W",
+   "resource": "dmm4x4/l3[10]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    8.75,
+    4.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[10]",
+   "label": "a",
+   "resource": "dmm4x4/l3[10]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    4.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[10]",
+   "label": "b",
+   "resource": "dmm4x4/l3[10]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    4.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[10]",
+   "label": "x",
+   "resource": "dmm4x4/l3[10]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    4.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[10]",
+   "label": "c",
+   "resource": "dmm4x4/l3[10]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    4.727600000000001,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[10]",
+   "resource": "dmm4x4/l3[10]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    8.846,
+    4.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[10]",
+   "resource": "dmm4x4/l3[10]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    9.239600000000001,
+    4.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[10]",
+   "resource": "dmm4x4/l3[10]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    8.846,
+    4.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[10]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[10]",
+   "resource": "dmm4x4/l3[10]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    9.239600000000001,
+    4.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[10]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[10]",
+   "resource": "dmm4x4/cf[10]",
+   "clock_domain": "cf",
+   "rect": [
+    9.75,
+    3.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[10]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[10]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[10]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    4.046,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[10]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[10]",
+   "resource": "dmm4x4/cf[10]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    4.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[10]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[10]",
+   "resource": "dmm4x4/cf[10]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    10.095600000000001,
+    4.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[10]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[10]",
+   "resource": "dmm4x4/cf[10]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    4.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[10]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[10]",
+   "resource": "dmm4x4/cf[10]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    10.095600000000001,
+    4.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[10]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[10]",
+   "resource": "dmm4x4/cf[10]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    10.374,
+    4.526,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[10]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[10]",
+   "resource": "dmm4x4/cf[10]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    10.374,
+    4.679600000000001,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[11]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[11]",
+   "resource": "dmm4x4/l3[11]",
+   "clock_domain": "l3",
+   "rect": [
+    10.75,
+    3.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[11]",
+   "label": "N",
+   "resource": "dmm4x4/l3[11]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    11.038,
+    3.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[11]",
+   "label": "E",
+   "resource": "dmm4x4/l3[11]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    4.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[11]",
+   "label": "S",
+   "resource": "dmm4x4/l3[11]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    11.038,
+    4.852399999999999,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[11]",
+   "label": "W",
+   "resource": "dmm4x4/l3[11]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    10.75,
+    4.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[11]",
+   "label": "a",
+   "resource": "dmm4x4/l3[11]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    4.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[11]",
+   "label": "b",
+   "resource": "dmm4x4/l3[11]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    4.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[11]",
+   "label": "x",
+   "resource": "dmm4x4/l3[11]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    4.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[11]",
+   "label": "c",
+   "resource": "dmm4x4/l3[11]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    4.727600000000001,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[11]",
+   "resource": "dmm4x4/l3[11]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    10.846,
+    4.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[11]",
+   "resource": "dmm4x4/l3[11]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    11.239600000000001,
+    4.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[11]",
+   "resource": "dmm4x4/l3[11]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    10.846,
+    4.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[11]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[11]",
+   "resource": "dmm4x4/l3[11]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    11.239600000000001,
+    4.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[11]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[11]",
+   "resource": "dmm4x4/cf[11]",
+   "clock_domain": "cf",
+   "rect": [
+    11.75,
+    3.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[11]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[11]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[11]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    4.046,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[11]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[11]",
+   "resource": "dmm4x4/cf[11]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    4.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[11]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[11]",
+   "resource": "dmm4x4/cf[11]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    12.095600000000001,
+    4.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[11]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[11]",
+   "resource": "dmm4x4/cf[11]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    4.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[11]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[11]",
+   "resource": "dmm4x4/cf[11]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    12.095600000000001,
+    4.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[11]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[11]",
+   "resource": "dmm4x4/cf[11]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    12.374,
+    4.526,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[11]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[11]",
+   "resource": "dmm4x4/cf[11]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    12.374,
+    4.679600000000001,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[12]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[12]",
+   "resource": "dmm4x4/l3[12]",
+   "clock_domain": "l3",
+   "rect": [
+    4.75,
+    4.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[12]",
+   "label": "N",
+   "resource": "dmm4x4/l3[12]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    5.038,
+    4.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[12]",
+   "label": "E",
+   "resource": "dmm4x4/l3[12]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    5.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[12]",
+   "label": "S",
+   "resource": "dmm4x4/l3[12]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    5.038,
+    5.852399999999999,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[12]",
+   "label": "W",
+   "resource": "dmm4x4/l3[12]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    4.75,
+    5.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[12]",
+   "label": "a",
+   "resource": "dmm4x4/l3[12]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    5.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[12]",
+   "label": "b",
+   "resource": "dmm4x4/l3[12]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    5.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[12]",
+   "label": "x",
+   "resource": "dmm4x4/l3[12]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    5.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[12]",
+   "label": "c",
+   "resource": "dmm4x4/l3[12]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    5.6524,
+    5.727600000000001,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[12]",
+   "resource": "dmm4x4/l3[12]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    4.846,
+    5.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[12]",
+   "resource": "dmm4x4/l3[12]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    5.2396,
+    5.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[12]",
+   "resource": "dmm4x4/l3[12]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    4.846,
+    5.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[12]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[12]",
+   "resource": "dmm4x4/l3[12]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    5.2396,
+    5.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[12]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[12]",
+   "resource": "dmm4x4/cf[12]",
+   "clock_domain": "cf",
+   "rect": [
+    5.75,
+    4.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[12]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[12]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[12]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    5.046,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[12]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[12]",
+   "resource": "dmm4x4/cf[12]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    5.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[12]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[12]",
+   "resource": "dmm4x4/cf[12]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    6.0956,
+    5.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[12]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[12]",
+   "resource": "dmm4x4/cf[12]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    5.846,
+    5.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[12]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[12]",
+   "resource": "dmm4x4/cf[12]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    6.0956,
+    5.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[12]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[12]",
+   "resource": "dmm4x4/cf[12]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    6.3740000000000006,
+    5.526,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[12]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[12]",
+   "resource": "dmm4x4/cf[12]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    6.3740000000000006,
+    5.679600000000001,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[13]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[13]",
+   "resource": "dmm4x4/l3[13]",
+   "clock_domain": "l3",
+   "rect": [
+    6.75,
+    4.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[13]",
+   "label": "N",
+   "resource": "dmm4x4/l3[13]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    7.038,
+    4.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[13]",
+   "label": "E",
+   "resource": "dmm4x4/l3[13]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    5.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[13]",
+   "label": "S",
+   "resource": "dmm4x4/l3[13]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    7.038,
+    5.852399999999999,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[13]",
+   "label": "W",
+   "resource": "dmm4x4/l3[13]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    6.75,
+    5.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[13]",
+   "label": "a",
+   "resource": "dmm4x4/l3[13]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    5.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[13]",
+   "label": "b",
+   "resource": "dmm4x4/l3[13]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    5.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[13]",
+   "label": "x",
+   "resource": "dmm4x4/l3[13]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    5.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[13]",
+   "label": "c",
+   "resource": "dmm4x4/l3[13]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    7.6524,
+    5.727600000000001,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[13]",
+   "resource": "dmm4x4/l3[13]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    6.846,
+    5.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[13]",
+   "resource": "dmm4x4/l3[13]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.2396,
+    5.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[13]",
+   "resource": "dmm4x4/l3[13]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    6.846,
+    5.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[13]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[13]",
+   "resource": "dmm4x4/l3[13]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    7.2396,
+    5.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[13]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[13]",
+   "resource": "dmm4x4/cf[13]",
+   "clock_domain": "cf",
+   "rect": [
+    7.75,
+    4.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[13]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[13]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[13]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    5.046,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[13]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[13]",
+   "resource": "dmm4x4/cf[13]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    5.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[13]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[13]",
+   "resource": "dmm4x4/cf[13]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    8.095600000000001,
+    5.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[13]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[13]",
+   "resource": "dmm4x4/cf[13]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    7.846,
+    5.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[13]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[13]",
+   "resource": "dmm4x4/cf[13]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    8.095600000000001,
+    5.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[13]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[13]",
+   "resource": "dmm4x4/cf[13]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    8.374,
+    5.526,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[13]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[13]",
+   "resource": "dmm4x4/cf[13]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    8.374,
+    5.679600000000001,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[14]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[14]",
+   "resource": "dmm4x4/l3[14]",
+   "clock_domain": "l3",
+   "rect": [
+    8.75,
+    4.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[14]",
+   "label": "N",
+   "resource": "dmm4x4/l3[14]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    9.038,
+    4.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[14]",
+   "label": "E",
+   "resource": "dmm4x4/l3[14]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    5.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[14]",
+   "label": "S",
+   "resource": "dmm4x4/l3[14]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    9.038,
+    5.852399999999999,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[14]",
+   "label": "W",
+   "resource": "dmm4x4/l3[14]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    8.75,
+    5.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[14]",
+   "label": "a",
+   "resource": "dmm4x4/l3[14]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    5.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[14]",
+   "label": "b",
+   "resource": "dmm4x4/l3[14]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    5.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[14]",
+   "label": "x",
+   "resource": "dmm4x4/l3[14]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    5.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[14]",
+   "label": "c",
+   "resource": "dmm4x4/l3[14]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    9.6524,
+    5.727600000000001,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[14]",
+   "resource": "dmm4x4/l3[14]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    8.846,
+    5.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[14]",
+   "resource": "dmm4x4/l3[14]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    9.239600000000001,
+    5.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[14]",
+   "resource": "dmm4x4/l3[14]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    8.846,
+    5.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[14]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[14]",
+   "resource": "dmm4x4/l3[14]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    9.239600000000001,
+    5.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[14]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[14]",
+   "resource": "dmm4x4/cf[14]",
+   "clock_domain": "cf",
+   "rect": [
+    9.75,
+    4.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[14]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[14]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[14]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    5.046,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[14]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[14]",
+   "resource": "dmm4x4/cf[14]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    5.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[14]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[14]",
+   "resource": "dmm4x4/cf[14]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    10.095600000000001,
+    5.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[14]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[14]",
+   "resource": "dmm4x4/cf[14]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    9.846,
+    5.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[14]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[14]",
+   "resource": "dmm4x4/cf[14]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    10.095600000000001,
+    5.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[14]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[14]",
+   "resource": "dmm4x4/cf[14]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    10.374,
+    5.526,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[14]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[14]",
+   "resource": "dmm4x4/cf[14]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    10.374,
+    5.679600000000001,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/l3[15]",
+   "kind": "l3_tile",
+   "parent": "dmm4x4/array",
+   "label": "l3[15]",
+   "resource": "dmm4x4/l3[15]",
+   "clock_domain": "l3",
+   "rect": [
+    10.75,
+    4.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bm[0]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[15]",
+   "label": "N",
+   "resource": "dmm4x4/l3[15]/bm[0]",
+   "clock_domain": "l3",
+   "rect": [
+    11.038,
+    4.95,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bm[1]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[15]",
+   "label": "E",
+   "resource": "dmm4x4/l3[15]/bm[1]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    5.0652,
+    0.057600000000000005,
+    0.24
+   ],
+   "area": 0.013824000000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bm[2]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[15]",
+   "label": "S",
+   "resource": "dmm4x4/l3[15]/bm[2]",
+   "clock_domain": "l3",
+   "rect": [
+    11.038,
+    5.852399999999999,
+    0.384,
+    0.057600000000000005
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bm[3]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[15]",
+   "label": "W",
+   "resource": "dmm4x4/l3[15]/bm[3]",
+   "clock_domain": "l3",
+   "rect": [
+    10.75,
+    5.238,
+    0.057600000000000005,
+    0.384
+   ],
+   "area": 0.022118400000000003,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bm[4]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[15]",
+   "label": "a",
+   "resource": "dmm4x4/l3[15]/bm[4]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    5.382,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bm[5]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[15]",
+   "label": "b",
+   "resource": "dmm4x4/l3[15]/bm[5]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    5.4972,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bm[6]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[15]",
+   "label": "x",
+   "resource": "dmm4x4/l3[15]/bm[6]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    5.6124,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bm[7]",
+   "kind": "block_mover",
+   "parent": "dmm4x4/l3[15]",
+   "label": "c",
+   "resource": "dmm4x4/l3[15]/bm[7]",
+   "clock_domain": "l3",
+   "rect": [
+    11.6524,
+    5.727600000000001,
+    0.057600000000000005,
+    0.096
+   ],
+   "area": 0.005529600000000001,
+   "role": "block_mover"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bank[0]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[15]",
+   "resource": "dmm4x4/l3[15]/bank[0]",
+   "clock_domain": "l3",
+   "rect": [
+    10.846,
+    5.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bank[1]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[15]",
+   "resource": "dmm4x4/l3[15]/bank[1]",
+   "clock_domain": "l3",
+   "rect": [
+    11.239600000000001,
+    5.046,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bank[2]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[15]",
+   "resource": "dmm4x4/l3[15]/bank[2]",
+   "clock_domain": "l3",
+   "rect": [
+    10.846,
+    5.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/l3[15]/bank[3]",
+   "kind": "l3_bank",
+   "parent": "dmm4x4/l3[15]",
+   "resource": "dmm4x4/l3[15]/bank[3]",
+   "clock_domain": "l3",
+   "rect": [
+    11.239600000000001,
+    5.3436,
+    0.3744,
+    0.2784
+   ],
+   "area": 0.10423296,
+   "layer": "l3"
+  },
+  {
+   "id": "dmm4x4/cf[15]",
+   "kind": "compute_tile",
+   "parent": "dmm4x4/array",
+   "label": "cf[15]",
+   "resource": "dmm4x4/cf[15]",
+   "clock_domain": "cf",
+   "rect": [
+    11.75,
+    4.95,
+    0.96,
+    0.96
+   ],
+   "area": 0.9216,
+   "role": "fabric",
+   "layer": "fabric"
+  },
+  {
+   "id": "dmm4x4/cf[15]/regs",
+   "kind": "register_file",
+   "parent": "dmm4x4/cf[15]",
+   "label": "regs",
+   "resource": "dmm4x4/cf[15]/regs",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    5.046,
+    0.24,
+    0.11520000000000001
+   ],
+   "area": 0.027648000000000002
+  },
+  {
+   "id": "dmm4x4/cf[15]/l2[0]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[15]",
+   "resource": "dmm4x4/cf[15]/l2[0]",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    5.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[15]/l2[1]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[15]",
+   "resource": "dmm4x4/cf[15]/l2[1]",
+   "clock_domain": "cf",
+   "rect": [
+    12.095600000000001,
+    5.526,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[15]/l2[2]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[15]",
+   "resource": "dmm4x4/cf[15]/l2[2]",
+   "clock_domain": "cf",
+   "rect": [
+    11.846,
+    5.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[15]/l2[3]",
+   "kind": "l2_bank",
+   "parent": "dmm4x4/cf[15]",
+   "resource": "dmm4x4/cf[15]/l2[3]",
+   "clock_domain": "cf",
+   "rect": [
+    12.095600000000001,
+    5.679600000000001,
+    0.23040000000000002,
+    0.13440000000000002
+   ],
+   "area": 0.03096576000000001,
+   "layer": "l2"
+  },
+  {
+   "id": "dmm4x4/cf[15]/l1[0]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[15]",
+   "resource": "dmm4x4/cf[15]/l1[0]",
+   "clock_domain": "cf",
+   "rect": [
+    12.374,
+    5.526,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/cf[15]/l1[1]",
+   "kind": "l1_vector",
+   "parent": "dmm4x4/cf[15]",
+   "resource": "dmm4x4/cf[15]/l1[1]",
+   "clock_domain": "cf",
+   "rect": [
+    12.374,
+    5.679600000000001,
+    0.24,
+    0.13440000000000002
+   ],
+   "area": 0.03225600000000001,
+   "layer": "l1"
+  },
+  {
+   "id": "dmm4x4/noc/port[0]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "N0",
+   "resource": "dmm4x4/noc/port[0]",
+   "clock_domain": "l3",
+   "rect": [
+    5.63,
+    1.53,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[1]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "N1",
+   "resource": "dmm4x4/noc/port[1]",
+   "clock_domain": "l3",
+   "rect": [
+    7.63,
+    1.53,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[2]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "N2",
+   "resource": "dmm4x4/noc/port[2]",
+   "clock_domain": "l3",
+   "rect": [
+    9.63,
+    1.53,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[3]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "N3",
+   "resource": "dmm4x4/noc/port[3]",
+   "clock_domain": "l3",
+   "rect": [
+    11.63,
+    1.53,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[4]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "E0",
+   "resource": "dmm4x4/noc/port[4]",
+   "clock_domain": "l3",
+   "rect": [
+    12.93,
+    2.33,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[5]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "E1",
+   "resource": "dmm4x4/noc/port[5]",
+   "clock_domain": "l3",
+   "rect": [
+    12.93,
+    3.33,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[6]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "E2",
+   "resource": "dmm4x4/noc/port[6]",
+   "clock_domain": "l3",
+   "rect": [
+    12.93,
+    4.33,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[7]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "E3",
+   "resource": "dmm4x4/noc/port[7]",
+   "clock_domain": "l3",
+   "rect": [
+    12.93,
+    5.33,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[8]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "S3",
+   "resource": "dmm4x4/noc/port[8]",
+   "clock_domain": "l3",
+   "rect": [
+    11.63,
+    6.13,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[9]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "S2",
+   "resource": "dmm4x4/noc/port[9]",
+   "clock_domain": "l3",
+   "rect": [
+    9.63,
+    6.13,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[10]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "S1",
+   "resource": "dmm4x4/noc/port[10]",
+   "clock_domain": "l3",
+   "rect": [
+    7.63,
+    6.13,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[11]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "S0",
+   "resource": "dmm4x4/noc/port[11]",
+   "clock_domain": "l3",
+   "rect": [
+    5.63,
+    6.13,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[12]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "W3",
+   "resource": "dmm4x4/noc/port[12]",
+   "clock_domain": "l3",
+   "rect": [
+    4.33,
+    5.33,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[13]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "W2",
+   "resource": "dmm4x4/noc/port[13]",
+   "clock_domain": "l3",
+   "rect": [
+    4.33,
+    4.33,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[14]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "W1",
+   "resource": "dmm4x4/noc/port[14]",
+   "clock_domain": "l3",
+   "rect": [
+    4.33,
+    3.33,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/noc/port[15]",
+   "kind": "noc_port",
+   "parent": "dmm4x4/die",
+   "label": "W0",
+   "resource": "dmm4x4/noc/port[15]",
+   "clock_domain": "l3",
+   "rect": [
+    4.33,
+    2.33,
+    0.2,
+    0.2
+   ],
+   "area": 0.04000000000000001
+  },
+  {
+   "id": "dmm4x4/phy[0]",
+   "kind": "dram_phy",
+   "parent": "dmm4x4/die",
+   "label": "PHY",
+   "rect": [
+    8.33,
+    0.4,
+    0.8,
+    0.25
+   ],
+   "area": 0.2
+  },
+  {
+   "id": "dmm4x4/mc[0]",
+   "kind": "memory_controller",
+   "parent": "dmm4x4/die",
+   "label": "MC0",
+   "resource": "dmm4x4/mc[0]",
+   "clock_domain": "dram",
+   "rect": [
+    8.33,
+    0.6900000000000001,
+    0.8,
+    0.6
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "dmm4x4/mc[0]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[0]",
+   "label": "DMA0",
+   "resource": "dmm4x4/mc[0]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    8.370000000000001,
+    0.885,
+    0.34,
+    0.21
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/mc[0]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[0]",
+   "label": "DMA1",
+   "resource": "dmm4x4/mc[0]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    8.75,
+    0.885,
+    0.34,
+    0.21
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/phy[1]",
+   "kind": "dram_phy",
+   "parent": "dmm4x4/die",
+   "label": "PHY",
+   "rect": [
+    12.33,
+    0.4,
+    0.8,
+    0.25
+   ],
+   "area": 0.2
+  },
+  {
+   "id": "dmm4x4/mc[1]",
+   "kind": "memory_controller",
+   "parent": "dmm4x4/die",
+   "label": "MC1",
+   "resource": "dmm4x4/mc[1]",
+   "clock_domain": "dram",
+   "rect": [
+    12.33,
+    0.6900000000000001,
+    0.8,
+    0.6
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "dmm4x4/mc[1]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[1]",
+   "label": "DMA0",
+   "resource": "dmm4x4/mc[1]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    12.370000000000001,
+    0.885,
+    0.34,
+    0.21
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/mc[1]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[1]",
+   "label": "DMA1",
+   "resource": "dmm4x4/mc[1]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    12.75,
+    0.885,
+    0.34,
+    0.21
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/phy[2]",
+   "kind": "dram_phy",
+   "parent": "dmm4x4/die",
+   "label": "PHY",
+   "rect": [
+    14.01,
+    3.5300000000000002,
+    0.25,
+    0.8
+   ],
+   "area": 0.2
+  },
+  {
+   "id": "dmm4x4/mc[2]",
+   "kind": "memory_controller",
+   "parent": "dmm4x4/die",
+   "label": "MC2",
+   "resource": "dmm4x4/mc[2]",
+   "clock_domain": "dram",
+   "rect": [
+    13.370000000000001,
+    3.5300000000000002,
+    0.6,
+    0.8
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "dmm4x4/mc[2]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[2]",
+   "label": "DMA0",
+   "resource": "dmm4x4/mc[2]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    13.565,
+    3.5700000000000003,
+    0.21,
+    0.34
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/mc[2]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[2]",
+   "label": "DMA1",
+   "resource": "dmm4x4/mc[2]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    13.565,
+    3.95,
+    0.21,
+    0.34
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/phy[3]",
+   "kind": "dram_phy",
+   "parent": "dmm4x4/die",
+   "label": "PHY",
+   "rect": [
+    14.01,
+    5.53,
+    0.25,
+    0.8
+   ],
+   "area": 0.2
+  },
+  {
+   "id": "dmm4x4/mc[3]",
+   "kind": "memory_controller",
+   "parent": "dmm4x4/die",
+   "label": "MC3",
+   "resource": "dmm4x4/mc[3]",
+   "clock_domain": "dram",
+   "rect": [
+    13.370000000000001,
+    5.53,
+    0.6,
+    0.8
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "dmm4x4/mc[3]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[3]",
+   "label": "DMA0",
+   "resource": "dmm4x4/mc[3]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    13.565,
+    5.57,
+    0.21,
+    0.34
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/mc[3]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[3]",
+   "label": "DMA1",
+   "resource": "dmm4x4/mc[3]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    13.565,
+    5.95,
+    0.21,
+    0.34
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/phy[4]",
+   "kind": "dram_phy",
+   "parent": "dmm4x4/die",
+   "label": "PHY",
+   "rect": [
+    8.33,
+    7.21,
+    0.8,
+    0.25
+   ],
+   "area": 0.2
+  },
+  {
+   "id": "dmm4x4/mc[4]",
+   "kind": "memory_controller",
+   "parent": "dmm4x4/die",
+   "label": "MC4",
+   "resource": "dmm4x4/mc[4]",
+   "clock_domain": "dram",
+   "rect": [
+    8.33,
+    6.57,
+    0.8,
+    0.6
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "dmm4x4/mc[4]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[4]",
+   "label": "DMA0",
+   "resource": "dmm4x4/mc[4]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    8.370000000000001,
+    6.765000000000001,
+    0.34,
+    0.21
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/mc[4]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[4]",
+   "label": "DMA1",
+   "resource": "dmm4x4/mc[4]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    8.75,
+    6.765000000000001,
+    0.34,
+    0.21
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/phy[5]",
+   "kind": "dram_phy",
+   "parent": "dmm4x4/die",
+   "label": "PHY",
+   "rect": [
+    4.33,
+    7.21,
+    0.8,
+    0.25
+   ],
+   "area": 0.2
+  },
+  {
+   "id": "dmm4x4/mc[5]",
+   "kind": "memory_controller",
+   "parent": "dmm4x4/die",
+   "label": "MC5",
+   "resource": "dmm4x4/mc[5]",
+   "clock_domain": "dram",
+   "rect": [
+    4.33,
+    6.57,
+    0.8,
+    0.6
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "dmm4x4/mc[5]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[5]",
+   "label": "DMA0",
+   "resource": "dmm4x4/mc[5]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    4.37,
+    6.765000000000001,
+    0.34,
+    0.21
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/mc[5]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[5]",
+   "label": "DMA1",
+   "resource": "dmm4x4/mc[5]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    4.75,
+    6.765000000000001,
+    0.34,
+    0.21
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/phy[6]",
+   "kind": "dram_phy",
+   "parent": "dmm4x4/die",
+   "label": "PHY",
+   "rect": [
+    3.2,
+    3.5300000000000002,
+    0.25,
+    0.8
+   ],
+   "area": 0.2
+  },
+  {
+   "id": "dmm4x4/mc[6]",
+   "kind": "memory_controller",
+   "parent": "dmm4x4/die",
+   "label": "MC6",
+   "resource": "dmm4x4/mc[6]",
+   "clock_domain": "dram",
+   "rect": [
+    3.49,
+    3.5300000000000002,
+    0.6,
+    0.8
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "dmm4x4/mc[6]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[6]",
+   "label": "DMA0",
+   "resource": "dmm4x4/mc[6]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    3.685,
+    3.5700000000000003,
+    0.21,
+    0.34
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/mc[6]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[6]",
+   "label": "DMA1",
+   "resource": "dmm4x4/mc[6]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    3.685,
+    3.95,
+    0.21,
+    0.34
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/phy[7]",
+   "kind": "dram_phy",
+   "parent": "dmm4x4/die",
+   "label": "PHY",
+   "rect": [
+    3.2,
+    1.53,
+    0.25,
+    0.8
+   ],
+   "area": 0.2
+  },
+  {
+   "id": "dmm4x4/mc[7]",
+   "kind": "memory_controller",
+   "parent": "dmm4x4/die",
+   "label": "MC7",
+   "resource": "dmm4x4/mc[7]",
+   "clock_domain": "dram",
+   "rect": [
+    3.49,
+    1.53,
+    0.6,
+    0.8
+   ],
+   "area": 0.48
+  },
+  {
+   "id": "dmm4x4/mc[7]/dma[0]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[7]",
+   "label": "DMA0",
+   "resource": "dmm4x4/mc[7]/dma[0]",
+   "clock_domain": "dram",
+   "rect": [
+    3.685,
+    1.57,
+    0.21,
+    0.34
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/mc[7]/dma[1]",
+   "kind": "dma_engine",
+   "parent": "dmm4x4/mc[7]",
+   "label": "DMA1",
+   "resource": "dmm4x4/mc[7]/dma[1]",
+   "clock_domain": "dram",
+   "rect": [
+    3.685,
+    1.95,
+    0.21,
+    0.34
+   ],
+   "area": 0.0714,
+   "role": "dma"
+  },
+  {
+   "id": "dmm4x4/cpu",
+   "kind": "cpu",
+   "parent": "dmm4x4/die",
+   "label": "CPU",
+   "rect": [
+    0.4,
+    1.93,
+    2.4,
+    1.86
+   ],
+   "area": 4.464
+  },
+  {
+   "id": "dmm4x4/cpu/hart[0]",
+   "kind": "cpu_hart",
+   "parent": "dmm4x4/cpu",
+   "label": "hart0",
+   "resource": "dmm4x4/cpu/hart[0]",
+   "clock_domain": "cpu",
+   "rect": [
+    0.44,
+    1.97,
+    1.1400000000000001,
+    0.7000000000000001
+   ],
+   "area": 0.7980000000000002
+  },
+  {
+   "id": "dmm4x4/cpu/hart[1]",
+   "kind": "cpu_hart",
+   "parent": "dmm4x4/cpu",
+   "label": "hart1",
+   "resource": "dmm4x4/cpu/hart[1]",
+   "clock_domain": "cpu",
+   "rect": [
+    1.62,
+    1.97,
+    1.1400000000000001,
+    0.7000000000000001
+   ],
+   "area": 0.7980000000000002
+  },
+  {
+   "id": "dmm4x4/cpu/sram",
+   "kind": "cpu_sram",
+   "parent": "dmm4x4/cpu",
+   "label": "SRAM",
+   "resource": "dmm4x4/cpu/sram",
+   "clock_domain": "cpu",
+   "rect": [
+    0.44,
+    2.71,
+    2.32,
+    0.6
+   ],
+   "area": 1.392
+  },
+  {
+   "id": "dmm4x4/cpu/dring",
+   "kind": "descriptor_ring",
+   "parent": "dmm4x4/cpu",
+   "label": "desc ring",
+   "resource": "dmm4x4/cpu/dring",
+   "clock_domain": "cpu",
+   "rect": [
+    0.44,
+    3.35,
+    1.1400000000000001,
+    0.4
+   ],
+   "area": 0.45600000000000007
+  },
+  {
+   "id": "dmm4x4/cpu/cring",
+   "kind": "completion_ring",
+   "parent": "dmm4x4/cpu",
+   "label": "cpl ring",
+   "resource": "dmm4x4/cpu/cring",
+   "clock_domain": "cpu",
+   "rect": [
+    1.62,
+    3.35,
+    1.1400000000000001,
+    0.4
+   ],
+   "area": 0.45600000000000007
+  },
+  {
+   "id": "dmm4x4/io",
+   "kind": "io",
+   "parent": "dmm4x4/die",
+   "label": "IO",
+   "rect": [
+    0.4,
+    3.87,
+    2.4,
+    1.0
+   ],
+   "area": 2.4
+  }
+ ],
+ "networks": [
+  {
+   "id": "mesh",
+   "kind": "noc",
+   "routing": "one_hop",
+   "description": "the dmm_mesh's one-hop data links, each pair both ways, and its edge ports (kpu-floorplan)",
+   "nodes": [
+    {
+     "id": "dmm4x4/l3[0]",
+     "kind": "node",
+     "block": "dmm4x4/l3[0]",
+     "at": [
+      5.23,
+      2.4299999999999997
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[1]",
+     "kind": "node",
+     "block": "dmm4x4/l3[1]",
+     "at": [
+      7.23,
+      2.4299999999999997
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[4]",
+     "kind": "node",
+     "block": "dmm4x4/l3[4]",
+     "at": [
+      5.23,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[2]",
+     "kind": "node",
+     "block": "dmm4x4/l3[2]",
+     "at": [
+      9.23,
+      2.4299999999999997
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[5]",
+     "kind": "node",
+     "block": "dmm4x4/l3[5]",
+     "at": [
+      7.23,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[3]",
+     "kind": "node",
+     "block": "dmm4x4/l3[3]",
+     "at": [
+      11.23,
+      2.4299999999999997
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[6]",
+     "kind": "node",
+     "block": "dmm4x4/l3[6]",
+     "at": [
+      9.23,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[7]",
+     "kind": "node",
+     "block": "dmm4x4/l3[7]",
+     "at": [
+      11.23,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[8]",
+     "kind": "node",
+     "block": "dmm4x4/l3[8]",
+     "at": [
+      5.23,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[9]",
+     "kind": "node",
+     "block": "dmm4x4/l3[9]",
+     "at": [
+      7.23,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[10]",
+     "kind": "node",
+     "block": "dmm4x4/l3[10]",
+     "at": [
+      9.23,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[11]",
+     "kind": "node",
+     "block": "dmm4x4/l3[11]",
+     "at": [
+      11.23,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[12]",
+     "kind": "node",
+     "block": "dmm4x4/l3[12]",
+     "at": [
+      5.23,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[13]",
+     "kind": "node",
+     "block": "dmm4x4/l3[13]",
+     "at": [
+      7.23,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[14]",
+     "kind": "node",
+     "block": "dmm4x4/l3[14]",
+     "at": [
+      9.23,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[15]",
+     "kind": "node",
+     "block": "dmm4x4/l3[15]",
+     "at": [
+      11.23,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[0]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[0]",
+     "at": [
+      5.7299999999999995,
+      1.6300000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[1]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[1]",
+     "at": [
+      7.7299999999999995,
+      1.6300000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[2]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[2]",
+     "at": [
+      9.73,
+      1.6300000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[3]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[3]",
+     "at": [
+      11.73,
+      1.6300000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[4]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[4]",
+     "at": [
+      13.03,
+      2.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[5]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[5]",
+     "at": [
+      13.03,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[6]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[6]",
+     "at": [
+      13.03,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[7]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[7]",
+     "at": [
+      13.03,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[8]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[8]",
+     "at": [
+      11.73,
+      6.2299999999999995
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[9]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[9]",
+     "at": [
+      9.73,
+      6.2299999999999995
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[10]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[10]",
+     "at": [
+      7.7299999999999995,
+      6.2299999999999995
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[11]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[11]",
+     "at": [
+      5.7299999999999995,
+      6.2299999999999995
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[12]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[12]",
+     "at": [
+      4.43,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[13]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[13]",
+     "at": [
+      4.43,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[14]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[14]",
+     "at": [
+      4.43,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[15]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[15]",
+     "at": [
+      4.43,
+      2.43
+     ]
+    }
+   ],
+   "links": [
+    {
+     "id": "mesh_0",
+     "from": "dmm4x4/l3[0]",
+     "to": "dmm4x4/l3[1]",
+     "points": [
+      [
+       5.23,
+       2.43
+      ],
+      [
+       7.23,
+       2.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_2",
+     "from": "dmm4x4/l3[0]",
+     "to": "dmm4x4/l3[4]",
+     "points": [
+      [
+       5.23,
+       2.43
+      ],
+      [
+       5.23,
+       3.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "mesh_4",
+     "from": "dmm4x4/l3[1]",
+     "to": "dmm4x4/l3[2]",
+     "points": [
+      [
+       7.23,
+       2.43
+      ],
+      [
+       9.23,
+       2.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_6",
+     "from": "dmm4x4/l3[1]",
+     "to": "dmm4x4/l3[5]",
+     "points": [
+      [
+       7.23,
+       2.43
+      ],
+      [
+       7.23,
+       3.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "mesh_8",
+     "from": "dmm4x4/l3[2]",
+     "to": "dmm4x4/l3[3]",
+     "points": [
+      [
+       9.23,
+       2.43
+      ],
+      [
+       11.23,
+       2.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_10",
+     "from": "dmm4x4/l3[2]",
+     "to": "dmm4x4/l3[6]",
+     "points": [
+      [
+       9.23,
+       2.43
+      ],
+      [
+       9.23,
+       3.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "mesh_12",
+     "from": "dmm4x4/l3[3]",
+     "to": "dmm4x4/l3[7]",
+     "points": [
+      [
+       11.23,
+       2.43
+      ],
+      [
+       11.23,
+       3.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "mesh_14",
+     "from": "dmm4x4/l3[4]",
+     "to": "dmm4x4/l3[5]",
+     "points": [
+      [
+       5.23,
+       3.43
+      ],
+      [
+       7.23,
+       3.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_16",
+     "from": "dmm4x4/l3[4]",
+     "to": "dmm4x4/l3[8]",
+     "points": [
+      [
+       5.23,
+       3.43
+      ],
+      [
+       5.23,
+       4.43
+      ]
+     ],
+     "length": 0.9999999999999996
+    },
+    {
+     "id": "mesh_18",
+     "from": "dmm4x4/l3[5]",
+     "to": "dmm4x4/l3[6]",
+     "points": [
+      [
+       7.23,
+       3.43
+      ],
+      [
+       9.23,
+       3.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_20",
+     "from": "dmm4x4/l3[5]",
+     "to": "dmm4x4/l3[9]",
+     "points": [
+      [
+       7.23,
+       3.43
+      ],
+      [
+       7.23,
+       4.43
+      ]
+     ],
+     "length": 0.9999999999999996
+    },
+    {
+     "id": "mesh_22",
+     "from": "dmm4x4/l3[6]",
+     "to": "dmm4x4/l3[7]",
+     "points": [
+      [
+       9.23,
+       3.43
+      ],
+      [
+       11.23,
+       3.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_24",
+     "from": "dmm4x4/l3[6]",
+     "to": "dmm4x4/l3[10]",
+     "points": [
+      [
+       9.23,
+       3.43
+      ],
+      [
+       9.23,
+       4.43
+      ]
+     ],
+     "length": 0.9999999999999996
+    },
+    {
+     "id": "mesh_26",
+     "from": "dmm4x4/l3[7]",
+     "to": "dmm4x4/l3[11]",
+     "points": [
+      [
+       11.23,
+       3.43
+      ],
+      [
+       11.23,
+       4.43
+      ]
+     ],
+     "length": 0.9999999999999996
+    },
+    {
+     "id": "mesh_28",
+     "from": "dmm4x4/l3[8]",
+     "to": "dmm4x4/l3[9]",
+     "points": [
+      [
+       5.23,
+       4.43
+      ],
+      [
+       7.23,
+       4.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_30",
+     "from": "dmm4x4/l3[8]",
+     "to": "dmm4x4/l3[12]",
+     "points": [
+      [
+       5.23,
+       4.43
+      ],
+      [
+       5.23,
+       5.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "mesh_32",
+     "from": "dmm4x4/l3[9]",
+     "to": "dmm4x4/l3[10]",
+     "points": [
+      [
+       7.23,
+       4.43
+      ],
+      [
+       9.23,
+       4.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_34",
+     "from": "dmm4x4/l3[9]",
+     "to": "dmm4x4/l3[13]",
+     "points": [
+      [
+       7.23,
+       4.43
+      ],
+      [
+       7.23,
+       5.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "mesh_36",
+     "from": "dmm4x4/l3[10]",
+     "to": "dmm4x4/l3[11]",
+     "points": [
+      [
+       9.23,
+       4.43
+      ],
+      [
+       11.23,
+       4.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_38",
+     "from": "dmm4x4/l3[10]",
+     "to": "dmm4x4/l3[14]",
+     "points": [
+      [
+       9.23,
+       4.43
+      ],
+      [
+       9.23,
+       5.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "mesh_40",
+     "from": "dmm4x4/l3[11]",
+     "to": "dmm4x4/l3[15]",
+     "points": [
+      [
+       11.23,
+       4.43
+      ],
+      [
+       11.23,
+       5.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "mesh_42",
+     "from": "dmm4x4/l3[12]",
+     "to": "dmm4x4/l3[13]",
+     "points": [
+      [
+       5.23,
+       5.43
+      ],
+      [
+       7.23,
+       5.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_44",
+     "from": "dmm4x4/l3[13]",
+     "to": "dmm4x4/l3[14]",
+     "points": [
+      [
+       7.23,
+       5.43
+      ],
+      [
+       9.23,
+       5.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "mesh_46",
+     "from": "dmm4x4/l3[14]",
+     "to": "dmm4x4/l3[15]",
+     "points": [
+      [
+       9.23,
+       5.43
+      ],
+      [
+       11.23,
+       5.43
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "edge_48",
+     "from": "dmm4x4/noc/port[0]",
+     "to": "dmm4x4/l3[0]",
+     "points": [
+      [
+       5.73,
+       1.6300000000000001
+      ],
+      [
+       5.23,
+       2.43
+      ]
+     ],
+     "length": 1.3
+    },
+    {
+     "id": "edge_49",
+     "from": "dmm4x4/noc/port[1]",
+     "to": "dmm4x4/l3[1]",
+     "points": [
+      [
+       7.73,
+       1.6300000000000001
+      ],
+      [
+       7.23,
+       2.43
+      ]
+     ],
+     "length": 1.3
+    },
+    {
+     "id": "edge_50",
+     "from": "dmm4x4/noc/port[2]",
+     "to": "dmm4x4/l3[2]",
+     "points": [
+      [
+       9.73,
+       1.6300000000000001
+      ],
+      [
+       9.23,
+       2.43
+      ]
+     ],
+     "length": 1.3
+    },
+    {
+     "id": "edge_51",
+     "from": "dmm4x4/noc/port[3]",
+     "to": "dmm4x4/l3[3]",
+     "points": [
+      [
+       11.73,
+       1.6300000000000001
+      ],
+      [
+       11.23,
+       2.43
+      ]
+     ],
+     "length": 1.3
+    },
+    {
+     "id": "edge_52",
+     "from": "dmm4x4/noc/port[4]",
+     "to": "dmm4x4/l3[3]",
+     "points": [
+      [
+       13.030000000000001,
+       2.43
+      ],
+      [
+       11.23,
+       2.43
+      ]
+     ],
+     "length": 1.8000000000000007
+    },
+    {
+     "id": "edge_53",
+     "from": "dmm4x4/noc/port[5]",
+     "to": "dmm4x4/l3[7]",
+     "points": [
+      [
+       13.030000000000001,
+       3.43
+      ],
+      [
+       11.23,
+       3.43
+      ]
+     ],
+     "length": 1.8000000000000007
+    },
+    {
+     "id": "edge_54",
+     "from": "dmm4x4/noc/port[6]",
+     "to": "dmm4x4/l3[11]",
+     "points": [
+      [
+       13.030000000000001,
+       4.43
+      ],
+      [
+       11.23,
+       4.43
+      ]
+     ],
+     "length": 1.8000000000000007
+    },
+    {
+     "id": "edge_55",
+     "from": "dmm4x4/noc/port[7]",
+     "to": "dmm4x4/l3[15]",
+     "points": [
+      [
+       13.030000000000001,
+       5.43
+      ],
+      [
+       11.23,
+       5.43
+      ]
+     ],
+     "length": 1.8000000000000007
+    },
+    {
+     "id": "edge_56",
+     "from": "dmm4x4/noc/port[8]",
+     "to": "dmm4x4/l3[15]",
+     "points": [
+      [
+       11.73,
+       6.23
+      ],
+      [
+       11.23,
+       5.43
+      ]
+     ],
+     "length": 1.3000000000000007
+    },
+    {
+     "id": "edge_57",
+     "from": "dmm4x4/noc/port[9]",
+     "to": "dmm4x4/l3[14]",
+     "points": [
+      [
+       9.73,
+       6.23
+      ],
+      [
+       9.23,
+       5.43
+      ]
+     ],
+     "length": 1.3000000000000007
+    },
+    {
+     "id": "edge_58",
+     "from": "dmm4x4/noc/port[10]",
+     "to": "dmm4x4/l3[13]",
+     "points": [
+      [
+       7.73,
+       6.23
+      ],
+      [
+       7.23,
+       5.43
+      ]
+     ],
+     "length": 1.3000000000000007
+    },
+    {
+     "id": "edge_59",
+     "from": "dmm4x4/noc/port[11]",
+     "to": "dmm4x4/l3[12]",
+     "points": [
+      [
+       5.73,
+       6.23
+      ],
+      [
+       5.23,
+       5.43
+      ]
+     ],
+     "length": 1.3000000000000007
+    },
+    {
+     "id": "edge_60",
+     "from": "dmm4x4/noc/port[12]",
+     "to": "dmm4x4/l3[12]",
+     "points": [
+      [
+       4.43,
+       5.43
+      ],
+      [
+       5.23,
+       5.43
+      ]
+     ],
+     "length": 0.8000000000000007
+    },
+    {
+     "id": "edge_61",
+     "from": "dmm4x4/noc/port[13]",
+     "to": "dmm4x4/l3[8]",
+     "points": [
+      [
+       4.43,
+       4.43
+      ],
+      [
+       5.23,
+       4.43
+      ]
+     ],
+     "length": 0.8000000000000007
+    },
+    {
+     "id": "edge_62",
+     "from": "dmm4x4/noc/port[14]",
+     "to": "dmm4x4/l3[4]",
+     "points": [
+      [
+       4.43,
+       3.43
+      ],
+      [
+       5.23,
+       3.43
+      ]
+     ],
+     "length": 0.8000000000000007
+    },
+    {
+     "id": "edge_63",
+     "from": "dmm4x4/noc/port[15]",
+     "to": "dmm4x4/l3[0]",
+     "points": [
+      [
+       4.43,
+       2.43
+      ],
+      [
+       5.23,
+       2.43
+      ]
+     ],
+     "length": 0.8000000000000007
+    }
+   ]
+  },
+  {
+   "id": "credit",
+   "kind": "credit",
+   "routing": "one_hop",
+   "description": "the credit network: each data link's credits, the other way (kpu-floorplan)",
+   "nodes": [
+    {
+     "id": "dmm4x4/l3[0]",
+     "kind": "node",
+     "block": "dmm4x4/l3[0]",
+     "at": [
+      5.23,
+      2.4299999999999997
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[1]",
+     "kind": "node",
+     "block": "dmm4x4/l3[1]",
+     "at": [
+      7.23,
+      2.4299999999999997
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[4]",
+     "kind": "node",
+     "block": "dmm4x4/l3[4]",
+     "at": [
+      5.23,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[2]",
+     "kind": "node",
+     "block": "dmm4x4/l3[2]",
+     "at": [
+      9.23,
+      2.4299999999999997
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[5]",
+     "kind": "node",
+     "block": "dmm4x4/l3[5]",
+     "at": [
+      7.23,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[3]",
+     "kind": "node",
+     "block": "dmm4x4/l3[3]",
+     "at": [
+      11.23,
+      2.4299999999999997
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[6]",
+     "kind": "node",
+     "block": "dmm4x4/l3[6]",
+     "at": [
+      9.23,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[7]",
+     "kind": "node",
+     "block": "dmm4x4/l3[7]",
+     "at": [
+      11.23,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[8]",
+     "kind": "node",
+     "block": "dmm4x4/l3[8]",
+     "at": [
+      5.23,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[9]",
+     "kind": "node",
+     "block": "dmm4x4/l3[9]",
+     "at": [
+      7.23,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[10]",
+     "kind": "node",
+     "block": "dmm4x4/l3[10]",
+     "at": [
+      9.23,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[11]",
+     "kind": "node",
+     "block": "dmm4x4/l3[11]",
+     "at": [
+      11.23,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[12]",
+     "kind": "node",
+     "block": "dmm4x4/l3[12]",
+     "at": [
+      5.23,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[13]",
+     "kind": "node",
+     "block": "dmm4x4/l3[13]",
+     "at": [
+      7.23,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[14]",
+     "kind": "node",
+     "block": "dmm4x4/l3[14]",
+     "at": [
+      9.23,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/l3[15]",
+     "kind": "node",
+     "block": "dmm4x4/l3[15]",
+     "at": [
+      11.23,
+      5.43
+     ]
+    }
+   ],
+   "links": [
+    {
+     "id": "credit_1",
+     "from": "dmm4x4/l3[0]",
+     "to": "dmm4x4/l3[1]",
+     "points": [
+      [
+       5.23,
+       2.43
+      ],
+      [
+       5.23,
+       2.5068
+      ],
+      [
+       7.23,
+       2.5068
+      ],
+      [
+       7.23,
+       2.43
+      ]
+     ],
+     "length": 2.1536
+    },
+    {
+     "id": "credit_3",
+     "from": "dmm4x4/l3[0]",
+     "to": "dmm4x4/l3[4]",
+     "points": [
+      [
+       5.23,
+       2.43
+      ],
+      [
+       5.3068,
+       2.43
+      ],
+      [
+       5.3068,
+       3.43
+      ],
+      [
+       5.23,
+       3.43
+      ]
+     ],
+     "length": 1.153599999999999
+    },
+    {
+     "id": "credit_5",
+     "from": "dmm4x4/l3[1]",
+     "to": "dmm4x4/l3[2]",
+     "points": [
+      [
+       7.23,
+       2.43
+      ],
+      [
+       7.23,
+       2.5068
+      ],
+      [
+       9.23,
+       2.5068
+      ],
+      [
+       9.23,
+       2.43
+      ]
+     ],
+     "length": 2.1536
+    },
+    {
+     "id": "credit_7",
+     "from": "dmm4x4/l3[1]",
+     "to": "dmm4x4/l3[5]",
+     "points": [
+      [
+       7.23,
+       2.43
+      ],
+      [
+       7.3068,
+       2.43
+      ],
+      [
+       7.3068,
+       3.43
+      ],
+      [
+       7.23,
+       3.43
+      ]
+     ],
+     "length": 1.153599999999999
+    },
+    {
+     "id": "credit_9",
+     "from": "dmm4x4/l3[2]",
+     "to": "dmm4x4/l3[3]",
+     "points": [
+      [
+       9.23,
+       2.43
+      ],
+      [
+       9.23,
+       2.5068
+      ],
+      [
+       11.23,
+       2.5068
+      ],
+      [
+       11.23,
+       2.43
+      ]
+     ],
+     "length": 2.1536
+    },
+    {
+     "id": "credit_11",
+     "from": "dmm4x4/l3[2]",
+     "to": "dmm4x4/l3[6]",
+     "points": [
+      [
+       9.23,
+       2.43
+      ],
+      [
+       9.306799999999999,
+       2.43
+      ],
+      [
+       9.306799999999999,
+       3.43
+      ],
+      [
+       9.23,
+       3.43
+      ]
+     ],
+     "length": 1.1535999999999973
+    },
+    {
+     "id": "credit_13",
+     "from": "dmm4x4/l3[3]",
+     "to": "dmm4x4/l3[7]",
+     "points": [
+      [
+       11.23,
+       2.43
+      ],
+      [
+       11.306799999999999,
+       2.43
+      ],
+      [
+       11.306799999999999,
+       3.43
+      ],
+      [
+       11.23,
+       3.43
+      ]
+     ],
+     "length": 1.1535999999999973
+    },
+    {
+     "id": "credit_15",
+     "from": "dmm4x4/l3[4]",
+     "to": "dmm4x4/l3[5]",
+     "points": [
+      [
+       5.23,
+       3.43
+      ],
+      [
+       5.23,
+       3.5068
+      ],
+      [
+       7.23,
+       3.5068
+      ],
+      [
+       7.23,
+       3.43
+      ]
+     ],
+     "length": 2.1536
+    },
+    {
+     "id": "credit_17",
+     "from": "dmm4x4/l3[4]",
+     "to": "dmm4x4/l3[8]",
+     "points": [
+      [
+       5.23,
+       3.43
+      ],
+      [
+       5.3068,
+       3.43
+      ],
+      [
+       5.3068,
+       4.43
+      ],
+      [
+       5.23,
+       4.43
+      ]
+     ],
+     "length": 1.1535999999999986
+    },
+    {
+     "id": "credit_19",
+     "from": "dmm4x4/l3[5]",
+     "to": "dmm4x4/l3[6]",
+     "points": [
+      [
+       7.23,
+       3.43
+      ],
+      [
+       7.23,
+       3.5068
+      ],
+      [
+       9.23,
+       3.5068
+      ],
+      [
+       9.23,
+       3.43
+      ]
+     ],
+     "length": 2.1536
+    },
+    {
+     "id": "credit_21",
+     "from": "dmm4x4/l3[5]",
+     "to": "dmm4x4/l3[9]",
+     "points": [
+      [
+       7.23,
+       3.43
+      ],
+      [
+       7.3068,
+       3.43
+      ],
+      [
+       7.3068,
+       4.43
+      ],
+      [
+       7.23,
+       4.43
+      ]
+     ],
+     "length": 1.1535999999999986
+    },
+    {
+     "id": "credit_23",
+     "from": "dmm4x4/l3[6]",
+     "to": "dmm4x4/l3[7]",
+     "points": [
+      [
+       9.23,
+       3.43
+      ],
+      [
+       9.23,
+       3.5068
+      ],
+      [
+       11.23,
+       3.5068
+      ],
+      [
+       11.23,
+       3.43
+      ]
+     ],
+     "length": 2.1536
+    },
+    {
+     "id": "credit_25",
+     "from": "dmm4x4/l3[6]",
+     "to": "dmm4x4/l3[10]",
+     "points": [
+      [
+       9.23,
+       3.43
+      ],
+      [
+       9.306799999999999,
+       3.43
+      ],
+      [
+       9.306799999999999,
+       4.43
+      ],
+      [
+       9.23,
+       4.43
+      ]
+     ],
+     "length": 1.1535999999999969
+    },
+    {
+     "id": "credit_27",
+     "from": "dmm4x4/l3[7]",
+     "to": "dmm4x4/l3[11]",
+     "points": [
+      [
+       11.23,
+       3.43
+      ],
+      [
+       11.306799999999999,
+       3.43
+      ],
+      [
+       11.306799999999999,
+       4.43
+      ],
+      [
+       11.23,
+       4.43
+      ]
+     ],
+     "length": 1.1535999999999969
+    },
+    {
+     "id": "credit_29",
+     "from": "dmm4x4/l3[8]",
+     "to": "dmm4x4/l3[9]",
+     "points": [
+      [
+       5.23,
+       4.43
+      ],
+      [
+       5.23,
+       4.5068
+      ],
+      [
+       7.23,
+       4.5068
+      ],
+      [
+       7.23,
+       4.43
+      ]
+     ],
+     "length": 2.153600000000001
+    },
+    {
+     "id": "credit_31",
+     "from": "dmm4x4/l3[8]",
+     "to": "dmm4x4/l3[12]",
+     "points": [
+      [
+       5.23,
+       4.43
+      ],
+      [
+       5.3068,
+       4.43
+      ],
+      [
+       5.3068,
+       5.43
+      ],
+      [
+       5.23,
+       5.43
+      ]
+     ],
+     "length": 1.153599999999999
+    },
+    {
+     "id": "credit_33",
+     "from": "dmm4x4/l3[9]",
+     "to": "dmm4x4/l3[10]",
+     "points": [
+      [
+       7.23,
+       4.43
+      ],
+      [
+       7.23,
+       4.5068
+      ],
+      [
+       9.23,
+       4.5068
+      ],
+      [
+       9.23,
+       4.43
+      ]
+     ],
+     "length": 2.153600000000001
+    },
+    {
+     "id": "credit_35",
+     "from": "dmm4x4/l3[9]",
+     "to": "dmm4x4/l3[13]",
+     "points": [
+      [
+       7.23,
+       4.43
+      ],
+      [
+       7.3068,
+       4.43
+      ],
+      [
+       7.3068,
+       5.43
+      ],
+      [
+       7.23,
+       5.43
+      ]
+     ],
+     "length": 1.153599999999999
+    },
+    {
+     "id": "credit_37",
+     "from": "dmm4x4/l3[10]",
+     "to": "dmm4x4/l3[11]",
+     "points": [
+      [
+       9.23,
+       4.43
+      ],
+      [
+       9.23,
+       4.5068
+      ],
+      [
+       11.23,
+       4.5068
+      ],
+      [
+       11.23,
+       4.43
+      ]
+     ],
+     "length": 2.153600000000001
+    },
+    {
+     "id": "credit_39",
+     "from": "dmm4x4/l3[10]",
+     "to": "dmm4x4/l3[14]",
+     "points": [
+      [
+       9.23,
+       4.43
+      ],
+      [
+       9.306799999999999,
+       4.43
+      ],
+      [
+       9.306799999999999,
+       5.43
+      ],
+      [
+       9.23,
+       5.43
+      ]
+     ],
+     "length": 1.1535999999999973
+    },
+    {
+     "id": "credit_41",
+     "from": "dmm4x4/l3[11]",
+     "to": "dmm4x4/l3[15]",
+     "points": [
+      [
+       11.23,
+       4.43
+      ],
+      [
+       11.306799999999999,
+       4.43
+      ],
+      [
+       11.306799999999999,
+       5.43
+      ],
+      [
+       11.23,
+       5.43
+      ]
+     ],
+     "length": 1.1535999999999973
+    },
+    {
+     "id": "credit_43",
+     "from": "dmm4x4/l3[12]",
+     "to": "dmm4x4/l3[13]",
+     "points": [
+      [
+       5.23,
+       5.43
+      ],
+      [
+       5.23,
+       5.5068
+      ],
+      [
+       7.23,
+       5.5068
+      ],
+      [
+       7.23,
+       5.43
+      ]
+     ],
+     "length": 2.153600000000001
+    },
+    {
+     "id": "credit_45",
+     "from": "dmm4x4/l3[13]",
+     "to": "dmm4x4/l3[14]",
+     "points": [
+      [
+       7.23,
+       5.43
+      ],
+      [
+       7.23,
+       5.5068
+      ],
+      [
+       9.23,
+       5.5068
+      ],
+      [
+       9.23,
+       5.43
+      ]
+     ],
+     "length": 2.153600000000001
+    },
+    {
+     "id": "credit_47",
+     "from": "dmm4x4/l3[14]",
+     "to": "dmm4x4/l3[15]",
+     "points": [
+      [
+       9.23,
+       5.43
+      ],
+      [
+       9.23,
+       5.5068
+      ],
+      [
+       11.23,
+       5.5068
+      ],
+      [
+       11.23,
+       5.43
+      ]
+     ],
+     "length": 2.153600000000001
+    }
+   ]
+  },
+  {
+   "id": "periphery",
+   "kind": "ring",
+   "routing": "ring",
+   "description": "the periphery ring, on the memory controllers' clock: edge ports and controllers, clockwise (kpu-floorplan)",
+   "nodes": [
+    {
+     "id": "dmm4x4/noc/port[0]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[0]",
+     "at": [
+      5.7299999999999995,
+      1.6300000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[1]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[1]",
+     "at": [
+      7.7299999999999995,
+      1.6300000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/mc[0]",
+     "kind": "stop",
+     "block": "dmm4x4/mc[0]",
+     "at": [
+      8.73,
+      0.99
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[2]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[2]",
+     "at": [
+      9.73,
+      1.6300000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[3]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[3]",
+     "at": [
+      11.73,
+      1.6300000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/mc[1]",
+     "kind": "stop",
+     "block": "dmm4x4/mc[1]",
+     "at": [
+      12.73,
+      0.99
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[4]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[4]",
+     "at": [
+      13.03,
+      2.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[5]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[5]",
+     "at": [
+      13.03,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/mc[2]",
+     "kind": "stop",
+     "block": "dmm4x4/mc[2]",
+     "at": [
+      13.670000000000002,
+      3.93
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[6]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[6]",
+     "at": [
+      13.03,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[7]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[7]",
+     "at": [
+      13.03,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/mc[3]",
+     "kind": "stop",
+     "block": "dmm4x4/mc[3]",
+     "at": [
+      13.670000000000002,
+      5.930000000000001
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[8]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[8]",
+     "at": [
+      11.73,
+      6.2299999999999995
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[9]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[9]",
+     "at": [
+      9.73,
+      6.2299999999999995
+     ]
+    },
+    {
+     "id": "dmm4x4/mc[4]",
+     "kind": "stop",
+     "block": "dmm4x4/mc[4]",
+     "at": [
+      8.73,
+      6.87
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[10]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[10]",
+     "at": [
+      7.7299999999999995,
+      6.2299999999999995
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[11]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[11]",
+     "at": [
+      5.7299999999999995,
+      6.2299999999999995
+     ]
+    },
+    {
+     "id": "dmm4x4/mc[5]",
+     "kind": "stop",
+     "block": "dmm4x4/mc[5]",
+     "at": [
+      4.73,
+      6.87
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[12]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[12]",
+     "at": [
+      4.43,
+      5.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[13]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[13]",
+     "at": [
+      4.43,
+      4.43
+     ]
+    },
+    {
+     "id": "dmm4x4/mc[6]",
+     "kind": "stop",
+     "block": "dmm4x4/mc[6]",
+     "at": [
+      3.79,
+      3.93
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[14]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[14]",
+     "at": [
+      4.43,
+      3.43
+     ]
+    },
+    {
+     "id": "dmm4x4/noc/port[15]",
+     "kind": "port",
+     "block": "dmm4x4/noc/port[15]",
+     "at": [
+      4.43,
+      2.43
+     ]
+    },
+    {
+     "id": "dmm4x4/mc[7]",
+     "kind": "stop",
+     "block": "dmm4x4/mc[7]",
+     "at": [
+      3.79,
+      1.9300000000000002
+     ]
+    }
+   ],
+   "links": [
+    {
+     "id": "periphery_64",
+     "from": "dmm4x4/noc/port[0]",
+     "to": "dmm4x4/noc/port[1]",
+     "points": [
+      [
+       5.73,
+       1.6300000000000001
+      ],
+      [
+       7.73,
+       1.6300000000000001
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "periphery_65",
+     "from": "dmm4x4/noc/port[1]",
+     "to": "dmm4x4/mc[0]",
+     "points": [
+      [
+       7.73,
+       1.6300000000000001
+      ],
+      [
+       8.73,
+       1.6300000000000001
+      ],
+      [
+       8.73,
+       0.99
+      ]
+     ],
+     "length": 1.6400000000000001
+    },
+    {
+     "id": "periphery_66",
+     "from": "dmm4x4/mc[0]",
+     "to": "dmm4x4/noc/port[2]",
+     "points": [
+      [
+       8.73,
+       0.99
+      ],
+      [
+       8.73,
+       1.6300000000000001
+      ],
+      [
+       9.73,
+       1.6300000000000001
+      ]
+     ],
+     "length": 1.6400000000000001
+    },
+    {
+     "id": "periphery_67",
+     "from": "dmm4x4/noc/port[2]",
+     "to": "dmm4x4/noc/port[3]",
+     "points": [
+      [
+       9.73,
+       1.6300000000000001
+      ],
+      [
+       11.73,
+       1.6300000000000001
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "periphery_68",
+     "from": "dmm4x4/noc/port[3]",
+     "to": "dmm4x4/mc[1]",
+     "points": [
+      [
+       11.73,
+       1.6300000000000001
+      ],
+      [
+       12.73,
+       1.6300000000000001
+      ],
+      [
+       12.73,
+       0.99
+      ]
+     ],
+     "length": 1.6400000000000001
+    },
+    {
+     "id": "periphery_69",
+     "from": "dmm4x4/mc[1]",
+     "to": "dmm4x4/noc/port[4]",
+     "points": [
+      [
+       12.73,
+       0.99
+      ],
+      [
+       12.73,
+       1.6300000000000001
+      ],
+      [
+       13.030000000000001,
+       1.6300000000000001
+      ],
+      [
+       13.030000000000001,
+       2.43
+      ]
+     ],
+     "length": 1.7400000000000009
+    },
+    {
+     "id": "periphery_70",
+     "from": "dmm4x4/noc/port[4]",
+     "to": "dmm4x4/noc/port[5]",
+     "points": [
+      [
+       13.030000000000001,
+       2.43
+      ],
+      [
+       13.030000000000001,
+       3.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "periphery_71",
+     "from": "dmm4x4/noc/port[5]",
+     "to": "dmm4x4/mc[2]",
+     "points": [
+      [
+       13.030000000000001,
+       3.43
+      ],
+      [
+       13.030000000000001,
+       3.93
+      ],
+      [
+       13.67,
+       3.93
+      ]
+     ],
+     "length": 1.1399999999999988
+    },
+    {
+     "id": "periphery_72",
+     "from": "dmm4x4/mc[2]",
+     "to": "dmm4x4/noc/port[6]",
+     "points": [
+      [
+       13.67,
+       3.93
+      ],
+      [
+       13.030000000000001,
+       3.93
+      ],
+      [
+       13.030000000000001,
+       4.43
+      ]
+     ],
+     "length": 1.1399999999999983
+    },
+    {
+     "id": "periphery_73",
+     "from": "dmm4x4/noc/port[6]",
+     "to": "dmm4x4/noc/port[7]",
+     "points": [
+      [
+       13.030000000000001,
+       4.43
+      ],
+      [
+       13.030000000000001,
+       5.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "periphery_74",
+     "from": "dmm4x4/noc/port[7]",
+     "to": "dmm4x4/mc[3]",
+     "points": [
+      [
+       13.030000000000001,
+       5.43
+      ],
+      [
+       13.030000000000001,
+       5.93
+      ],
+      [
+       13.67,
+       5.93
+      ]
+     ],
+     "length": 1.1399999999999988
+    },
+    {
+     "id": "periphery_75",
+     "from": "dmm4x4/mc[3]",
+     "to": "dmm4x4/noc/port[8]",
+     "points": [
+      [
+       13.67,
+       5.93
+      ],
+      [
+       13.030000000000001,
+       5.93
+      ],
+      [
+       13.030000000000001,
+       6.23
+      ],
+      [
+       11.73,
+       6.23
+      ]
+     ],
+     "length": 2.24
+    },
+    {
+     "id": "periphery_76",
+     "from": "dmm4x4/noc/port[8]",
+     "to": "dmm4x4/noc/port[9]",
+     "points": [
+      [
+       11.73,
+       6.23
+      ],
+      [
+       9.73,
+       6.23
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "periphery_77",
+     "from": "dmm4x4/noc/port[9]",
+     "to": "dmm4x4/mc[4]",
+     "points": [
+      [
+       9.73,
+       6.23
+      ],
+      [
+       8.73,
+       6.23
+      ],
+      [
+       8.73,
+       6.87
+      ]
+     ],
+     "length": 1.6399999999999997
+    },
+    {
+     "id": "periphery_78",
+     "from": "dmm4x4/mc[4]",
+     "to": "dmm4x4/noc/port[10]",
+     "points": [
+      [
+       8.73,
+       6.87
+      ],
+      [
+       8.73,
+       6.23
+      ],
+      [
+       7.73,
+       6.23
+      ]
+     ],
+     "length": 1.6399999999999997
+    },
+    {
+     "id": "periphery_79",
+     "from": "dmm4x4/noc/port[10]",
+     "to": "dmm4x4/noc/port[11]",
+     "points": [
+      [
+       7.73,
+       6.23
+      ],
+      [
+       5.73,
+       6.23
+      ]
+     ],
+     "length": 2.0
+    },
+    {
+     "id": "periphery_80",
+     "from": "dmm4x4/noc/port[11]",
+     "to": "dmm4x4/mc[5]",
+     "points": [
+      [
+       5.73,
+       6.23
+      ],
+      [
+       4.73,
+       6.23
+      ],
+      [
+       4.73,
+       6.87
+      ]
+     ],
+     "length": 1.6399999999999997
+    },
+    {
+     "id": "periphery_81",
+     "from": "dmm4x4/mc[5]",
+     "to": "dmm4x4/noc/port[12]",
+     "points": [
+      [
+       4.73,
+       6.87
+      ],
+      [
+       4.73,
+       6.23
+      ],
+      [
+       4.43,
+       6.23
+      ],
+      [
+       4.43,
+       5.43
+      ]
+     ],
+     "length": 1.740000000000001
+    },
+    {
+     "id": "periphery_82",
+     "from": "dmm4x4/noc/port[12]",
+     "to": "dmm4x4/noc/port[13]",
+     "points": [
+      [
+       4.43,
+       5.43
+      ],
+      [
+       4.43,
+       4.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "periphery_83",
+     "from": "dmm4x4/noc/port[13]",
+     "to": "dmm4x4/mc[6]",
+     "points": [
+      [
+       4.43,
+       4.43
+      ],
+      [
+       4.43,
+       3.93
+      ],
+      [
+       3.79,
+       3.93
+      ]
+     ],
+     "length": 1.1399999999999992
+    },
+    {
+     "id": "periphery_84",
+     "from": "dmm4x4/mc[6]",
+     "to": "dmm4x4/noc/port[14]",
+     "points": [
+      [
+       3.79,
+       3.93
+      ],
+      [
+       4.43,
+       3.93
+      ],
+      [
+       4.43,
+       3.43
+      ]
+     ],
+     "length": 1.1399999999999997
+    },
+    {
+     "id": "periphery_85",
+     "from": "dmm4x4/noc/port[14]",
+     "to": "dmm4x4/noc/port[15]",
+     "points": [
+      [
+       4.43,
+       3.43
+      ],
+      [
+       4.43,
+       2.43
+      ]
+     ],
+     "length": 1.0
+    },
+    {
+     "id": "periphery_86",
+     "from": "dmm4x4/noc/port[15]",
+     "to": "dmm4x4/mc[7]",
+     "points": [
+      [
+       4.43,
+       2.43
+      ],
+      [
+       4.43,
+       1.93
+      ],
+      [
+       3.79,
+       1.93
+      ]
+     ],
+     "length": 1.14
+    },
+    {
+     "id": "periphery_87",
+     "from": "dmm4x4/mc[7]",
+     "to": "dmm4x4/noc/port[0]",
+     "points": [
+      [
+       3.79,
+       1.93
+      ],
+      [
+       4.43,
+       1.93
+      ],
+      [
+       4.43,
+       1.6300000000000001
+      ],
+      [
+       5.73,
+       1.6300000000000001
+      ]
+     ],
+     "length": 2.24
+    }
+   ]
+  }
+ ],
+ "floorplan": {
+  "die": {
+   "width": 14.66,
+   "height": 7.86,
+   "area": 115.22760000000001
+  },
+  "estimated": true
+ }
+}

@@ -33,7 +33,7 @@ const std::set<std::string>& device_keys() {
                                             "l1",            "movers",   "analytical",
                                             "array",         "memory",   "cpu",
                                             "noc",           "fabric",   "systolic",
-                                            "combiner"};
+                                            "combiner",      "periphery"};
     return k;
 }
 const std::set<std::string>& systolic_keys() {
@@ -86,6 +86,10 @@ const std::set<std::string>& xor_fold_keys() {
 }
 const std::set<std::string>& noc_keys() {
     static const std::set<std::string> k = {"hub_buffer_blocks", "port"};
+    return k;
+}
+const std::set<std::string>& periphery_keys() {
+    static const std::set<std::string> k = {"topology", "queue_blocks", "mc_after_port"};
     return k;
 }
 const std::set<std::string>& noc_port_keys() {
@@ -388,6 +392,29 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
         }
         d.noc = n;
     }
+    if (obj.contains("periphery")) {
+        const json& s = obj.at("periphery");
+        const std::string w = where + ".periphery";
+        reject_unknown(s, periphery_keys(), w);
+        DeviceSpecification::Periphery p;
+        p.topology = read_string(s, "topology", p.topology, w);
+        p.queue_blocks = read_dim(s, "queue_blocks", p.queue_blocks, w);
+        if (s.contains("mc_after_port")) {
+            const json& a = s.at("mc_after_port");
+            if (!a.is_array()) throw SpecError("deployment: " + w + ".mc_after_port must be an array of port indices");
+            for (std::size_t i = 0; i < a.size(); ++i) {
+                const json& v = a[i];
+                const std::string wi = w + ".mc_after_port[" + std::to_string(i) + "]";
+                if (!v.is_number_integer() && !v.is_number_unsigned())
+                    throw SpecError("deployment: " + wi + " must be an integer");
+                const long long raw = v.get<long long>();
+                if (raw < 0 || raw > 0xFFFFFFFFll)
+                    throw SpecError("deployment: " + wi + " must be an edge port index (got " + std::to_string(raw) + ")");
+                p.mc_after_port.push_back(static_cast<Dim>(raw));
+            }
+        }
+        d.periphery = p;
+    }
     if (obj.contains("cpu")) {
         const json& s = obj.at("cpu");
         const std::string w = where + ".cpu";
@@ -519,6 +546,13 @@ json write_device(const DeviceSpecification& d) {
                         {"port", json{{"input_queue_blocks", n.port.input_queue_blocks},
                                       {"output_queue_blocks", n.port.output_queue_blocks},
                                       {"arbitration", n.port.arbitration}}}};
+    }
+
+    if (d.periphery) {
+        const auto& p = *d.periphery;
+        json o2 = json{{"topology", p.topology}, {"queue_blocks", p.queue_blocks}};
+        if (!p.mc_after_port.empty()) o2["mc_after_port"] = p.mc_after_port;
+        o["periphery"] = o2;
     }
 
     json an = json::object();

@@ -340,6 +340,8 @@ inline std::optional<ArrayLayout> ArrayLayout::of(const DeviceSpecification& d, 
         L.noc_reason_ = "a single layout has one L3 tile and no NoC";
         return L;
     }
+    if (d.topology == "dmm_mesh")
+        return fail("a dmm_mesh is not an array of alternating cells; its layout is a MeshLayout (mesh_layout.hpp)");
     return fail("unknown topology '" + d.topology + "'");
 }
 

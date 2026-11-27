@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The DMM mesh as a deployment** (#604; distributed CSP programs, step 1, `docs/plans/distributed-csp-programs.md`).
+  A `dmm_mesh` topology beside the checkerboard:
+  - **The machine:** a rows × cols mesh of nodes, each an L3 tile with its own compute tile. Neighbours
+    are joined by one-hop links, each with its credit link the other way. A node has 8 BlockMovers:
+    send N/E/S/W, feed a/b/x, drain.
+  - **The periphery:** a `periphery` ring on the memory controllers' clock joins the edge ports
+    (numbered clockwise from the NW corner) to the controllers. Each controller sits after the port its
+    `mc_after_port` names, or the controllers are spread evenly. Validated, and refused by field when
+    it cannot be built.
+  - **The layout:** `include/sw/kpu/program/platform/mesh_layout.hpp` derives the nodes, links, edge ports
+    and the ring's stops.
+  - **Names:** the naming map names `l3[t]/bm[0..7]` and the edge ports `noc/port[k]`. A mesh has no
+    routers.
+  - **The floorplan:** `kpu-floorplan` places every resource once and draws the mesh, credit, edge and
+    periphery wires. Its structure record has three networks, `mesh`, `credit` and `periphery`, and the
+    floorplan viewer draws each as a layer.
+  - **Fixtures:** `tests/program/deploy/kpu_dmm_{2x2,4x4}.json` and
+    `tests/program/structure/kpu_dmm_4x4.structure.json`.
+  - No level times the mesh yet; the NoC rework is #618.
+
 - **Plans: distributed CSP programs, and retiring ConcurrentTimingExecutor** (#603, #619). Decision 5 is
   taken: the cycle core replaces `ConcurrentTimingExecutor`, which was built on the wrong resource model.
   - `docs/plans/distributed-csp-programs.md` comes first. Can level-2 CSP programs be generated for the

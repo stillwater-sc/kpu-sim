@@ -80,7 +80,7 @@
       "required": ["id", "kind", "nodes", "links"],
       "properties": {
         "id": {"type": "string"},
-        "kind": {"enum": ["noc_request", "noc_response", "noc", "ring", "control_tree", "dram_l3"]},
+        "kind": {"enum": ["noc_request", "noc_response", "noc", "ring", "control_tree", "dram_l3", "credit"]},
         "routing": {"type": "string"},
         "description": {"type": "string"},
         "nodes": {

@@ -8,6 +8,7 @@ Checked-in `.json` deployment specs that CI **loads** (#282 increment 1).
 | `adr_checkerboard16.json` | ADR 0002 §3.5's example **verbatim**, in its flat spelling |
 | `two_devices.json` | a **two-device** deployment: the naming map spans it, `run()` refuses it |
 | `kpu_s1_combiner.json` | S1 with a **Combiner** that runs every vector operation, the scale and the block formats among them: what a requantized or block-format program needs from a file (#427) |
+| `kpu_dmm_2x2.json`, `kpu_dmm_4x4.json` | **DMM meshes** (#604; `docs/plans/distributed-csp-programs.md`): nodes of an L3 tile and its own compute tile, one-hop links, 8 BlockMovers per node, and the periphery ring joining the memory controllers' DMA engines to the edge ports. The 2x2 spreads its 2 controllers evenly; the 4x4 places its 8 with `mc_after_port` |
 
 ## Why two, and why they are checked differently
 

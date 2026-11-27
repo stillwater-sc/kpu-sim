@@ -95,6 +95,10 @@ const char* to_string(NocLink::Kind k) {
         case NocLink::Kind::Ring:   return "ring";
         case NocLink::Kind::Port:   return "port";
         case NocLink::Kind::Attach: return "attach";
+        case NocLink::Kind::Mesh:      return "mesh";
+        case NocLink::Kind::Credit:    return "credit";
+        case NocLink::Kind::Edge:      return "edge";
+        case NocLink::Kind::Periphery: return "periphery";
     }
     return "?";
 }
@@ -184,6 +188,243 @@ Dim isqrt_ceil(Dim n) {
     return c;
 }
 
+// An L3 tile's banks, in the tile at (x, y) of side s.
+void add_l3_banks(FloorplanBlock& tile, const DeviceSpecification& d, Dim t, double x, double y, double s) {
+    if (!d.l3.banks) return;
+    const double m = 0.1 * s;
+    const Rect area = R(x + m, y + m, s - 2 * m, s - 2 * m - 0.2 * s);
+    const auto cells = grid(area, *d.l3.banks, isqrt_ceil(*d.l3.banks), 0.02 * s);
+    for (Dim b = 0; b < *d.l3.banks; ++b)
+        tile.children.push_back(hw(d.name, BlockKind::L3Bank, {t, b}, "l3", cells[b]));
+}
+
+// A compute tile at (x, y) of side s: its register file, L2 banks and L1 vectors.
+FloorplanBlock compute_tile_block(const DeviceSpecification& d, Dim cf, double x, double y, double s) {
+    const double m = 0.1 * s;
+    FloorplanBlock tile = hw(d.name, BlockKind::ComputeTile, {cf}, "cf", R(x, y, s, s),
+                             "cf[" + std::to_string(cf) + "]");
+    // The upper part is the processor array: the tile itself, not a sub-block.
+    tile.children.push_back(hw(d.name, BlockKind::RegisterFile, {cf}, "cf",
+                               R(x + m, y + m, 0.25 * s, 0.12 * s), "regs"));
+    if (d.l2.banks_per_tile) {
+        const Rect area = R(x + m, y + 0.6 * s, 0.5 * s, 0.3 * s);
+        const auto cells = grid(area, *d.l2.banks_per_tile, isqrt_ceil(*d.l2.banks_per_tile), 0.02 * s);
+        for (Dim b = 0; b < *d.l2.banks_per_tile; ++b)
+            tile.children.push_back(hw(d.name, BlockKind::L2Bank, {cf, b}, "cf", cells[b]));
+    }
+    if (d.l1.vectors) {
+        const Rect area = R(x + 0.65 * s, y + 0.6 * s, 0.25 * s, 0.3 * s);
+        const auto cells = grid(area, *d.l1.vectors, 1, 0.02 * s);
+        for (Dim v = 0; v < *d.l1.vectors; ++v)
+            tile.children.push_back(hw(d.name, BlockKind::L1Vector, {cf, v}, "cf", cells[v]));
+    }
+    return tile;
+}
+
+// The attached CPU (cores, SRAM, descriptor/completion rings) in the column at x = M, from y = top,
+// and IO below it.
+void add_cpu_and_io(SocFloorplan& fp, const DeviceSpecification& d, const FloorplanStyle& st, double top,
+                    double cpuW, double min_io_h) {
+    const double P = st.pitch_um, g = st.gap_um, M = st.margin_um;
+    const bool cpu = d.cpu.harts.has_value();
+    double cpu_bottom = top;
+    if (cpu) {
+        const Dim harts = *d.cpu.harts;
+        const double cx = M, cw = cpuW, inner = cw - 2 * g;
+        const double hh = 0.7 * P;
+        const double hart_rows = static_cast<double>((harts + 1) / 2);   // two harts per row
+        const double sram_y = top + g + hart_rows * (hh + g);
+        const double ring_y = sram_y + 0.6 * P + g;
+        const double ch = ring_y + 0.4 * P + g - top;
+        FloorplanBlock c = group(d.name + "/cpu", BlockKind::Cpu, R(cx, top, cw, ch), "CPU");
+        const auto cells = grid(R(cx + g, top + g, inner, hart_rows * (hh + g) - g), harts, 2, g);
+        for (Dim h = 0; h < harts; ++h)
+            c.children.push_back(hw(d.name, BlockKind::CpuHart, {h}, "cpu", cells[h],
+                                    "hart" + std::to_string(h)));
+        c.children.push_back(hw(d.name, BlockKind::CpuSram, {}, "cpu", R(cx + g, sram_y, inner, 0.6 * P), "SRAM"));
+        const double rw = (inner - g) / 2;
+        c.children.push_back(hw(d.name, BlockKind::DescriptorRing, {}, "cpu",
+                                R(cx + g, ring_y, rw, 0.4 * P), "desc ring"));
+        c.children.push_back(hw(d.name, BlockKind::CompletionRing, {}, "cpu",
+                                R(cx + g + rw + g, ring_y, rw, 0.4 * P), "cpl ring"));
+        cpu_bottom = top + ch + g;
+        fp.blocks.push_back(std::move(c));
+    }
+    fp.blocks.push_back(group(d.name + "/io", BlockKind::Io,
+                              R(M, cpu_bottom + (cpu ? g : 0), cpuW, std::max(P, min_io_h)), "IO"));
+}
+
+// A dmm_mesh (mesh_layout.hpp). Node (r, c) is its L3 tile with its compute tile to the east. The
+// edge ports sit in a band around the array, and the periphery ring runs through that band. Each
+// memory controller sits outside the band, on the side of the edge port its ring stop follows,
+// with its PHY outside it at the die's edge; its DMA engines are its children.
+SocFloorplan generate_mesh_floorplan(const DeviceSpecification& d, const MeshLayout& L, const FloorplanStyle& st) {
+    const double P = st.pitch_um, g = st.gap_um, M = st.margin_um, s = P - g;
+    const double phyH = 0.25 * P, mcH = 0.6 * P, ring = 0.6 * P;
+    const double mcBand = phyH + g + mcH + g;
+    const double cpuW = 2.4 * P;
+    const double nw = 2 * P;                                      // a node: two tiles side by side
+    const double ax = M + cpuW + M + mcBand + ring, ay = M + mcBand + ring;
+    const double aw = L.cols() * nw, ah = L.rows() * P;
+
+    SocFloorplan fp;
+    fp.source = "generated:" + d.topology;
+    fp.device = d.name;
+
+    // ---- the nodes: L3 tile (its eight BlockMovers, banks) and its compute tile
+    FloorplanBlock array = group(d.name + "/array", BlockKind::Array, R(ax, ay, aw, ah), "array");
+    std::map<Dim, Rect> l3_rect;
+    for (Dim t = 0; t < L.node_count(); ++t) {
+        const GridPos p = L.pos(t);
+        const double x = ax + p.c * nw + g / 2, y = ay + p.r * P + g / 2;
+        FloorplanBlock tile = hw(d.name, BlockKind::L3Tile, {t}, "l3", R(x, y, s, s), "l3[" + std::to_string(t) + "]");
+        // The four send movers on the edges whose links they own; the feeds and the drain on the
+        // edge that faces the tile's compute tile.
+        const double th = 0.06 * s, len = 0.4 * s, f = 0.1 * s;
+        const Rect mover[kMeshMovers] = {
+            R(x + 0.3 * s, y, len, th),                      // send N
+            R(x + s - th, y + 0.12 * s, th, 0.25 * s),       // send E
+            R(x + 0.3 * s, y + s - th, len, th),             // send S
+            R(x, y + 0.3 * s, th, len),                      // send W
+            R(x + s - th, y + 0.45 * s, th, f),              // feed a
+            R(x + s - th, y + 0.57 * s, th, f),              // feed b
+            R(x + s - th, y + 0.69 * s, th, f),              // feed x
+            R(x + s - th, y + 0.81 * s, th, f)};             // drain
+        for (Dim k = 0; k < kMeshMovers; ++k)
+            tile.children.push_back(hw(d.name, BlockKind::BlockMover, {t, k}, "l3", mover[k],
+                                       to_string(static_cast<MoverRole>(k))));
+        add_l3_banks(tile, d, t, x, y, s);
+        l3_rect[t] = tile.rect;
+        array.children.push_back(std::move(tile));
+        array.children.push_back(compute_tile_block(d, t, x + P, y, s));
+    }
+    fp.blocks.push_back(std::move(array));
+
+    // ---- the edge ports, in the band, on the side of the node they belong to
+    const double ps = 0.2 * P;
+    std::map<Dim, Rect> port_rect;
+    for (const EdgePort& e : L.edge_ports()) {
+        const GridPos p = L.pos(e.node);
+        const double ocx = ax + p.c * nw + P, ocy = ay + p.r * P + P / 2;   // the node's centre
+        Rect rr;
+        switch (e.side) {
+            case Edge::N: rr = R(ocx - ps / 2, ay - ring / 2 - ps / 2, ps, ps); break;
+            case Edge::S: rr = R(ocx - ps / 2, ay + ah + ring / 2 - ps / 2, ps, ps); break;
+            case Edge::W: rr = R(ax - ring / 2 - ps / 2, ocy - ps / 2, ps, ps); break;
+            case Edge::E: rr = R(ax + aw + ring / 2 - ps / 2, ocy - ps / 2, ps, ps); break;
+        }
+        port_rect[e.index] = rr;
+        fp.blocks.push_back(hw(d.name, BlockKind::NocPort, {e.index}, "l3", rr, e.label()));
+    }
+
+    // ---- the memory controllers, each past the port its ring stop follows, and their PHYs
+    const auto& ports = L.edge_ports();
+    const Dim nports = static_cast<Dim>(ports.size());
+    const Dim per = d.dma.engines / L.controller_count();
+    const double len = 0.8 * P;                                   // along the side: under the port pitch
+    auto along = [&](Dim k) { return ports[k].side == Edge::N || ports[k].side == Edge::S ? port_rect[k].cx() : port_rect[k].cy(); };
+    std::map<Dim, std::pair<Edge, double>> mc_at;                 // mc -> its side, its position along it
+    for (Dim m = 0; m < L.controller_count(); ++m) {
+        const Dim k = L.mc_after_port(m), kn = (k + 1) % nports;
+        const Edge side = ports[k].side;
+        const bool horiz = side == Edge::N || side == Edge::S;
+        const double dir = side == Edge::N || side == Edge::E ? 1.0 : -1.0;   // clockwise
+        const double pos = ports[kn].side == side ? (along(k) + along(kn)) / 2 : along(k) + dir * (horiz ? nw : P) / 2;
+        mc_at[m] = {side, pos};
+        Rect mr, pr;
+        switch (side) {
+            case Edge::N: mr = R(pos - len / 2, ay - ring - g - mcH, len, mcH); pr = R(pos - len / 2, M, len, phyH); break;
+            case Edge::S: mr = R(pos - len / 2, ay + ah + ring + g, len, mcH);
+                          pr = R(pos - len / 2, ay + ah + ring + g + mcH + g, len, phyH); break;
+            case Edge::W: mr = R(ax - ring - g - mcH, pos - len / 2, mcH, len);
+                          pr = R(ax - ring - g - mcH - g - phyH, pos - len / 2, phyH, len); break;
+            case Edge::E: mr = R(ax + aw + ring + g, pos - len / 2, mcH, len);
+                          pr = R(ax + aw + ring + g + mcH + g, pos - len / 2, phyH, len); break;
+        }
+        fp.blocks.push_back(group(d.name + "/phy[" + std::to_string(m) + "]", BlockKind::DramPhy, pr, "PHY"));
+        FloorplanBlock mc = hw(d.name, BlockKind::MemoryController, {m}, "dram", mr, "MC" + std::to_string(m));
+        const double dl = (len - g * (per + 1)) / per, dd = 0.35 * mcH;
+        for (Dim e = 0; e < per; ++e) {
+            const double o = g + e * (dl + g);
+            const Rect er = horiz ? R(mr.x_um + o, mr.y_um + (mcH - dd) / 2, dl, dd)
+                                  : R(mr.x_um + (mcH - dd) / 2, mr.y_um + o, dd, dl);
+            mc.children.push_back(hw(d.name, BlockKind::DmaEngine, {m, e}, "dram", er, "DMA" + std::to_string(e)));
+        }
+        fp.blocks.push_back(std::move(mc));
+    }
+
+    add_cpu_and_io(fp, d, st, ay, cpuW, ah * 0.25);
+    double bottom = ay + ah + ring + mcBand;
+    for (const FloorplanBlock& b : fp.blocks) bottom = std::max(bottom, b.rect.y_um + b.rect.h_um);
+    fp.die = R(0, 0, ax + aw + ring + mcBand + M, bottom + M);
+
+    // ---- the wires: one-hop data links and their credit links, edge ports, the periphery ring
+    auto l3n = [&](Dim t) { return format(ResourceName{d.name, ResourceKind::L3Tile, {t}, 0}); };
+    auto portn = [&](Dim k) { return format(ResourceName{d.name, ResourceKind::NocPort, {k}, 0}); };
+    auto mcn = [&](Dim m) { return format(ResourceName{d.name, ResourceKind::MemoryController, {m}, 0}); };
+    const double off = 0.08 * s;                                  // the credit wire, beside the data wire
+    for (const MeshLink& k : L.links()) {
+        if (k.dir != Edge::E && k.dir != Edge::S) continue;       // each pair once; it carries both directions
+        const Rect& a = l3_rect.at(k.from);
+        const Rect& b = l3_rect.at(k.to);
+        fp.noc.push_back({NocLink::Kind::Mesh, l3n(k.from), l3n(k.to), {{a.cx(), a.cy()}, {b.cx(), b.cy()}}});
+        const double dx = k.dir == Edge::S ? off : 0, dy = k.dir == Edge::E ? off : 0;
+        fp.noc.push_back({NocLink::Kind::Credit, l3n(k.from), l3n(k.to),
+                          {{a.cx(), a.cy()}, {a.cx() + dx, a.cy() + dy}, {b.cx() + dx, b.cy() + dy}, {b.cx(), b.cy()}}});
+    }
+    for (const EdgePort& e : ports) {
+        const Rect& a = port_rect.at(e.index);
+        const Rect& b = l3_rect.at(e.node);
+        fp.noc.push_back({NocLink::Kind::Edge, portn(e.index), l3n(e.node), {{a.cx(), a.cy()}, {b.cx(), b.cy()}}});
+    }
+    // The ring's track runs through the middle of the band; a segment turns at the band's corners.
+    const double tl = ax - ring / 2, tr = ax + aw + ring / 2, tt = ay - ring / 2, tb = ay + ah + ring / 2;
+    auto track = [&](Edge side, double pos) -> std::pair<double, double> {
+        switch (side) {
+            case Edge::N: return {pos, tt};
+            case Edge::E: return {tr, pos};
+            case Edge::S: return {pos, tb};
+            case Edge::W: return {tl, pos};
+        }
+        return {pos, tt};
+    };
+    auto corner_after = [&](Edge side) -> std::pair<double, double> {   // clockwise, at the side's end
+        switch (side) {
+            case Edge::N: return {tr, tt};
+            case Edge::E: return {tr, tb};
+            case Edge::S: return {tl, tb};
+            case Edge::W: return {tl, tt};
+        }
+        return {tl, tt};
+    };
+    // A controller's stop is where its wire meets the track; the segment starts or ends at the
+    // controller itself.
+    struct Stop { std::string name; Edge side; double pos; std::optional<std::pair<double, double>> at; };
+    std::vector<Stop> stops;
+    std::map<Dim, Rect> mc_rect;
+    for (const FloorplanBlock& b : fp.blocks)
+        if (b.kind == BlockKind::MemoryController) mc_rect[b.resource->path[0]] = b.rect;
+    for (const PeripheryStop& st2 : L.stops()) {
+        if (st2.kind == PeripheryStop::Kind::EdgePort)
+            stops.push_back({portn(st2.of), ports[st2.of].side, along(st2.of), std::nullopt});
+        else
+            stops.push_back({mcn(st2.of), mc_at.at(st2.of).first, mc_at.at(st2.of).second,
+                             std::make_pair(mc_rect.at(st2.of).cx(), mc_rect.at(st2.of).cy())});
+    }
+    for (std::size_t i = 0; i < stops.size(); ++i) {
+        const Stop& a = stops[i];
+        const Stop& b = stops[(i + 1) % stops.size()];
+        std::vector<std::pair<double, double>> route;
+        if (a.at) route.push_back(*a.at);
+        route.push_back(track(a.side, a.pos));
+        if (a.side != b.side) route.push_back(corner_after(a.side));
+        route.push_back(track(b.side, b.pos));
+        if (b.at) route.push_back(*b.at);
+        fp.noc.push_back({NocLink::Kind::Periphery, a.name, b.name, std::move(route)});
+    }
+    return fp;
+}
+
 } // namespace
 
 SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const FloorplanStyle& st) {
@@ -194,6 +435,11 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
     if (!bad.empty()) throw FloorplanError("floorplan: " + bad);
     const DeviceSpecification& d = spec.device(device);
     std::string why;
+    if (d.topology == "dmm_mesh") {
+        const auto ML = MeshLayout::of(d, &why);
+        if (!ML) throw FloorplanError("floorplan: device \"" + d.name + "\" has no mesh layout, because " + why);
+        return generate_mesh_floorplan(d, *ML, st);
+    }
     const auto L = ArrayLayout::of(d, &why);
     if (!L)
         throw FloorplanError("floorplan: device \"" + d.name + "\" has no array layout, because " +
@@ -201,7 +447,6 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
 
     const double P = st.pitch_um, g = st.gap_um, M = st.margin_um, s = P - g;
     const double phyH = 0.25 * P, mcH = 0.6 * P, portBand = 0.4 * P;
-    const bool cpu = d.cpu.harts.has_value();
     const double cpuW = 2.4 * P;
     const Dim mcs = d.memory.controllers.value_or(0);
     const Dim top_mcs = (mcs + 1) / 2, bottom_mcs = mcs - top_mcs;
@@ -249,34 +494,10 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
                     hub_rect[t] = hr;
                     tile.children.push_back(hw(d.name, BlockKind::NocRouter, {t}, "l3", hr, "hub"));
                 }
-                if (d.l3.banks) {
-                    const Rect area = R(x + m, y + m, s - 2 * m, s - 2 * m - 0.2 * s);
-                    const auto cells = grid(area, *d.l3.banks, isqrt_ceil(*d.l3.banks), 0.02 * s);
-                    for (Dim b = 0; b < *d.l3.banks; ++b)
-                        tile.children.push_back(hw(d.name, BlockKind::L3Bank, {t, b}, "l3", cells[b]));
-                }
+                add_l3_banks(tile, d, t, x, y, s);
                 array.children.push_back(std::move(tile));
             } else {
-                const Dim cf = cell.index;
-                FloorplanBlock tile = hw(d.name, BlockKind::ComputeTile, {cf}, "cf", R(x, y, s, s),
-                                         "cf[" + std::to_string(cf) + "]");
-                // The upper part is the processor array: the tile itself, not a sub-block.
-                tile.children.push_back(hw(d.name, BlockKind::RegisterFile, {cf}, "cf",
-                                           R(x + m, y + m, 0.25 * s, 0.12 * s), "regs"));
-                if (d.l2.banks_per_tile) {
-                    const Rect area = R(x + m, y + 0.6 * s, 0.5 * s, 0.3 * s);
-                    const auto cells = grid(area, *d.l2.banks_per_tile,
-                                            isqrt_ceil(*d.l2.banks_per_tile), 0.02 * s);
-                    for (Dim b = 0; b < *d.l2.banks_per_tile; ++b)
-                        tile.children.push_back(hw(d.name, BlockKind::L2Bank, {cf, b}, "cf", cells[b]));
-                }
-                if (d.l1.vectors) {
-                    const Rect area = R(x + 0.65 * s, y + 0.6 * s, 0.25 * s, 0.3 * s);
-                    const auto cells = grid(area, *d.l1.vectors, 1, 0.02 * s);
-                    for (Dim v = 0; v < *d.l1.vectors; ++v)
-                        tile.children.push_back(hw(d.name, BlockKind::L1Vector, {cf, v}, "cf", cells[v]));
-                }
-                array.children.push_back(std::move(tile));
+                array.children.push_back(compute_tile_block(d, cell.index, x, y, s));
             }
         }
     fp.blocks.push_back(std::move(array));
@@ -332,31 +553,7 @@ SocFloorplan generate_floorplan(const DeploymentSpec& spec, Dim device, const Fl
     }
 
     // ---- the attached CPU (cores, SRAM, descriptor/completion rings), and IO below it
-    double cpu_bottom = ay;
-    if (cpu) {
-        const Dim harts = *d.cpu.harts;
-        const double cx = M, cw = cpuW, inner = cw - 2 * g;
-        const double hh = 0.7 * P;
-        const double hart_rows = static_cast<double>((harts + 1) / 2);   // two harts per row
-        const double sram_y = ay + g + hart_rows * (hh + g);
-        const double ring_y = sram_y + 0.6 * P + g;
-        const double ch = ring_y + 0.4 * P + g - ay;
-        FloorplanBlock c = group(d.name + "/cpu", BlockKind::Cpu, R(cx, ay, cw, ch), "CPU");
-        const auto cells = grid(R(cx + g, ay + g, inner, hart_rows * (hh + g) - g), harts, 2, g);
-        for (Dim h = 0; h < harts; ++h)
-            c.children.push_back(hw(d.name, BlockKind::CpuHart, {h}, "cpu", cells[h],
-                                    "hart" + std::to_string(h)));
-        c.children.push_back(hw(d.name, BlockKind::CpuSram, {}, "cpu", R(cx + g, sram_y, inner, 0.6 * P), "SRAM"));
-        const double rw = (inner - g) / 2;
-        c.children.push_back(hw(d.name, BlockKind::DescriptorRing, {}, "cpu",
-                                R(cx + g, ring_y, rw, 0.4 * P), "desc ring"));
-        c.children.push_back(hw(d.name, BlockKind::CompletionRing, {}, "cpu",
-                                R(cx + g + rw + g, ring_y, rw, 0.4 * P), "cpl ring"));
-        cpu_bottom = ay + ch + g;
-        fp.blocks.push_back(std::move(c));
-    }
-    fp.blocks.push_back(group(d.name + "/io", BlockKind::Io,
-                              R(M, cpu_bottom + (cpu ? g : 0), cpuW, std::max(P, ah * 0.25)), "IO"));
+    add_cpu_and_io(fp, d, st, ay, cpuW, ah * 0.25);
 
     // THE DIE, sized from what was placed rather than from the array alone: on a short array the
     // CPU column and IO below it reach lower than the array's bottom band, and a die sized to the
@@ -530,9 +727,14 @@ std::string validate_floorplan(const SocFloorplan& fp, const DeploymentSpec& spe
         const std::string w = std::string(to_string(l.kind)) + " link " + l.a + " -- " + l.b;
         const auto ka = kind_of(l.a), kb = kind_of(l.b);
         if (!ka || !kb) return w + " joins a block that does not exist";
+        const auto stop = [](BlockKind k) { return k == BlockKind::NocPort || k == BlockKind::MemoryController; };
         const bool ok = (l.kind == NocLink::Kind::Ring && *ka == BlockKind::NocRouter && *kb == BlockKind::NocRouter) ||
                         (l.kind == NocLink::Kind::Port && *ka == BlockKind::NocPort && *kb == BlockKind::NocRouter) ||
-                        (l.kind == NocLink::Kind::Attach && *ka == BlockKind::DmaEngine && *kb == BlockKind::NocPort);
+                        (l.kind == NocLink::Kind::Attach && *ka == BlockKind::DmaEngine && *kb == BlockKind::NocPort) ||
+                        ((l.kind == NocLink::Kind::Mesh || l.kind == NocLink::Kind::Credit) &&
+                         *ka == BlockKind::L3Tile && *kb == BlockKind::L3Tile) ||
+                        (l.kind == NocLink::Kind::Edge && *ka == BlockKind::NocPort && *kb == BlockKind::L3Tile) ||
+                        (l.kind == NocLink::Kind::Periphery && stop(*ka) && stop(*kb));
         if (!ok) return w + " joins the wrong kinds of block";
         if (l.route_um.size() < 2) return w + " has no route";
     }
@@ -679,16 +881,32 @@ std::string floorplan_to_structure(const SocFloorplan& fp) {
         };
     for (const FloorplanBlock& b : fp.blocks) walk(b, root);
 
-    // The NoC: one network, its nodes the blocks its links join, in first-mention order.
-    json nodes = json::array(), links = json::array();
-    std::set<std::string> seen;
+    // The networks. A checkerboard's NoC is one network, `noc`. A dmm_mesh has three: `mesh` (the
+    // one-hop data links and the edge ports), `credit` (the credit network) and `periphery` (the
+    // ring). Each network's nodes are the blocks its links join, in first-mention order.
+    struct Net { json nodes = json::array(), links = json::array(); std::set<std::string> seen; };
+    std::map<std::string, Net> nets;
+    const auto net_of = [](NocLink::Kind k) -> std::string {
+        switch (k) {
+            case NocLink::Kind::Mesh:
+            case NocLink::Kind::Edge:      return "mesh";
+            case NocLink::Kind::Credit:    return "credit";
+            case NocLink::Kind::Periphery: return "periphery";
+            default:                       return "noc";
+        }
+    };
     for (std::size_t i = 0; i < fp.noc.size(); ++i) {
         const NocLink& l = fp.noc[i];
+        Net& net = nets[net_of(l.kind)];
+        json& nodes = net.nodes;
+        json& links = net.links;
         for (const std::string& end : {l.a, l.b}) {
-            if (!seen.insert(end).second) continue;
+            if (!net.seen.insert(end).second) continue;
             const auto it = placed.find(end);
             const std::string k = it == placed.end() ? "" : it->second.first;
-            json n = json{{"id", end}, {"kind", k == "noc_router" ? "router" : k == "noc_port" ? "port" : "attach"}, {"block", end}};
+            const std::string nk = k == "noc_router" ? "router" : k == "noc_port" ? "port"
+                                 : k == "l3_tile" ? "node" : k == "memory_controller" ? "stop" : "attach";
+            json n = json{{"id", end}, {"kind", nk}, {"block", end}};
             if (it != placed.end()) {
                 const auto& r = it->second.second;
                 n["at"] = json::array({r[0] + r[2] / 2, r[1] + r[3] / 2});
@@ -710,10 +928,18 @@ std::string floorplan_to_structure(const SocFloorplan& fp) {
         links.push_back(link);
     }
     json networks = json::array();
-    if (!links.empty())
-        networks.push_back(json{{"id", "noc"}, {"kind", "noc"}, {"routing", "ring"},
-                                {"description", "the NoC's ring, port and attach links (kpu-floorplan)"},
-                                {"nodes", nodes}, {"links", links}});
+    struct NetInfo { const char* id; const char* kind; const char* routing; const char* description; };
+    static const NetInfo kNets[] = {
+        {"noc", "noc", "ring", "the NoC's ring, port and attach links (kpu-floorplan)"},
+        {"mesh", "noc", "one_hop", "the dmm_mesh's one-hop data links, each pair both ways, and its edge ports (kpu-floorplan)"},
+        {"credit", "credit", "one_hop", "the credit network: each data link's credits, the other way (kpu-floorplan)"},
+        {"periphery", "ring", "ring", "the periphery ring, on the memory controllers' clock: edge ports and controllers, clockwise (kpu-floorplan)"}};
+    for (const NetInfo& n : kNets) {
+        const auto it = nets.find(n.id);
+        if (it == nets.end() || it->second.links.empty()) continue;
+        networks.push_back(json{{"id", n.id}, {"kind", n.kind}, {"routing", n.routing}, {"description", n.description},
+                                {"nodes", it->second.nodes}, {"links", it->second.links}});
+    }
 
     json root_doc = json::object();
     root_doc["format"] = "kpu-structure";
@@ -772,6 +998,10 @@ SocFloorplan floorplan_from_json(const std::string& text, const DeploymentSpec& 
             if (k == "ring") l.kind = NocLink::Kind::Ring;
             else if (k == "port") l.kind = NocLink::Kind::Port;
             else if (k == "attach") l.kind = NocLink::Kind::Attach;
+            else if (k == "mesh") l.kind = NocLink::Kind::Mesh;
+            else if (k == "credit") l.kind = NocLink::Kind::Credit;
+            else if (k == "edge") l.kind = NocLink::Kind::Edge;
+            else if (k == "periphery") l.kind = NocLink::Kind::Periphery;
             else throw FloorplanError("floorplan: " + w + " has unknown kind \"" + k + "\"");
             l.a = str_at(o, "a", w);
             l.b = str_at(o, "b", w);
@@ -869,9 +1099,13 @@ std::string floorplan_to_svg(const SocFloorplan& fp) {
         if (l.route_um.size() < 2) continue;
         o << "<polyline fill=\"none\" points=\"";
         for (const auto& [x, y] : l.route_um) o << x << "," << y << " ";
-        o << "\" stroke=\"" << (l.kind == NocLink::Kind::Attach ? "#2a5db0" : "#4a5059") << "\" "
-          << "stroke-width=\"" << (l.kind == NocLink::Kind::Ring ? 10 : 8) << "\" stroke-opacity=\"0.55\""
-          << (l.kind == NocLink::Kind::Ring ? "" : " stroke-dasharray=\"30 20\"") << "><title>"
+        const bool solid = l.kind == NocLink::Kind::Ring || l.kind == NocLink::Kind::Mesh ||
+                           l.kind == NocLink::Kind::Periphery;
+        const char* colour = l.kind == NocLink::Kind::Attach || l.kind == NocLink::Kind::Periphery ? "#2a5db0"
+                           : l.kind == NocLink::Kind::Credit ? "#b0702a" : "#4a5059";
+        o << "\" stroke=\"" << colour << "\" "
+          << "stroke-width=\"" << (solid ? 10 : l.kind == NocLink::Kind::Credit ? 5 : 8) << "\" stroke-opacity=\"0.55\""
+          << (solid ? "" : " stroke-dasharray=\"30 20\"") << "><title>"
           << to_string(l.kind) << ": " << esc(l.a) << " -- " << esc(l.b) << "</title></polyline>\n";
     }
     o << "</svg>\n";
