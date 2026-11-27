@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **L-B for level-2 programs** (#606; distributed CSP programs, step 3): `csp/distributed_behavioral.hpp`
+  runs every process through channels bounded by their credits, with real tile values.
+  - **The interleaving:** round robin, so no process starves. An action waits for its destination's
+    credit, for its source to hold the tile, or for a store-buffer credit.
+  - **D5:** a program that cannot finish is a deadlock, naming every stuck process with its line and
+    what it waits for.
+  - **D6:** `compare_values` checks the result against a reference, bit for bit.
+  - **Values:** calls run the shared L0 kernels (gemm), so the samples reproduce the L0 result bit for
+    bit. `distributed_inputs` makes deterministic operands.
+  - **A refusal:** a program that ends with a residency still expecting reads, since its credit would
+    never return.
+  - **`dcsp 1` gains `merges k`:** a result that accumulates expects k merges, and nothing reads it
+    until they land. Without it a drain could take a partial.
+  - **A new sample:** `gemm_ksplit_node0.dcsp`, a K-split gemm whose loads wait on credits and whose
+    drain waits on its merge.
+
 - **The level-2 CSP program and its text form, `dcsp 1`** (#605; distributed CSP programs, step 2).
   `include/sw/kpu/program/csp/distributed.hpp` defines a distributed program for the DMM mesh, with no
   global order:

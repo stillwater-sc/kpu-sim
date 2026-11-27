@@ -1,0 +1,47 @@
+dcsp 1
+// One output tile, its K split in two, on the single node of a 1x1 mesh. The DMA engine's channel
+// owns two L3 slots, so its third and fourth loads wait for the feeds to free them: credits at
+// work. The result expects one merge, so the drain waits for the second gemm's accumulation.
+program gemm_ksplit_node0 machine mesh(1x1) {
+  tensor A[16,32] int8 tile 16x16 in;
+  tensor B[32,16] int8 tile 16x16 in;
+  tensor C[16,16] int32 tile 16x16 out;
+
+  channel ld : dma[0, 0] -> l3[0] slots 0, 1;
+  channel fa : bm.a[0] -> l2[0] slots 0;
+  channel fb : bm.b[0] -> l2[0] slots 1;
+  channel cc : cf[0] -> l2[0] slots 2;
+  channel dc : bm.c[0] -> l3[0] slots 2;
+  channel st : bm.N[0] -> dma[0, 0] credits 1;
+
+  process dma[0, 0] {
+    load A[0,0] to l3[0]:0 reads 1 via ld;
+    load B[0,0] to l3[0]:1 reads 1 via ld;
+    load A[0,1] to l3[0]:0 reads 1 via ld;
+    load B[1,0] to l3[0]:1 reads 1 via ld;
+    store C[0,0] via st;
+  }
+
+  process bm.a[0] {
+    feed A[0,0] from l3[0]:0 to l2[0]:0 reads 1 via fa;
+    feed A[0,1] from l3[0]:0 to l2[0]:0 reads 1 via fa;
+  }
+
+  process bm.b[0] {
+    feed B[0,0] from l3[0]:1 to l2[0]:1 reads 1 via fb;
+    feed B[1,0] from l3[0]:1 to l2[0]:1 reads 1 via fb;
+  }
+
+  process cf[0] {
+    call gemm(l2[0]:0, l2[0]:1) to C[0,0] at l2[0]:2 merges 1 reads 1 via cc;
+    call gemm(l2[0]:0, l2[0]:1) acc l2[0]:2;
+  }
+
+  process bm.c[0] {
+    drain C[0,0] from l2[0]:2 to l3[0]:2 reads 1 via dc;
+  }
+
+  process bm.N[0] {
+    push C[0,0] from l3[0]:2 to dma[0, 0] via st;
+  }
+}

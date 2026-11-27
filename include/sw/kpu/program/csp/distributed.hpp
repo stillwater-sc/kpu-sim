@@ -37,7 +37,7 @@
 //   feed T from l3[t]:s to l2[t]:s2 reads n via ch    feed mover
 //   drain T from l2[t]:s to l3[t]:s2 reads n via ch   drain mover
 //   store T via ch                              DMA: the pushed tile T to DRAM
-//   call op(l2[t]:a, l2[t]:b) to T at l2[t]:s reads n via ch   compute: opens a result
+//   call op(l2[t]:a, l2[t]:b) to T at l2[t]:s [merges k] reads n via ch   compute: opens a result
 //   call op(l2[t]:a, l2[t]:b) acc l2[t]:s       compute: merges into a live result
 //
 // Every write that fills a slot OPENS A RESIDENCY: it waits for its channel's credit for that
@@ -47,7 +47,9 @@
 // program. So a residency's release is its last read, as level 1 records consumers per residency:
 // the program states its reuse (reuse-is-deliberate), and no Release action is needed.
 // An accumulating call (`acc`) writes into a residency its own channel opened, and neither spends
-// a credit nor counts as a read.
+// a credit nor counts as a read. A result that accumulates says how many merges it expects
+// (`merges k`, 0 when absent): no read of it may run until all k have landed, as the Combiner
+// signals a tile ready only after its last merge. Without it a drain could read a partial.
 //
 // WHAT IS CHECKED HERE: structure (validate_structure): every name resolves, every action runs in
 // a process of its role, on its own node, through its own channel, into one of that channel's
@@ -161,6 +163,7 @@ struct Action2 {
     std::string op;                     // a Call: its tile function (gemm, ...)
     std::vector<SlotRef> args;          // a Call: its operand slots
     bool accumulate = false;            // a Call: merge into the live result at `to`
+    std::uint32_t merges = 0;           // a Call that opens a result: the accumulating calls it waits for
     int line = 0;                       // where it was written, for messages; 0 when generated
 
     // Does it open a residency (wait for a credit and spend it)?
@@ -287,6 +290,8 @@ inline std::string validate_structure(const DistributedProgram& p) {
             for (const SlotRef& s : a.args)
                 if (!own(s, SlotRef::Pool::L2)) return w + "a call reads " + s.to_string() + ", not its own compute tile's L2";
             // The accumulating call: into its own node's L2; no channel.
+            if (a.merges && !(a.kind == Action2::Kind::Call && !a.accumulate))
+                return w + "only a call that opens a result expects merges";
             if (a.kind == Action2::Kind::Call && a.accumulate) {
                 if (!a.to || !own(*a.to, SlotRef::Pool::L2)) return w + "a call accumulates into its own compute tile's L2";
                 if (a.channel != kNoChannel) return w + "an accumulating call spends no credit, so it names no channel";
