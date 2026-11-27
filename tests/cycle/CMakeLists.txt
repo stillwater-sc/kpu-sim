@@ -290,3 +290,14 @@ endif()
 set_target_properties(test_cycle_compute_subsystem PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_compute_subsystem COMMAND test_cycle_compute_subsystem)
 set_tests_properties(test_cycle_compute_subsystem PROPERTIES LABELS "cycle;compute;counters;v0.10")
+
+# Step 3a/3b of the join (#548): the L3 tile with the BlockMover on its other side, DRAM -> L3 -> L2
+# -> L3 -> DRAM, the L3 slots' credits three ways.
+add_executable(test_cycle_l3_blockmover test_cycle_l3_blockmover.cpp)
+target_link_libraries(test_cycle_l3_blockmover PRIVATE Catch2::Catch2WithMain kpu_memory_components kpu_trace)
+target_include_directories(test_cycle_l3_blockmover PRIVATE ${CMAKE_SOURCE_DIR}/include
+                           ${CMAKE_SOURCE_DIR}/patterns/memory/lpddr5/common)
+kpu_set_target_options(test_cycle_l3_blockmover)
+set_target_properties(test_cycle_l3_blockmover PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_l3_blockmover COMMAND test_cycle_l3_blockmover)
+set_tests_properties(test_cycle_l3_blockmover PROPERTIES LABELS "cycle;l3;blockmover;memory;compute;v0.10")

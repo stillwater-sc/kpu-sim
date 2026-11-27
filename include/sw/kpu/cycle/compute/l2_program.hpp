@@ -44,6 +44,7 @@
 #include <sw/kpu/timing/tile_descriptor.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -64,6 +65,9 @@ struct L2Action {
     // A Move's or Writeback's layout in L3 (Strided: `l3_pitch` apart; dense: the tile's shape).
     Layout layout = Layout::Strided;
     std::uint32_t tile_rows = 0, tile_cols = 0, element_bytes = 0;
+    // A Writeback into an L3 tile's slot (#548, the join): the slot whose credit it waits for, when
+    // the BlockMover is connected to the L3 tile's credits (block_mover.hpp). None: no L3 credit.
+    std::optional<std::uint32_t> l3_slot;
 
     // A dense tile's bytes in L3: its elements, then zeros to whole 64-byte beats. Wide: a shape
     // whose bytes pass 32 bits is refused by its size, never wrapped (validate_l2_program).

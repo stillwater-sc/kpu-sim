@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The join, Phase 3, step 3b: the L3 tile's BlockMover side** (#548). Phase 1's L3 tile now has the
+  compute subsystem's BlockMover on its other side, in place of the stand-in L3.
+  - Two L3 actions, `Read` and `Write` (`l3_program.hpp`): the BlockMover's Move of a slot's tile, and
+    its Writeback of a result tile into a slot.
+  - A **Read is a consumer.** The tile serves it, by address, once the slot is READY with the tile it
+    is bound to, and the slot's Release waits until every Read of its tile has been served.
+  - A **Write is a producer.** It lands as a Load does, under the slot's credit. A Release returns the
+    credit to the slot's next producer: the DMA engine for a Load or Fill, the BlockMover for a Write.
+    At the start each slot's credit is its first producer's.
+  - The read port takes turns between Store ejects and Reads, the write port between Loads and Writes.
+  - The DMA engine skips the BlockMover's actions. The BlockMover waits for an L3 slot's credit before
+    a Writeback into it.
+  - `check_slot_credits(dma, bm, l3)` checks every cycle that a slot's credit is the engine's or the
+    mover's, never both, and neither's while the slot is live.
+  - Tested from DRAM through L3 into L2 lanes and back through L3 to DRAM, bit for bit. Mutation checks:
+    without the Release's wait for its Reads the run deadlocks, and without the credit routing to the
+    mover a reused slot's Write never starts.
+
 - **The join, Phase 3, step 3a: the BlockMover's layout transform** (#548; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §6). The compute subsystem's L3 now holds tiles as the memory
   subsystem places them: densely, row-major, padded to 64-byte beats.

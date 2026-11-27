@@ -20,6 +20,20 @@
 // The tile executes its part of the program (Stores and Releases, l3_program.hpp) in the program's
 // order, one at a time.
 //
+// THE BLOCKMOVER'S SIDE (#548, the join; connect_blockmover): the compute subsystem's BlockMover
+// reads tiles for its Moves into L2 and writes its Writebacks' result tiles, on its own links, by
+// address (a slot's bytes are at slot * slot_bytes), in 64-byte beats:
+//   - a READ (l3_program.hpp's Read, a Move of the tile) is served in the program's order of the
+//     Reads, once the slot is READY with the tile it is bound to (the producer before it into its
+//     slot): the BlockMover never reads early, nor another residency's tile. A Release waits until
+//     every Read of its tile before it in the program has been served: a Read is a consumer, as a
+//     Store is;
+//   - a WRITE (a Writeback) lands as a Load's beats do, into a FREE slot, under the slot's credit,
+//     which is the BlockMover's: a Release pushes the slot's credit to its NEXT PRODUCER, the DMA
+//     engine for a Load or Fill, the BlockMover for a Write.
+// The read port serves one beat a cycle, a Store's or a Read's, taking turns when both wait; the
+// write port lands one, a Load's or a Write's, taking turns the same way.
+//
 // PORTS AND BANKS. Each cycle, at most one beat is read (a Store's) and one written (a Load's). A
 // beat's bank is its beat index in the slot modulo `banks`; a bank serves one access a cycle, and
 // the read goes first, so a write to the bank being read waits a cycle (bank_conflicts() counts
@@ -37,6 +51,7 @@
 
 #include <sw/kpu/cycle/component.hpp>
 #include <sw/kpu/cycle/link.hpp>
+#include <sw/kpu/cycle/compute/l2_program.hpp>
 #include <sw/kpu/cycle/memory/l3_program.hpp>
 
 #include <algorithm>
@@ -80,8 +95,23 @@ public:
         std::vector<std::optional<std::size_t>> last_load(cfg.slots);
         for (std::size_t i = 0; i < program.size(); ++i) {
             const auto k = program[i].kind;
-            if (k == L3Action::Kind::Load || k == L3Action::Kind::Fill) last_load[program[i].slot] = i;
-            else commands_.push_back({i, program[i], last_load[program[i].slot]});
+            const std::uint32_t slot = program[i].slot;
+            if (k == L3Action::Kind::Write) bm_writes_.push_back({i, slot, program[i].bytes});
+            if (is_l3_producer(k)) last_load[slot] = i;
+            else if (k == L3Action::Kind::Read) bm_reads_.push_back({i, slot, program[i].bytes, last_load[slot]});
+            else commands_.push_back({i, program[i], last_load[slot], {}, false});
+        }
+        // A Release waits for the Reads of its tile before it; its credit goes to the slot's next producer.
+        for (Command& c : commands_) {
+            if (c.action.kind != L3Action::Kind::Release) continue;
+            for (std::size_t r = 0; r < bm_reads_.size(); ++r)
+                if (bm_reads_[r].ticket < c.ticket && bm_reads_[r].slot == c.action.slot && bm_reads_[r].producer == c.load)
+                    c.reads.push_back(r);
+            for (std::size_t i = c.ticket + 1; i < program.size(); ++i)
+                if (program[i].slot == c.action.slot && is_l3_producer(program[i].kind)) {
+                    c.to_blockmover = program[i].kind == L3Action::Kind::Write;
+                    break;
+                }
         }
         clear();
     }
@@ -92,70 +122,153 @@ public:
         eject_ = &eject;
         credits_ = &credits;
     }
+    // The BlockMover's side: its read requests, the beats back, its Writes' beats, and the credits of
+    // the slots its Writes produce into.
+    void connect_blockmover(Link<L3RowRead>& reads, Link<Beat>& data, Link<Beat>& writes, Link<SlotCredit>& credits) {
+        bm_reads_in_ = &reads;
+        bm_data_ = &data;
+        bm_writes_in_ = &writes;
+        bm_credits_ = &credits;
+    }
 
     void evaluate(Cycle now) override {
         if (!in_ || !eject_ || !credits_) throw std::logic_error("cycle::L3Tile " + name() + ": not connected");
         bool moved = false;
         std::optional<Stall> wait;
-        // The read port: the head command.
+        // The BlockMover's next read request, matched to the next Read in the program.
+        if (bm_reads_in_ && !bm_req_ && bm_reads_in_->can_pop(now)) {
+            const L3RowRead& q = bm_reads_in_->peek(now);
+            if (bm_read_head_ >= bm_reads_.size())
+                throw std::logic_error(where(now) + ": a read of " + std::to_string(q.bytes) + " bytes at " +
+                                       std::to_string(q.address) + " from the BlockMover, past the program's Reads");
+            const BmRead& r = bm_reads_[bm_read_head_];
+            if (q.address != std::uint64_t(r.slot) * config_.slot_bytes || q.bytes != r.bytes)
+                throw std::logic_error(where(now) + ": a read of " + std::to_string(q.bytes) + " bytes at " +
+                                       std::to_string(q.address) + " from the BlockMover, where action " +
+                                       std::to_string(r.ticket) + " reads " + std::to_string(r.bytes) + " bytes of slot " +
+                                       std::to_string(r.slot) + " (at " +
+                                       std::to_string(std::uint64_t(r.slot) * config_.slot_bytes) + ")");
+            bm_req_ = bm_reads_in_->pop(now);
+            bm_sent_ = 0;
+            moved = true;
+        }
+        // The read port: a Store's beat or a Read's, taking turns when both can go.
         std::optional<std::uint32_t> read_bank;
-        if (head_ < commands_.size()) {
-            const Command& c = commands_[head_];
-            Slot& s = slots_[c.action.slot];
-            if (!holds_its_tile(c)) {
-                wait = Stall::NoData;   // the tile-ready token of the slot's Load
-            } else if (c.action.kind == L3Action::Kind::Store) {
-                if (c.action.bytes != s.tile_bytes)
-                    throw std::logic_error(where(now) + ": action " + std::to_string(c.ticket) + " stores " +
-                                           std::to_string(c.action.bytes) + " bytes from slot " +
-                                           std::to_string(c.action.slot) + ", which holds a tile of " +
-                                           std::to_string(s.tile_bytes));
-                if (eject_->can_push(now)) {
-                    L3Beat b;
-                    b.id = ++beat_id_;
-                    b.ticket = c.ticket;
-                    b.slot = c.action.slot;
-                    b.offset = offset_;
-                    b.tile_bytes = c.action.bytes;
-                    b.bytes.assign(s.bytes.begin() + offset_, s.bytes.begin() + offset_ + kL3BeatBytes);
-                    read_bank = bank(offset_);
-                    eject_->push(now, std::move(b));
-                    offset_ += kL3BeatBytes;
-                    if (offset_ == c.action.bytes) {
-                        offset_ = 0;
-                        ++head_;
-                    }
-                    moved = true;
-                } else {
-                    wait = Stall::NoCredit;
-                }
-            } else {   // Release
-                if (credits_->can_push(now)) {
-                    s.state = SlotState::Free;
-                    residencies_[s.residency].released_at = now;
-                    credits_->push(now, SlotCredit{++credit_id_, c.action.slot});
-                    counters().complete();
-                    ++head_;
-                    moved = true;
-                } else {
-                    wait = Stall::NoCredit;
-                }
+        std::optional<Stall> store_wait, read_wait;
+        bool store_can = false, read_can = false;
+        const Command* head = head_ < commands_.size() ? &commands_[head_] : nullptr;
+        if (head) {
+            if (!holds_its_tile(head->slot_of(), head->load) || !reads_done(*head)) store_wait = Stall::NoData;
+            else if (head->action.kind == L3Action::Kind::Store) {
+                if (eject_->can_push(now)) store_can = true;
+                else store_wait = Stall::NoCredit;
             }
         }
-        // The write port: one landed beat, unless its bank is being read.
-        if (in_->can_pop(now)) {
+        if (bm_req_) {
+            const BmRead& r = bm_reads_[bm_read_head_];
+            if (!holds_its_tile(r.slot, r.producer)) read_wait = Stall::NoData;
+            else if (bm_data_->can_push(now)) read_can = true;
+            else read_wait = Stall::NoCredit;
+        }
+        const bool serve_read = read_can && (!store_can || read_turn_);
+        if (store_can && !serve_read) {
+            const Command& c = *head;
+            Slot& sl = slots_[c.action.slot];
+            if (c.action.bytes != sl.tile_bytes)
+                throw std::logic_error(where(now) + ": action " + std::to_string(c.ticket) + " stores " +
+                                       std::to_string(c.action.bytes) + " bytes from slot " +
+                                       std::to_string(c.action.slot) + ", which holds a tile of " +
+                                       std::to_string(sl.tile_bytes));
+            L3Beat b;
+            b.id = ++beat_id_;
+            b.ticket = c.ticket;
+            b.slot = c.action.slot;
+            b.offset = offset_;
+            b.tile_bytes = c.action.bytes;
+            b.bytes.assign(sl.bytes.begin() + offset_, sl.bytes.begin() + offset_ + kL3BeatBytes);
+            read_bank = bank(offset_);
+            eject_->push(now, std::move(b));
+            offset_ += kL3BeatBytes;
+            if (offset_ == c.action.bytes) {
+                offset_ = 0;
+                ++head_;
+            }
+            moved = true;
+            read_turn_ = true;
+        } else if (serve_read) {
+            const BmRead& r = bm_reads_[bm_read_head_];
+            const Slot& sl = slots_[r.slot];
+            if (r.bytes > sl.tile_bytes)
+                throw std::logic_error(where(now) + ": action " + std::to_string(r.ticket) + " reads " +
+                                       std::to_string(r.bytes) + " bytes from slot " + std::to_string(r.slot) +
+                                       ", which holds a tile of " + std::to_string(sl.tile_bytes));
+            Beat b;
+            b.id = ++beat_id_;
+            b.address = bm_req_->address + bm_sent_;
+            b.bytes.assign(sl.bytes.begin() + bm_sent_, sl.bytes.begin() + bm_sent_ + kL3BeatBytes);
+            b.tag = bm_req_->tag;
+            b.first = bm_sent_ == 0;
+            read_bank = bank(bm_sent_);
+            bm_sent_ += kL3BeatBytes;
+            b.last = bm_sent_ >= r.bytes;
+            bm_data_->push(now, std::move(b));
+            if (bm_sent_ >= r.bytes) {
+                reads_done_[bm_read_head_] = true;
+                ++bm_read_head_;
+                bm_req_.reset();
+            }
+            moved = true;
+            read_turn_ = false;
+        } else if (head && head->action.kind == L3Action::Kind::Release && !store_wait) {
+            const Command& c = *head;
+            Slot& sl = slots_[c.action.slot];
+            Link<SlotCredit>* to = c.to_blockmover ? bm_credits_ : credits_;
+            if (!to)
+                throw std::logic_error(where(now) + ": action " + std::to_string(c.ticket) +
+                                       " returns slot " + std::to_string(c.action.slot) +
+                                       "'s credit to the BlockMover, which is not connected");
+            if (to->can_push(now)) {
+                sl.state = SlotState::Free;
+                residencies_[sl.residency].released_at = now;
+                to->push(now, SlotCredit{++credit_id_, c.action.slot});
+                counters().complete();
+                ++head_;
+                moved = true;
+            } else {
+                store_wait = Stall::NoCredit;
+            }
+        }
+        wait = store_wait ? store_wait : read_wait;
+
+        // The write port: a Load's beat or a Write's, taking turns when both have landed, unless its
+        // bank is being read.
+        const bool load_has = in_->can_pop(now);
+        const bool write_has = bm_writes_in_ && bm_writes_in_->can_pop(now);
+        const bool take_write = write_has && (!load_has || write_turn_);
+        if (take_write) {
+            const Beat& w = bm_writes_in_->peek(now);
+            const std::uint32_t off = static_cast<std::uint32_t>(w.address % config_.slot_bytes);
+            if (read_bank && bank(off) == *read_bank) {
+                ++bank_conflicts_;
+            } else {
+                write(now, blockmover_beat(now, bm_writes_in_->pop(now)));
+                moved = true;
+                write_turn_ = false;
+            }
+        } else if (load_has) {
             if (read_bank && bank(in_->peek(now).offset) == *read_bank) {
                 ++bank_conflicts_;   // the read moved, so the cycle is busy; the write waits for the bank
             } else {
                 write(now, in_->pop(now));
                 moved = true;
+                write_turn_ = true;
             }
         }
         if (moved) counters().busy();
         else if (wait) counters().stall(*wait);
     }
 
-    [[nodiscard]] bool idle() const override { return head_ == commands_.size(); }
+    [[nodiscard]] bool idle() const override { return head_ == commands_.size() && !bm_req_; }
 
     void check(Cycle now) const override {
         std::uint32_t live = 0;
@@ -181,14 +294,20 @@ public:
             const Command& c = commands_[head_];
             d = "command " + std::to_string(head_ + 1) + " of " + std::to_string(commands_.size()) + " (" +
                 cycle::to_string(c.action.kind) + " slot " + std::to_string(c.action.slot);
-            if (!holds_its_tile(c))
+            if (!holds_its_tile(c.action.slot, c.load))
                 d += ": waiting for its tile" + (c.load ? " (Load " + std::to_string(*c.load) + ")" : std::string(", which no Load places"));
+            else if (!reads_done(c))
+                d += ": waiting for the BlockMover's reads of its tile";
             else if (c.action.kind == L3Action::Kind::Store)
                 d += ": ejected " + std::to_string(offset_) + " of " + std::to_string(c.action.bytes) + " bytes";
             d += ")";
         } else {
             d = "all " + std::to_string(commands_.size()) + " commands done";
         }
+        if (!bm_reads_.empty() || !bm_writes_.empty())
+            d += "; the BlockMover's reads " + std::to_string(bm_read_head_) + " of " + std::to_string(bm_reads_.size()) +
+                 " served" + (bm_req_ ? " (one in progress, " + std::to_string(bm_sent_) + " bytes sent)" : std::string()) +
+                 ", writes " + std::to_string(bm_write_head_) + " of " + std::to_string(bm_writes_.size()) + " landed";
         d += "; slots:";
         for (std::uint32_t i = 0; i < config_.slots; ++i) {
             const Slot& s = slots_[i];
@@ -232,12 +351,54 @@ private:
     struct Command {
         std::size_t ticket;
         L3Action action;
-        std::optional<std::size_t> load;   // the Load (or Fill) before it into its slot
+        std::optional<std::size_t> load;   // the producer (Load, Fill or Write) before it into its slot
+        std::vector<std::size_t> reads;    // a Release: the BlockMover's Reads of its tile before it
+        bool to_blockmover;                // a Release: the slot's next producer is a Write
+        [[nodiscard]] std::uint32_t slot_of() const { return action.slot; }
     };
-    // The slot holds the tile the command is bound to, all of it.
-    [[nodiscard]] bool holds_its_tile(const Command& c) const {
-        const Slot& s = slots_[c.action.slot];
-        return c.load && s.state == SlotState::Ready && s.ticket == *c.load;
+    struct BmRead {
+        std::size_t ticket;
+        std::uint32_t slot, bytes;
+        std::optional<std::size_t> producer;
+    };
+    struct BmWrite {
+        std::size_t ticket;
+        std::uint32_t slot, bytes;
+    };
+    // The slot holds the tile `producer` placed, all of it.
+    [[nodiscard]] bool holds_its_tile(std::uint32_t slot, const std::optional<std::size_t>& producer) const {
+        const Slot& s = slots_[slot];
+        return producer && s.state == SlotState::Ready && s.ticket == *producer;
+    }
+    [[nodiscard]] bool reads_done(const Command& c) const {
+        for (const std::size_t r : c.reads)
+            if (!reads_done_[r]) return false;
+        return true;
+    }
+    // A Write's beat from the BlockMover, by address, as the beat of its Write action into its slot.
+    L3Beat blockmover_beat(Cycle now, Beat w) {
+        const std::string beat = "the BlockMover's beat at " + std::to_string(w.address);
+        if (bm_write_head_ >= bm_writes_.size())
+            throw std::logic_error(where(now) + ": " + beat + ", past the program's Writes");
+        const BmWrite& x = bm_writes_[bm_write_head_];
+        const std::uint64_t base = std::uint64_t(x.slot) * config_.slot_bytes;
+        if (w.address < base || w.address >= base + x.bytes || w.bytes.size() != kL3BeatBytes || (w.address - base) % kL3BeatBytes)
+            throw std::logic_error(where(now) + ": " + beat + " (" + std::to_string(w.bytes.size()) +
+                                   " bytes), where action " + std::to_string(x.ticket) + " writes " +
+                                   std::to_string(x.bytes) + " bytes into slot " + std::to_string(x.slot) + " at " +
+                                   std::to_string(base) + " in " + std::to_string(kL3BeatBytes) + "-byte beats");
+        L3Beat b;
+        b.id = w.id;
+        b.ticket = x.ticket;
+        b.slot = x.slot;
+        b.offset = static_cast<std::uint32_t>(w.address - base);
+        b.tile_bytes = x.bytes;
+        b.bytes = std::move(w.bytes);
+        if (++bm_write_beats_ == x.bytes / kL3BeatBytes) {
+            bm_write_beats_ = 0;
+            ++bm_write_head_;
+        }
+        return b;
     }
     struct Slot {
         SlotState state = SlotState::Free;
@@ -299,6 +460,12 @@ private:
         credit_id_ = 0;
         bank_conflicts_ = 0;
         residencies_.clear();
+        reads_done_.assign(bm_reads_.size(), false);
+        bm_read_head_ = bm_write_head_ = 0;
+        bm_write_beats_ = 0;
+        bm_req_.reset();
+        bm_sent_ = 0;
+        read_turn_ = write_turn_ = false;
     }
 
     Config config_;
@@ -312,6 +479,18 @@ private:
     Link<L3Beat>* in_ = nullptr;
     Link<L3Beat>* eject_ = nullptr;
     Link<SlotCredit>* credits_ = nullptr;
+    // The BlockMover's side.
+    std::vector<BmRead> bm_reads_;
+    std::vector<BmWrite> bm_writes_;
+    std::vector<bool> reads_done_;
+    std::size_t bm_read_head_ = 0, bm_write_head_ = 0, bm_write_beats_ = 0;
+    std::optional<L3RowRead> bm_req_;
+    std::uint32_t bm_sent_ = 0;
+    bool read_turn_ = false, write_turn_ = false;   // the BlockMover's turn at the read / write port
+    Link<L3RowRead>* bm_reads_in_ = nullptr;
+    Link<Beat>* bm_data_ = nullptr;
+    Link<Beat>* bm_writes_in_ = nullptr;
+    Link<SlotCredit>* bm_credits_ = nullptr;
 };
 
 }  // namespace sw::kpu::cycle
