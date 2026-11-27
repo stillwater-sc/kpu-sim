@@ -115,7 +115,6 @@ public:
             throw BehavioralError("dcsp " + p.name + ": " + bad);
         p_ = &p;
         dram_ = values;
-        work_ = values;
         for (const Operand2& o : p.operands)
             if (!dram_.has_operand(o.name)) throw BehavioralError("dcsp " + p.name + ": no values for operand " + o.name);
         slots_.clear();
@@ -176,7 +175,7 @@ private:
     };
 
     const DistributedProgram* p_ = nullptr;
-    TileProgram dram_, work_;
+    TileProgram dram_;
     std::map<SlotRef, Live> slots_;
     std::vector<std::deque<Packet>> buffers_;   // per channel into a DMA engine: its store buffer
     std::vector<std::size_t> pc_;
@@ -228,8 +227,10 @@ private:
         return {};
     }
 
-    void read(const SlotRef& s) {
+    void read(const SlotRef& s, const std::string& w) {
         auto it = slots_.find(s);
+        if (it == slots_.end())                                  // run() checks a call's reads first; a guard
+            throw BehavioralError(w + ": reads " + s.to_string() + ", which no longer holds a tile");
         if (it->second.held) return;
         if (--it->second.reads_left == 0) slots_.erase(it);     // the last read frees it: its credit returns
     }
@@ -256,7 +257,7 @@ private:
             case Action2::Kind::Feed:
             case Action2::Kind::Drain: {
                 std::vector<float> v = slots_.at(*a.from).value;
-                read(*a.from);
+                read(*a.from, w);
                 if (a.to) fill(*a.to, a.tile, std::move(v), a.reads);
                 else buffers_.at(a.channel).push_back(Packet{a.tile, std::move(v)});
                 return;
@@ -273,33 +274,52 @@ private:
         }
     }
 
+    // A tile as its own one-tile operand, so a call's inputs and result never share storage: an
+    // input and the result may name one tile coordinate, and two inputs may hold two versions of it.
+    TensorOperand scratch(const std::string& name, const TileCoord& t, const std::vector<float>* v) const {
+        const TensorOperand& src = dram_.operand(t.operand);
+        const Dim rows = src.row_end(t.ti) - src.row_begin(t.ti), cols = src.col_end(t.tj) - src.col_begin(t.tj);
+        TensorOperand o(name, rows, cols, rows, cols);
+        o.type = src.type;
+        o.acc = src.acc;
+        if (v) o.values = *v;
+        else if (!o.fp32())
+            for (Dim r = 0; r < rows; ++r)
+                for (Dim c = 0; c < cols; ++c) o.set_value(r, c, 0.0);
+        return o;
+    }
+
     void call(const Action2& a, const std::string& w) {
         if (a.op != "gemm") throw BehavioralError(w + ": tile function '" + a.op + "' is not one L-B runs at level 2 yet (gemm)");
         if (a.args.size() != 2) throw BehavioralError(w + ": gemm takes two operands");
+        // A call reads each operand slot once per mention: the residency must have the reads.
+        std::map<SlotRef, std::uint32_t> demand;
+        for (const SlotRef& s : a.args) ++demand[s];
+        for (const auto& [s, n] : demand) {
+            const Live& l = slots_.at(s);
+            if (!l.held && l.reads_left < n)
+                throw BehavioralError(w + ": the call reads " + s.to_string() + " " + std::to_string(n) + " times, but its residency (" +
+                                      l.tile + ") has " + std::to_string(l.reads_left) + " read(s) left");
+        }
         const Live& x = slots_.at(a.args[0]);
         const Live& y = slots_.at(a.args[1]);
         const TileCoord out = a.accumulate ? slots_.at(*a.to).coord : a.tile;
-        BehavioralInterpreter::insert_tile(work_.operand(x.coord.operand), x.coord.ti, x.coord.tj, x.value);
-        BehavioralInterpreter::insert_tile(work_.operand(y.coord.operand), y.coord.ti, y.coord.tj, y.value);
-        TensorOperand& o = work_.operand(out.operand);
-        if (a.accumulate) {
-            BehavioralInterpreter::insert_tile(o, out.ti, out.tj, slots_.at(*a.to).value);
-        } else {                                                  // a fresh accumulator: zero
-            for (Dim r = o.row_begin(out.ti); r < o.row_end(out.ti); ++r)
-                for (Dim c = o.col_begin(out.tj); c < o.col_end(out.tj); ++c) o.set_value(r, c, 0.0);
-        }
+        TileProgram k("call");
+        k.add_operand(scratch("x", x.coord, &x.value));
+        k.add_operand(scratch("y", y.coord, &y.value));
+        k.add_operand(scratch("z", out, a.accumulate ? &slots_.at(*a.to).value : nullptr));   // fresh: zero
         TileOp op;
         op.kind = TileOpKind::MatMulAccum;
-        op.inputs = {x.coord, y.coord};
-        op.outputs = {out};
+        op.inputs = {TileCoord{"x", 0, 0}, TileCoord{"y", 0, 0}};
+        op.outputs = {TileCoord{"z", 0, 0}};
         TileKernelState st;
         try {
-            apply(work_, op, st);
+            apply(k, op, st);
         } catch (const std::exception& e) {
             throw BehavioralError(w + ": " + e.what());
         }
-        std::vector<float> v = BehavioralInterpreter::extract_tile(o, out.ti, out.tj);
-        for (const SlotRef& s : a.args) read(s);
+        std::vector<float> v = k.operand("z").values;
+        for (const SlotRef& s : a.args) read(s, w);
         if (a.accumulate) {
             Live& r = slots_.at(*a.to);
             r.value = std::move(v);

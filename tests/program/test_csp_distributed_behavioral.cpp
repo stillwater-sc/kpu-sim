@@ -188,3 +188,107 @@ TEST_CASE("without merges, the drain would take the partial: the accumulation th
         CHECK(acc);
     }
 }
+
+// ---- regressions from the review of #633
+
+namespace {
+
+// Z := X . Y (+ Z when accumulating), on separate one-tile operands: the reference for the calls below.
+void mm(TileProgram& t, const char* x, const char* y, const char* z) {
+    TileOp op;
+    op.kind = TileOpKind::MatMulAccum;
+    op.inputs = {TileCoord{x, 0, 0}, TileCoord{y, 0, 0}};
+    op.outputs = {TileCoord{z, 0, 0}};
+    TileKernelState st;
+    apply(t, op, st);
+}
+
+const char* kOverlap = R"(dcsp 1
+program overlap machine mesh(1x1) {
+  tensor A[4,4] fp32 tile 4x4 inout;
+  tensor B[4,4] fp32 tile 4x4 in;
+  tensor C[4,4] fp32 tile 4x4 out;
+  channel ld : dma[0, 0] -> l3[0] slots 0, 1;
+  channel fa : bm.a[0] -> l2[0] slots 0;
+  channel fb : bm.b[0] -> l2[0] slots 1;
+  channel cc : cf[0] -> l2[0] slots 2, 3;
+  channel dc : bm.c[0] -> l3[0] slots 2, 3;
+  channel st : bm.N[0] -> dma[0, 0] credits 2;
+  process dma[0, 0] {
+    load A[0,0] to l3[0]:0 reads 1 via ld;
+    load B[0,0] to l3[0]:1 reads 1 via ld;
+    store A[0,0] via st;
+    store C[0,0] via st;
+  }
+  process bm.a[0] { feed A[0,0] from l3[0]:0 to l2[0]:0 reads 2 via fa; }
+  process bm.b[0] { feed B[0,0] from l3[0]:1 to l2[0]:1 reads 1 via fb; }
+  process cf[0] {
+    call gemm(l2[0]:0, l2[0]:1) to A[0,0] at l2[0]:2 reads 2 via cc;
+    call gemm(l2[0]:2, l2[0]:0) to C[0,0] at l2[0]:3 reads 1 via cc;
+  }
+  process bm.c[0] {
+    drain A[0,0] from l2[0]:2 to l3[0]:2 reads 1 via dc;
+    drain C[0,0] from l2[0]:3 to l3[0]:3 reads 1 via dc;
+  }
+  process bm.N[0] {
+    push A[0,0] from l3[0]:2 to dma[0, 0] via st;
+    push C[0,0] from l3[0]:3 to dma[0, 0] via st;
+  }
+}
+)";
+
+} // namespace
+
+TEST_CASE("a call's inputs and result never share storage", "[program][csp][distributed][behavioral]") {
+    // A' := A . B into A's own coordinate, then C := A' . A: an output naming its input's tile, and
+    // two versions of A[0,0] as one call's two operands.
+    const DistributedProgram p = parse_distributed(kOverlap);
+    const TileProgram in = distributed_inputs(p, 2);
+    DistributedBehavioral lb;
+    lb.run(p, in);
+    TileProgram ref("ref");
+    for (const char* n : {"a", "b", "a1", "c"}) {
+        TensorOperand o(n, 4, 4, 4, 4);
+        if (std::string(n) == "a") o.values = in.operand("A").values;
+        if (std::string(n) == "b") o.values = in.operand("B").values;
+        ref.add_operand(o);
+    }
+    mm(ref, "a", "b", "a1");
+    mm(ref, "a1", "a", "c");
+    CHECK(lb.result().operand("A").values == ref.operand("a1").values);
+    CHECK(lb.result().operand("C").values == ref.operand("c").values);
+}
+
+TEST_CASE("an accumulator that shares an input's coordinate keeps both values", "[program][csp][distributed][behavioral]") {
+    // A' := B . B, then A' += A . B, where A' is A[0,0]'s coordinate and A[0,0] is an operand.
+    std::string t = kOverlap;
+    const auto cut = [&](const std::string& from, const std::string& to) { t = with(t, from, to); };
+    cut("feed B[0,0] from l3[0]:1 to l2[0]:1 reads 1 via fb;", "feed B[0,0] from l3[0]:1 to l2[0]:1 reads 3 via fb;");
+    cut("feed A[0,0] from l3[0]:0 to l2[0]:0 reads 2 via fa;", "feed A[0,0] from l3[0]:0 to l2[0]:0 reads 1 via fa;");
+    cut("    call gemm(l2[0]:0, l2[0]:1) to A[0,0] at l2[0]:2 reads 2 via cc;\n"
+        "    call gemm(l2[0]:2, l2[0]:0) to C[0,0] at l2[0]:3 reads 1 via cc;\n",
+        "    call gemm(l2[0]:1, l2[0]:1) to A[0,0] at l2[0]:2 merges 1 reads 1 via cc;\n"
+        "    call gemm(l2[0]:0, l2[0]:1) acc l2[0]:2;\n");
+    cut("    drain C[0,0] from l2[0]:3 to l3[0]:3 reads 1 via dc;\n", "");
+    cut("    push C[0,0] from l3[0]:3 to dma[0, 0] via st;\n", "");
+    cut("    store C[0,0] via st;\n", "");
+    const DistributedProgram p = parse_distributed(t);
+    const TileProgram in = distributed_inputs(p, 4);
+    DistributedBehavioral lb;
+    lb.run(p, in);
+    TileProgram ref("ref");
+    for (const char* n : {"a", "b", "z"}) {
+        TensorOperand o(n, 4, 4, 4, 4);
+        if (std::string(n) == "a") o.values = in.operand("A").values;
+        if (std::string(n) == "b") o.values = in.operand("B").values;
+        ref.add_operand(o);
+    }
+    mm(ref, "b", "b", "z");
+    mm(ref, "a", "b", "z");
+    CHECK(lb.result().operand("A").values == ref.operand("z").values);
+
+    // The same slot twice in one call is two reads: a residency with one is refused by name.
+    const DistributedProgram short_of = parse_distributed(with(t, "reads 3 via fb;", "reads 1 via fb;"));
+    CHECK_THROWS_WITH(lb.run(short_of, distributed_inputs(short_of)),
+                      ContainsSubstring("the call reads l2[0]:1 2 times, but its residency (B[0,0]) has 1 read(s) left"));
+}
