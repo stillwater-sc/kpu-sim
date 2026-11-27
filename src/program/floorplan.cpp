@@ -174,11 +174,15 @@ std::vector<Rect> grid(const Rect& area, Dim n, Dim cols, double gap) {
     if (n == 0) return out;
     cols = std::max<Dim>(1, std::min(cols, n));
     const Dim rows = (n + cols - 1) / cols;
-    const double w = (area.w_um - gap * (cols - 1)) / cols;
-    const double h = (area.h_um - gap * (rows - 1)) / rows;
+    // The gap narrows, per axis, when the cells would not fit with it, so every cell keeps at least
+    // half its share of the area, for any count the spec accepts. Counts that fit keep the gap.
+    const double gx = cols > 1 ? std::min(gap, area.w_um / (2.0 * (cols - 1))) : gap;
+    const double gy = rows > 1 ? std::min(gap, area.h_um / (2.0 * (rows - 1))) : gap;
+    const double w = (area.w_um - gx * (cols - 1)) / cols;
+    const double h = (area.h_um - gy * (rows - 1)) / rows;
     for (Dim i = 0; i < n; ++i)
-        out.push_back(R(area.x_um + static_cast<double>(i % cols) * (w + gap),
-                        area.y_um + static_cast<double>(i / cols) * (h + gap), w, h));   // row index: integer by design
+        out.push_back(R(area.x_um + static_cast<double>(i % cols) * (w + gx),
+                        area.y_um + static_cast<double>(i / cols) * (h + gy), w, h));   // row index: integer by design
     return out;
 }
 
@@ -902,9 +906,10 @@ std::string floorplan_to_structure(const SocFloorplan& fp) {
     constexpr double mm = 1e-3;                               // um -> mm
     // The floorplan is drawn from the top-left (SVG); the record's origin is the die's lower-left
     // (shared-structure-record.md §2.2), so every y flips about the die's top edge.
-    const double top = fp.die.y_um + fp.die.h_um;
+    // Die-local too: x counts from the die's left edge.
+    const double top = fp.die.y_um + fp.die.h_um, left = fp.die.x_um;
     const auto rect_mm = [&](const Rect& r) {
-        return std::array<double, 4>{r.x_um * mm, (top - r.y_um - r.h_um) * mm, r.w_um * mm, r.h_um * mm};
+        return std::array<double, 4>{(r.x_um - left) * mm, (top - r.y_um - r.h_um) * mm, r.w_um * mm, r.h_um * mm};
     };
     const auto rect_out = [](const std::array<double, 4>& r) { return json::array({r[0], r[1], r[2], r[3]}); };
 
@@ -981,7 +986,7 @@ std::string floorplan_to_structure(const SocFloorplan& fp) {
         double length = 0;
         if (!l.route_um.empty()) {
             for (std::size_t p = 0; p < l.route_um.size(); ++p) {
-                const double x = l.route_um[p].first * mm, y = (top - l.route_um[p].second) * mm;
+                const double x = (l.route_um[p].first - left) * mm, y = (top - l.route_um[p].second) * mm;
                 pts.push_back(json::array({x, y}));
                 if (p) length += std::abs(x - pts[p - 1][0].get<double>()) + std::abs(y - pts[p - 1][1].get<double>());
             }
@@ -1151,7 +1156,9 @@ void svg_block(std::ostringstream& o, const FloorplanBlock& b, int depth) {
           << "font-family=\"monospace\" fill=\"#4a5059\">" << esc(b.label) << "</text>\n";
     // A port is small; its label goes beside it, on the side away from the array.
     if (b.kind == BlockKind::NocPort && !b.label.empty()) {
-        const char side = b.label.back();
+        // The side is the label's last letter on the torus ("col0.N") and its first on a mesh ("N0").
+        const auto news = [](char c) { return c == 'N' || c == 'E' || c == 'S' || c == 'W'; };
+        const char side = news(b.label.back()) ? b.label.back() : b.label.front();
         const double tx = side == 'W' ? r.x_um - 30 : r.x_um + r.w_um + 30;
         const double ty = side == 'N' ? r.y_um - 30 : side == 'S' ? r.y_um + r.h_um + 100 : r.cy() + 30;
         o << "<text x=\"" << (side == 'N' || side == 'S' ? r.x_um : tx) << "\" y=\"" << ty

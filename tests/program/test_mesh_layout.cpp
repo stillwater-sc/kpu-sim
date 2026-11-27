@@ -347,3 +347,73 @@ TEST_CASE("the structure record's origin is the die's lower-left: north is up", 
         CHECK(r[1] + r[3] <= die[3] + 1e-9);
     }
 }
+
+TEST_CASE("every cell of a tile's grid keeps an area, however many the tile declares", "[program][platform][mesh][floorplan]") {
+    for (const char* f : {"kpu_dmm_2x2.json", "kpu_t4.json"}) {
+        DeploymentSpec s = read_spec_file(std::string(kDeploy) + f);
+        s.device(0).l1.vectors = 16;                       // one column: more gaps than the style's height allows
+        s.device(0).l3.banks = 64;
+        REQUIRE(s.validate().empty());
+        const SocFloorplan fp = generate_floorplan(s);
+        INFO(f);
+        CHECK(validate_floorplan(fp, s).empty());
+        CHECK_NOTHROW(floorplan_from_json(floorplan_to_json(fp), s));
+    }
+}
+
+TEST_CASE("the structure record is die-local: a die that does not start at the origin moves nothing",
+          "[program][platform][mesh][floorplan]") {
+    const SocFloorplan fp = generate_floorplan(dmm2x2());
+    SocFloorplan moved = fp;
+    const double dx = 100, dy = 50;
+    moved.die.x_um += dx;
+    moved.die.y_um += dy;
+    std::function<void(std::vector<FloorplanBlock>&)> shift = [&](std::vector<FloorplanBlock>& bs) {
+        for (FloorplanBlock& b : bs) {
+            b.rect.x_um += dx;
+            b.rect.y_um += dy;
+            shift(b.children);
+        }
+    };
+    shift(moved.blocks);
+    for (NocLink& l : moved.noc)
+        for (auto& [x, y] : l.route_um) { x += dx; y += dy; }
+    const nlohmann::json a = nlohmann::json::parse(floorplan_to_structure(fp));
+    const nlohmann::json b = nlohmann::json::parse(floorplan_to_structure(moved));
+    auto close = [](const nlohmann::json& x, const nlohmann::json& y) {
+        if (x.is_number() && y.is_number()) return std::abs(x.get<double>() - y.get<double>()) < 1e-9;
+        return x == y;
+    };
+    std::function<bool(const nlohmann::json&, const nlohmann::json&)> same = [&](const auto& x, const auto& y) {
+        if (x.is_structured() != y.is_structured() || x.size() != y.size()) return false;
+        if (!x.is_structured()) return close(x, y);
+        if (x.is_array()) {
+            for (std::size_t i = 0; i < x.size(); ++i) if (!same(x[i], y[i])) return false;
+            return true;
+        }
+        for (auto it = x.begin(); it != x.end(); ++it) if (!y.contains(it.key()) || !same(*it, y.at(it.key()))) return false;
+        return true;
+    };
+    CHECK(same(a.at("blocks"), b.at("blocks")));
+    CHECK(same(a.at("networks"), b.at("networks")));
+}
+
+TEST_CASE("a mesh edge port's SVG label sits on the side its label names", "[program][platform][mesh][floorplan]") {
+    const SocFloorplan fp = generate_floorplan(dmm2x2());
+    const std::string svg = floorplan_to_svg(fp);
+    const FloorplanBlock* n0 = fp.find("dmm2x2/noc/port[0]");
+    const FloorplanBlock* w0 = fp.find("dmm2x2/noc/port[7]");
+    REQUIRE(n0);
+    REQUIRE(w0);
+    REQUIRE(w0->label == "W0");
+    auto text_attr = [&](const std::string& label, const std::string& attr) {
+        const auto end = svg.find(">" + label + "</text>");
+        REQUIRE(end != std::string::npos);
+        const auto start = svg.rfind("<text", end);
+        const auto at = svg.find(attr + "=\"", start);
+        REQUIRE(at < end);
+        return svg.substr(at + attr.size() + 2, svg.find('"', at + attr.size() + 2) - (at + attr.size() + 2));
+    };
+    CHECK(std::stod(text_attr("N0", "y")) < n0->rect.y_um);          // above a north port
+    CHECK(text_attr("W0", "text-anchor") == "end");                    // left of a west port
+}

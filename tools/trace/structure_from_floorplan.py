@@ -136,11 +136,12 @@ def from_sim(d: dict) -> dict:
     k = 1e-3                                           # um -> mm
     # kpu-floorplan draws from the top-left (SVG); the record's origin is the die's lower-left
     # (shared-structure-record.md §2.2), so every y flips about the die's top edge.
-    top = d["die"][1] + d["die"][3]
+    # Die-local too: x counts from the die's left edge.
+    top, left = d["die"][1] + d["die"][3], d["die"][0]
 
     def rect(r):
         x, y, w, h = r
-        return [x * k, (top - y - h) * k, w * k, h * k]
+        return [(x - left) * k, (top - y - h) * k, w * k, h * k]
 
     blocks = []
 
@@ -192,7 +193,7 @@ def from_sim(d: dict) -> dict:
                 nodes[end] = node
         link = {"id": f"{ln['kind']}_{i}", "from": ln["a"], "to": ln["b"]}
         if ln.get("route"):
-            pts = [[p[0] * k, (top - p[1]) * k] for p in ln["route"]]
+            pts = [[(p[0] - left) * k, (top - p[1]) * k] for p in ln["route"]]
             link["points"] = pts
             link["length"] = sum(abs(b[0] - a[0]) + abs(b[1] - a[1]) for a, b in zip(pts, pts[1:]))
         links.append(link)

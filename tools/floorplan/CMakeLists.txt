@@ -110,8 +110,12 @@ if(KPU_BUILD_TESTS)
             COMMAND ${_struct_py} ${_trace}/structure_diff.py ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_native.structure.json
                     ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4.structure.json)
         set_tests_properties(structure_native_dmm4x4 PROPERTIES FIXTURES_REQUIRED "dmm4x4_floorplan;dmm4x4_structure")
+        # The converter writes a die-local record, wherever the die sits.
+        add_test(NAME structure_from_floorplan_die_local
+            COMMAND ${_struct_py} ${_trace}/test_structure_from_floorplan.py ${CMAKE_CURRENT_BINARY_DIR}/dmm4x4_floorplan.json)
+        set_tests_properties(structure_from_floorplan_die_local PROPERTIES FIXTURES_REQUIRED dmm4x4_floorplan)
         set_tests_properties(structure_record_dmm4x4 structure_check_native_dmm4x4 structure_native_dmm4x4
-            PROPERTIES LABELS "program;records;structure;mesh")
+            structure_from_floorplan_die_local PROPERTIES LABELS "program;records;structure;mesh")
         add_test(NAME structure_check_selftest
             COMMAND ${_struct_py} ${_trace}/test_structure_check.py ${CMAKE_SOURCE_DIR}/tests/program/structure)
         # The floorplan view (#447): pack.py over every sample; with Playwright, the page itself.
@@ -152,5 +156,6 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(kpu_floorplan_t64 kpu_floorplan_t64_import kpu_floorplan_t4 kpu_floorplan_t4_import
         kpu_floorplan_t16 kpu_floorplan_t16_import kpu_floorplan_refuses_no_layout
+        kpu_floorplan_dmm4x4 kpu_floorplan_dmm4x4_import
         PROPERTIES LABELS "program;platform;floorplan")
 endif()
