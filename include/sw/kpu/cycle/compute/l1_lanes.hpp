@@ -127,6 +127,7 @@ public:
     [[nodiscard]] std::uint32_t capacity() const { return capacity_; }
     [[nodiscard]] bool credit(std::uint32_t lane) const { return lanes_.at(lane).credit; }
     [[nodiscard]] std::uint32_t left(std::uint32_t lane) const { return lanes_.at(lane).left; }
+    [[nodiscard]] std::uint32_t command(std::uint32_t lane) const { return lanes_.at(lane).command; }
     [[nodiscard]] const LaneStats& stats(std::uint32_t lane) const { return lanes_.at(lane).stats; }
     [[nodiscard]] bool empty() const {
         for (const Lane& l : lanes_)

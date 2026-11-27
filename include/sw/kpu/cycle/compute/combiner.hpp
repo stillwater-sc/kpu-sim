@@ -121,6 +121,7 @@ public:
                     counters().accept();
                 }
                 fifos_[j].push_back(r);
+                fifo_max_[j] = std::max(fifo_max_[j], fifos_[j].size());
                 if (fifos_[j].size() > config_.fifo_depth)
                     throw L1Fault(where(now) + ": column " + std::to_string(j) + "'s north FIFO overflows its " +
                                   std::to_string(config_.fifo_depth) + " results");
@@ -197,6 +198,9 @@ public:
     [[nodiscard]] const Config& config() const { return config_; }
     [[nodiscard]] const std::vector<Record>& records() const { return records_; }
     [[nodiscard]] std::uint64_t dropped() const { return dropped_; }
+    // Column j's FIFO: the results it holds now, and the most it held.
+    [[nodiscard]] std::size_t fifo(std::uint32_t j) const { return fifos_.at(j).size(); }
+    [[nodiscard]] std::size_t fifo_max(std::uint32_t j) const { return fifo_max_.at(j); }
 
 private:
     struct Tile {
@@ -210,6 +214,7 @@ private:
 
     void clear() {
         fifos_.assign(config_.cols, {});
+        fifo_max_.assign(config_.cols, 0);
         records_.assign(tiles_.size(), Record{});
         started_.assign(tiles_.size(), false);
         by_command_.clear();
@@ -226,6 +231,7 @@ private:
     std::vector<Tile> tiles_;
     std::map<std::uint32_t, std::size_t> by_command_;   // a command's result tile
     std::vector<std::deque<ArrayResult>> fifos_;
+    std::vector<std::size_t> fifo_max_;
     std::vector<Record> records_;
     std::vector<bool> started_;
     std::size_t head_ = 0;

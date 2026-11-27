@@ -33,7 +33,10 @@
 // the caller's, raised by name.
 //
 // COUNTERS. The array is busy in a clock any PE holds an operand or a result; an item is a result,
-// arriving when it launches and completing when it leaves the north edge.
+// arriving when it launches and completing when it leaves the north edge. Each PE's clocks are
+// counted by what it does (#547, the utilization heatmap): a MAC of A and B (`useful`); a MAC of A
+// with no B, a column past the tile (`padded`); no operand while a result passes north through it
+// (`draining`); no operand and no result (`waiting`, on L1). They add up to the array's clocks.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -47,6 +50,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -85,6 +89,18 @@ public:
     struct Mac {
         Cycle at;
         std::uint32_t row, col, command, k;
+    };
+    // A PE's clocks, by what it did in them.
+    struct PeCycles {
+        std::uint64_t useful = 0, padded = 0, draining = 0, waiting = 0;
+        [[nodiscard]] std::uint64_t total() const { return useful + padded + draining + waiting; }
+        PeCycles& operator+=(const PeCycles& o) {
+            useful += o.useful;
+            padded += o.padded;
+            draining += o.draining;
+            waiting += o.waiting;
+            return *this;
+        }
     };
     struct Launch {
         Cycle at;          // the clock the PE launched
@@ -142,6 +158,9 @@ public:
             for (std::uint32_t j = 0; j < C; ++j) {
                 PE& p = pe(i, j);
                 busy = busy || p.a.valid || p.b.valid || p.c_up.valid;
+                PeCycles& pc = pe_cycles_[std::size_t(i) * C + j];
+                if (p.a.valid) ++(p.b.valid ? pc.useful : pc.padded);
+                else ++(p.c_up.valid ? pc.draining : pc.waiting);
                 Result out = p.c_up;
                 if (p.a.valid) {
                     // The operands meet: every product of the reduction with its B, or none.
@@ -228,6 +247,19 @@ public:
     [[nodiscard]] std::uint64_t macs_at(std::uint32_t i, std::uint32_t j) const {
         return mac_count_.at(std::size_t(i) * config_.cols + j);
     }
+    [[nodiscard]] const PeCycles& pe_cycles(std::uint32_t i, std::uint32_t j) const {
+        return pe_cycles_.at(std::size_t(i) * config_.cols + j);
+    }
+    [[nodiscard]] PeCycles pe_cycles_total() const {
+        PeCycles t;
+        for (const PeCycles& c : pe_cycles_) t += c;
+        return t;
+    }
+    // The command row i's west PE multiplies this clock, if any: what the row's trace lane shows.
+    [[nodiscard]] std::optional<std::uint32_t> west_command(std::uint32_t i) const {
+        const PE& p = pes_.at(std::size_t(i) * config_.cols);
+        return p.a.valid ? std::optional<std::uint32_t>(p.a.command) : std::nullopt;
+    }
 
 private:
     struct Operand {
@@ -267,6 +299,7 @@ private:
     void clear() {
         pes_.assign(std::size_t(config_.rows) * config_.cols, PE{});
         mac_count_.assign(pes_.size(), 0);
+        pe_cycles_.assign(pes_.size(), PeCycles{});
         macs_.clear();
         launches_.clear();
         launched_ = 0;
@@ -276,6 +309,7 @@ private:
     Config config_;
     std::vector<PE> pes_;   // row-major
     std::vector<std::uint64_t> mac_count_;
+    std::vector<PeCycles> pe_cycles_;
     std::vector<Mac> macs_;
     std::vector<Launch> launches_;
     std::size_t launched_ = 0;   // results launched, logged or not

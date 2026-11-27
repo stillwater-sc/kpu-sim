@@ -225,6 +225,15 @@ As built in step 2e (`cycle/compute/csp_compute_program.hpp`):
 - **Viewer and debug.** A Perfetto trace with tracks per lane buffer, PE row, FIFO, L2 bank and slot,
   and an array heatmap from the counters.
 
+As built in step 2f (`cycle/compute/compute_subsystem.hpp`, `kpu-run --compute-subsystem`):
+- **PE-clocks are counted by cause** in the array itself: useful (A and B), padded (A with no B, a
+  column past the tile), draining (a result passing north) and waiting on L1. Each PE's causes add
+  to the array's clocks, and that is checked as one of the laws.
+- **The heatmap** is each PE's counts, written as `heatmap.json` with an `heatmap.svg` beside it.
+- **The int8 64³ on `kpu_s1`** runs 5632 clocks at 0.57% array utilization: one 16×16 tile on the
+  128×64 array, mover-bound (the BlockMover is busy 80% of the run). Each L2 bank averages 1.64 reads
+  in flight, 8 at most.
+
 ## 6. Phase 3: join, evaluate, plan forward
 
 Both subsystems on one clock: DRAM → L3 → array → L3 → DRAM for one tile's program, with the same data,

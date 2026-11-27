@@ -346,6 +346,9 @@ public:
         return {s.begin() + at, s.begin() + at + config_.row_bytes};
     }
     [[nodiscard]] const std::vector<BankStats>& banks() const { return banks_; }
+    // Bank `bank`'s reads in flight now, and the tile slot `slot` holds or is being written with.
+    [[nodiscard]] std::uint64_t in_flight(std::uint32_t bank) const { return in_flight_.at(bank); }
+    [[nodiscard]] const TileID& tile(std::uint32_t slot) const { return slots_.at(slot).tile; }
     [[nodiscard]] std::uint64_t acquires() const { return pool_.acquires(); }
     [[nodiscard]] std::uint64_t releases() const { return pool_.releases(); }
 
