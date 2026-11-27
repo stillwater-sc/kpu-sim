@@ -228,7 +228,10 @@ A "needs" against one hop or eight movers goes to the user before the NoC rework
    checkerboard:
    - rows, cols and movers per node;
    - the memory controllers, each with its DMA engine, its clock and its PHY's place on the periphery;
-   - the periphery network: its topology (`ring` first) and queues, on the memory controllers' clock. `MeshLayout::of` (`mesh_layout.hpp`, beside the checkerboard's `ArrayLayout`) lays it out. **Done: #604.** `kpu-floorplan --structure`
+   - the periphery network: its topology (`ring` first) and queues, on the memory controllers' clock. `MeshLayout::of` (`mesh_layout.hpp`, beside the checkerboard's `ArrayLayout`) lays it out. **Done: #604.**
+   The spec is hierarchical (#635): SoC → `cluster` (`l3_tile` with its BlockMovers and ports,
+   `compute_tile` with its L2, Streamers, L1, fabric and Combiner) → resources. `noc` is the NoC cluster, and
+   `memory` holds the DMA engines and the periphery. On a `dmm_mesh` the flat fields are derived views. `kpu-floorplan --structure`
    writes it in `kpu-structure` v1, so the floorplan viewer draws the nodes, the data mesh and the credit
    mesh (`include/sw/kpu/program/platform/`, `src/program/floorplan.cpp`).
 2. **The level-2 program**: `include/sw/kpu/program/csp/distributed.hpp` (§3.2), its printer, and a text form

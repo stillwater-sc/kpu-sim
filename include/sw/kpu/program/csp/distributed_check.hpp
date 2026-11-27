@@ -170,10 +170,12 @@ inline std::vector<DistributedViolation> check_distributed(const DistributedProg
     // ---- D4 placement
     // Bounded when declared: capacity_tiles 0 is unbounded, and a declared capacity that gives a
     // tile no slot bounds it at zero (every slot is outside), not at "unbounded".
-    const bool l3_bounded = d.l3.capacity_tiles != 0 && d.l3.tiles.has_value();
-    const Dim l3_per_tile = l3_bounded ? d.l3.capacity_tiles / *d.l3.tiles : 0;
-    const bool l2_bounded = d.systolic.has_value();
-    const Dim l2_slots = l2_bounded ? d.systolic->l2_slots : 0;
+    // A dmm_mesh's cluster states each tile's slots (#635); otherwise the flat total, divided.
+    const bool l3_bounded = d.cluster.has_value() || (d.l3.capacity_tiles != 0 && d.l3.tiles.has_value());
+    const Dim l3_per_tile = d.cluster ? d.cluster->l3_tile.capacity_tiles
+                                      : l3_bounded ? d.l3.capacity_tiles / *d.l3.tiles : 0;
+    const bool l2_bounded = d.cluster.has_value() || d.systolic.has_value();
+    const Dim l2_slots = d.cluster ? d.cluster->compute_tile.l2.slots : l2_bounded ? d.systolic->l2_slots : 0;
     for (const Channel2& c : p.channels) {
         if (c.to == Channel2::To::Dma) continue;
         const bool bounded = c.to == Channel2::To::L3 ? l3_bounded : l2_bounded;

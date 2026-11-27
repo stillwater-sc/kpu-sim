@@ -44,6 +44,7 @@ KINDS = {
     "die", "array", "compute_tile", "l3_tile", "l3_bank", "l2_bank", "l1_vector", "register_file",
     "block_mover", "noc_router", "noc_port", "memory_controller", "dma_engine", "dram_phy", "io",
     "control", "host_bridge", "cpu", "cpu_hart", "cpu_sram", "descriptor_ring", "completion_ring",
+    "cluster",
 }
 RESOURCES = {
     "memory": ("bytes", "depth", "width_bits", "read_ports", "write_ports", "banks", "latency_cycles"),

@@ -195,13 +195,17 @@ TEST_CASE("D1: a DMA engine carries one flow too", "[program][csp][distributed][
     CHECK(violations(one, "kpu_dmm_2x2.json").empty());
 }
 
-TEST_CASE("D4: a declared capacity that rounds to no slot per tile bounds at zero, not unbounded",
-          "[program][csp][distributed][check]") {
-    platform::DeviceSpecification d = device("kpu_dmm_2x2.json");
-    d.l3.capacity_tiles = 1;                                   // 1 over 4 tiles: 0 per tile
+TEST_CASE("D4: the L3 tile's own capacity bounds its slots", "[program][csp][distributed][check]") {
+    // The cluster states each tile's slots (#635): with 2, the K-split's drain slot 2 is outside.
+    platform::DeviceSpecification d = device("kpu_dmm_1x1.json");
+    d.cluster->l3_tile.capacity_tiles = 2;
+    platform::derive_mesh_views(d);
     std::string got;
-    for (const auto& v : check_distributed(parse_distributed(sample("vector_to_node3.dcsp")), d)) got += v.rule + " " + v.message + "\n";
-    CHECK_THAT(got, ContainsSubstring("D4 channel ld0: slot 0 of l3[0] is outside its 0 slot(s)"));
-    d.l3.capacity_tiles = 0;                                   // explicitly unbounded
-    CHECK(check_distributed(parse_distributed(sample("vector_to_node3.dcsp")), d).empty());
+    for (const auto& v : check_distributed(parse_distributed(sample("gemm_ksplit_node0.dcsp")), d)) got += v.rule + " " + v.message + "\n";
+    CHECK_THAT(got, ContainsSubstring("D4 channel dc: slot 2 of l3[0] is outside its 2 slot(s)"));
+    d.cluster->compute_tile.l2.slots = 2;                  // and the compute tile's L2: slot 2 is the call's
+    platform::derive_mesh_views(d);
+    got.clear();
+    for (const auto& v : check_distributed(parse_distributed(sample("gemm_ksplit_node0.dcsp")), d)) got += v.rule + " " + v.message + "\n";
+    CHECK_THAT(got, ContainsSubstring("D4 channel cc: slot 2 of l2[0] is outside its 2 slot(s)"));
 }

@@ -76,9 +76,10 @@ TEST_CASE("the DMM mesh samples load, validate and round-trip byte for byte", "[
 
 TEST_CASE("a dmm_mesh that cannot be built is refused, naming the field", "[program][platform][mesh]") {
     CHECK_THAT(problem([](auto& d) { d.array = {}; }), ContainsSubstring("declares its array.rows and array.cols"));
+    // The flat counts are the hierarchy's views (#635): written to disagree, they are refused.
     CHECK_THAT(problem([](auto& d) { d.compute_tiles = 3; d.l3.tiles = 3; }),
-               ContainsSubstring("has 4 nodes, each an L3 tile with its own compute tile, but compute_tiles is 3"));
-    CHECK_THAT(problem([](auto& d) { d.l3.tiles.reset(); }), ContainsSubstring("l3.tiles = compute_tiles (4)"));
+               ContainsSubstring("compute_tiles disagrees with the cluster; on a dmm_mesh it is derived"));
+    CHECK_THAT(problem([](auto& d) { d.l3.tiles.reset(); }), ContainsSubstring("l3 disagrees with the cluster"));
     CHECK_THAT(problem([](auto& d) { d.periphery->topology = "clos"; }),
                ContainsSubstring("periphery.topology 'clos' is not one of ring"));
     CHECK_THAT(problem([](auto& d) { d.periphery->queue_blocks = 1; }), ContainsSubstring("must be at least two"));
@@ -91,14 +92,15 @@ TEST_CASE("a dmm_mesh that cannot be built is refused, naming the field", "[prog
                ContainsSubstring("9 memory controllers, but the periphery has only 8 edge ports"));
     // The folded torus's hubs and ports are the checkerboard's; a dmm_mesh has none.
     CHECK_THAT(problem([](auto& d) { d.noc = DeviceSpecification::Noc{}; }),
-               ContainsSubstring("noc applies to the checkerboard's folded torus, not the 'dmm_mesh' topology"));
+               ContainsSubstring("the folded torus's hubs and ports are the checkerboard's"));
     // A periphery is the dmm_mesh's alone.
     DeploymentSpec t4 = read_spec_file(std::string(kDeploy) + "kpu_t4.json");
     t4.device(0).periphery = DeviceSpecification::Periphery{};
     CHECK_THAT(t4.validate(), ContainsSubstring("periphery applies to the dmm_mesh topology, not 'checkerboard'"));
     // The checkerboard's evenness rule is the folded torus's, not the mesh's: a 1x3 mesh is a mesh.
     CHECK(problem([](auto& d) {
-              d.array.rows = 1; d.array.cols = 3; d.compute_tiles = 3; d.l3.tiles = 3;
+              d.array.rows = 1; d.array.cols = 3;
+              derive_mesh_views(d);
           }).empty());
 }
 
@@ -351,8 +353,15 @@ TEST_CASE("the structure record's origin is the die's lower-left: north is up", 
 TEST_CASE("every cell of a tile's grid keeps an area, however many the tile declares", "[program][platform][mesh][floorplan]") {
     for (const char* f : {"kpu_dmm_2x2.json", "kpu_t4.json"}) {
         DeploymentSpec s = read_spec_file(std::string(kDeploy) + f);
-        s.device(0).l1.vectors = 16;                       // one column: more gaps than the style's height allows
-        s.device(0).l3.banks = 64;
+        DeviceSpecification& dv = s.device(0);
+        if (dv.cluster) {                                  // a mesh: its cluster, then its views
+            dv.cluster->compute_tile.l1.vectors = 16;      // one column: more gaps than the style's height allows
+            dv.cluster->l3_tile.banks = 64;
+            derive_mesh_views(dv);
+        } else {
+            dv.l1.vectors = 16;
+            dv.l3.banks = 64;
+        }
         REQUIRE(s.validate().empty());
         const SocFloorplan fp = generate_floorplan(s);
         INFO(f);
@@ -416,4 +425,110 @@ TEST_CASE("a mesh edge port's SVG label sits on the side its label names", "[pro
     };
     CHECK(std::stod(text_attr("N0", "y")) < n0->rect.y_um);          // above a north port
     CHECK(text_attr("W0", "text-anchor") == "end");                    // left of a west port
+}
+
+// ---- the hierarchical SoC spec (#635)
+
+TEST_CASE("a dmm_mesh is written as its hierarchy, and its flat fields are derived views", "[program][platform][mesh]") {
+    const DeploymentSpec s = dmm2x2();
+    const DeviceSpecification& d = s.device(0);
+    REQUIRE(d.cluster.has_value());
+    CHECK(d.compute_tiles == 4);
+    CHECK(d.l3.tiles == Dim{4});
+    CHECK(d.l3.capacity_tiles == 64);                      // 16 per tile
+    CHECK(d.macs_per_cycle == 4096.0);                     // 64 x 64 PEs
+    CHECK(d.movers.block_movers == 32);                    // 8 per node
+    CHECK(d.movers.streamers == 4);
+    CHECK(d.dma.engines == 2);                             // 1 per controller
+    // The writer writes the hierarchy and nothing flat.
+    const nlohmann::json j = nlohmann::json::parse(to_json(s));
+    const nlohmann::json& dev = j.contains("devices") ? j.at("devices").at(0) : j;
+    for (const char* flat : {"compute_tiles", "macs_per_cycle", "l3", "l2", "l1", "movers", "dma", "combiner", "fabric", "periphery"}) {
+        INFO(flat);
+        CHECK_FALSE(dev.contains(flat));
+    }
+    CHECK(dev.at("cluster").at("l3_tile").at("capacity_tiles") == 16);
+    CHECK(dev.at("cluster").at("compute_tile").at("streamers").at("count") == 1);
+    CHECK(dev.at("memory").at("dma").at("engines_per_controller") == 1);
+    CHECK(dev.at("memory").at("periphery").at("topology") == "ring");
+}
+
+TEST_CASE("a flat field on a dmm_mesh is refused: it is derived, never written", "[program][platform][mesh]") {
+    std::string t = to_json(dmm2x2());
+    const std::string key = "\"topology\": \"dmm_mesh\",";
+    const auto at = t.find(key);
+    REQUIRE(at != std::string::npos);
+    for (const char* flat : {"\"compute_tiles\": 4,", "\"l3\": {\"tiles\": 4},", "\"movers\": {\"streamers\": 4},",
+                             "\"dma\": {\"engines\": 2},", "\"periphery\": {}," }) {
+        std::string bad = t;
+        bad.insert(at + key.size(), flat);
+        INFO(flat);
+        CHECK_THROWS_WITH(from_json(bad), ContainsSubstring("on a dmm_mesh this is derived from the hierarchy"));
+    }
+}
+
+TEST_CASE("the cluster's resources are checked, by field", "[program][platform][mesh]") {
+    CHECK_THAT(problem([](auto& d) { d.cluster.reset(); }), ContainsSubstring("declares its cluster"));
+    CHECK_THAT(problem([](auto& d) { d.cluster->l3_tile.noc_ports = 3; }),
+               ContainsSubstring("cluster.l3_tile.noc_ports is 3; a node has one per NEWS link, 4"));
+    CHECK_THAT(problem([](auto& d) { d.cluster->l3_tile.l2_ports = 2; }), ContainsSubstring("the feeds a, b, x and the drain make 4"));
+    CHECK_THAT(problem([](auto& d) { d.cluster->compute_tile.l2.banks = 3; }),
+               ContainsSubstring("cluster.compute_tile.l2.banks must be a power of two"));
+    CHECK_THAT(problem([](auto& d) { d.cluster->compute_tile.fabric.dataflow = "xs"; }), ContainsSubstring("must be os, ws or is"));
+    CHECK_THAT(problem([](auto& d) { d.systolic = DeviceSpecification::Systolic{}; }),
+               ContainsSubstring("a dmm_mesh's compute tile is cluster.compute_tile"));
+    // A cluster belongs to a dmm_mesh.
+    DeploymentSpec t4 = read_spec_file(std::string(kDeploy) + "kpu_t4.json");
+    t4.device(0).cluster = DeviceSpecification::Cluster{};
+    CHECK_THAT(t4.validate(), ContainsSubstring("a cluster and the mesh's NoC cluster apply to the dmm_mesh topology"));
+}
+
+TEST_CASE("the structure record nests each node's tiles in its cluster", "[program][platform][mesh][floorplan]") {
+    const nlohmann::json rec = nlohmann::json::parse(floorplan_to_structure(generate_floorplan(dmm2x2())));
+    std::map<std::string, std::string> parent, kind;
+    for (const auto& b : rec.at("blocks")) {
+        kind[b.at("id")] = b.at("kind");
+        if (b.contains("parent")) parent[b.at("id")] = b.at("parent");
+    }
+    CHECK(kind.at("dmm2x2/cluster[1]") == "cluster");
+    CHECK(parent.at("dmm2x2/l3[1]") == "dmm2x2/cluster[1]");
+    CHECK(parent.at("dmm2x2/cf[1]") == "dmm2x2/cluster[1]");
+    CHECK(parent.at("dmm2x2/l3[1]/bm[7]") == "dmm2x2/l3[1]");            // the movers: the L3 tile's
+    CHECK(parent.at("dmm2x2/cf[1]/l2[0]") == "dmm2x2/cf[1]");            // the L2: the compute tile's
+}
+
+// ---- regressions from the review of #636
+
+TEST_CASE("derived totals that would not fit 32 bits are refused, not wrapped", "[program][platform][mesh]") {
+    CHECK_THAT(problem([](auto& d) {
+                   d.cluster->l3_tile.capacity_tiles = 2147483648u;   // x4 nodes wraps to 0: "unbounded"
+               }),
+               ContainsSubstring("is more L3 slots than the spec can count"));
+    std::string t = to_json(dmm2x2());
+    const std::string from = "\"engines_per_controller\": 1";
+    t.replace(t.find(from), from.size(), "\"engines_per_controller\": 2147483649");   // x2 controllers wraps to 2
+    CHECK_THROWS_WITH(from_json(t), ContainsSubstring("is more engines than the spec can count"));
+}
+
+TEST_CASE("a vector unit's contents, not only its presence, are the hierarchy's", "[program][platform][mesh]") {
+    DeploymentSpec s = dmm2x2();
+    DeviceSpecification& d = s.device(0);
+    d.cluster->l3_tile.block_movers.vector = DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add"}};
+    derive_mesh_views(d);
+    REQUIRE(s.validate().empty());
+    d.cluster->l3_tile.block_movers.vector->lanes = 32;    // the hierarchy changed, its view did not
+    CHECK_THAT(s.validate(), ContainsSubstring("the vector units (movers.vector.bm, combiner) disagrees with the cluster"));
+}
+
+TEST_CASE("the writer refuses a mesh whose flat fields disagree with its hierarchy", "[program][platform][mesh]") {
+    DeploymentSpec s = dmm2x2();
+    s.device(0).movers.bm_bytes_per_cycle = 256;           // the cluster still says 128
+    CHECK_THROWS_WITH(to_json(s), ContainsSubstring("movers disagrees with the cluster"));
+}
+
+TEST_CASE("adjacent clusters share their rounded edges at a fractional pitch", "[program][platform][mesh][floorplan]") {
+    const DeploymentSpec s = dmm2x2();
+    const SocFloorplan fp = generate_floorplan(s, 0, FloorplanStyle{1000.0004, 40, 400});
+    INFO(validate_floorplan(fp, s));
+    CHECK(validate_floorplan(fp, s).empty());
 }

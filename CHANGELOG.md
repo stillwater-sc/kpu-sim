@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The `dmm_mesh` deployment is a hierarchical SoC spec** (#635). The levels are SoC, cluster,
+  sub-cluster and resource, so every resource has one owner.
+  - **`cluster`**, the same for every node, has two sub-clusters:
+    - `l3_tile`: capacity, banks and bank ports, the 8 BlockMovers (rate, vector unit), the NoC ports
+      and the L2 ports;
+    - `compute_tile`: the L2, the Streamers, the L1, the fabric and the Combiner.
+  - **`noc`** is the NoC cluster: link rate, link queue and credit queue.
+  - **`memory`** gains `dma` (engines per controller) and `periphery`.
+  - **Flat fields:** on a `dmm_mesh`, `compute_tiles`, `macs_per_cycle`, `l3`, `l2`, `l1`, `movers`,
+    `combiner`, `fabric`, `dma`, `systolic` and a top-level `periphery` are refused. They are derived
+    from the hierarchy (`derive_mesh_views`), so the levels, the naming map and the layout read them
+    unchanged. A spec built in C++ whose flat fields disagree with its cluster is refused.
+  - **The structure record** nests each node's L3 tile and compute tile in a `cluster` block.
+  - **The checker** reads each tile's slots from the cluster.
+  - **The fixtures** `kpu_dmm_{1x1,2x2,4x4}.json` are converted. The checkerboard stays flat.
+
 - **The distributed checker, D0-D4, and `kpu-csp-check`** (#607; distributed CSP programs, step 4).
   `csp/distributed_check.hpp` checks a level-2 program against its deployment's mesh before any
   simulation:

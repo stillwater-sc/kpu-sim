@@ -33,7 +33,53 @@ const std::set<std::string>& device_keys() {
                                             "l1",            "movers",   "analytical",
                                             "array",         "memory",   "cpu",
                                             "noc",           "fabric",   "systolic",
-                                            "combiner",      "periphery"};
+                                            "combiner"};
+    return k;
+}
+// A dmm_mesh is hierarchical (#635): SoC -> cluster -> sub-cluster -> resource. These are its keys;
+// the flat ones are its views, derived from them, and refused when written.
+const std::set<std::string>& mesh_device_keys() {
+    static const std::set<std::string> k = {"name", "topology", "array", "cluster", "noc", "memory", "cpu", "analytical"};
+    return k;
+}
+const std::set<std::string>& cluster_keys() {
+    static const std::set<std::string> k = {"l3_tile", "compute_tile"};
+    return k;
+}
+const std::set<std::string>& l3_tile_keys() {
+    static const std::set<std::string> k = {"capacity_tiles", "banks", "bank_ports", "block_movers", "noc_ports", "l2_ports"};
+    return k;
+}
+const std::set<std::string>& block_mover_keys() {
+    static const std::set<std::string> k = {"bytes_per_cycle", "vector"};
+    return k;
+}
+const std::set<std::string>& compute_tile_keys() {
+    static const std::set<std::string> k = {"l2", "streamers", "l1", "fabric", "combiner"};
+    return k;
+}
+const std::set<std::string>& ct_l2_keys() {
+    static const std::set<std::string> k = {"slots", "banks"};
+    return k;
+}
+const std::set<std::string>& ct_streamer_keys() {
+    static const std::set<std::string> k = {"count", "bytes_per_cycle"};
+    return k;
+}
+const std::set<std::string>& ct_fabric_keys() {
+    static const std::set<std::string> k = {"pe_rows", "pe_cols", "dataflow", "element_bytes"};
+    return k;
+}
+const std::set<std::string>& mesh_noc_keys() {
+    static const std::set<std::string> k = {"link_bytes_per_cycle", "link_queue_blocks", "credit_queue"};
+    return k;
+}
+const std::set<std::string>& mesh_memory_keys() {
+    static const std::set<std::string> k = {"controllers", "dram", "dma", "periphery"};
+    return k;
+}
+const std::set<std::string>& mesh_dma_keys() {
+    static const std::set<std::string> k = {"engines_per_controller", "bytes_per_cycle", "burst_bytes", "window"};
     return k;
 }
 const std::set<std::string>& systolic_keys() {
@@ -214,7 +260,12 @@ std::optional<Dim> read_optional_dim(const json& obj, const char* key,
     return read_dim(obj, key, 0, where);
 }
 
+DeviceSpecification read_mesh_device(const json& obj, const std::string& where);
+
 DeviceSpecification read_device(const json& obj, const std::string& where) {
+    if (obj.is_object() && obj.contains("topology") && obj.at("topology").is_string() &&
+        obj.at("topology").get<std::string>() == "dmm_mesh")
+        return read_mesh_device(obj, where);
     reject_unknown(obj, device_keys(), where);
     DeviceSpecification d;
     d.name = read_string(obj, "name", d.name, where);
@@ -392,29 +443,6 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
         }
         d.noc = n;
     }
-    if (obj.contains("periphery")) {
-        const json& s = obj.at("periphery");
-        const std::string w = where + ".periphery";
-        reject_unknown(s, periphery_keys(), w);
-        DeviceSpecification::Periphery p;
-        p.topology = read_string(s, "topology", p.topology, w);
-        p.queue_blocks = read_dim(s, "queue_blocks", p.queue_blocks, w);
-        if (s.contains("mc_after_port")) {
-            const json& a = s.at("mc_after_port");
-            if (!a.is_array()) throw SpecError("deployment: " + w + ".mc_after_port must be an array of port indices");
-            for (std::size_t i = 0; i < a.size(); ++i) {
-                const json& v = a[i];
-                const std::string wi = w + ".mc_after_port[" + std::to_string(i) + "]";
-                if (!v.is_number_integer() && !v.is_number_unsigned())
-                    throw SpecError("deployment: " + wi + " must be an integer");
-                const long long raw = v.get<long long>();
-                if (raw < 0 || raw > 0xFFFFFFFFll)
-                    throw SpecError("deployment: " + wi + " must be an edge port index (got " + std::to_string(raw) + ")");
-                p.mc_after_port.push_back(static_cast<Dim>(raw));
-            }
-        }
-        d.periphery = p;
-    }
     if (obj.contains("cpu")) {
         const json& s = obj.at("cpu");
         const std::string w = where + ".cpu";
@@ -433,7 +461,250 @@ DeviceSpecification read_device(const json& obj, const std::string& where) {
     return d;
 }
 
+// The periphery ring (#604), under a dmm_mesh's memory (#635).
+DeviceSpecification::Periphery read_periphery(const json& s, const std::string& w) {
+    reject_unknown(s, periphery_keys(), w);
+    DeviceSpecification::Periphery p;
+    p.topology = read_string(s, "topology", p.topology, w);
+    p.queue_blocks = read_dim(s, "queue_blocks", p.queue_blocks, w);
+    if (s.contains("mc_after_port")) {
+        const json& a = s.at("mc_after_port");
+        if (!a.is_array()) throw SpecError("deployment: " + w + ".mc_after_port must be an array of port indices");
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            const json& v = a[i];
+            const std::string wi = w + ".mc_after_port[" + std::to_string(i) + "]";
+            if (!v.is_number_integer() && !v.is_number_unsigned())
+                throw SpecError("deployment: " + wi + " must be an integer");
+            const long long raw = v.get<long long>();
+            if (raw < 0 || raw > 0xFFFFFFFFll)
+                throw SpecError("deployment: " + wi + " must be an edge port index (got " + std::to_string(raw) + ")");
+            p.mc_after_port.push_back(static_cast<Dim>(raw));
+        }
+    }
+    return p;
+}
+
+// A dmm_mesh: the hierarchy, and nothing flat (#635).
+DeviceSpecification read_mesh_device(const json& obj, const std::string& where) {
+    static const std::set<std::string> flat = {"compute_tiles", "macs_per_cycle", "element_bytes", "dma", "l3", "l2",
+                                               "l1", "movers", "combiner", "fabric", "systolic", "periphery"};
+    for (const auto& [key, v] : obj.items())
+        if (flat.count(key))
+            throw SpecError("deployment: " + where + "." + key + ": on a dmm_mesh this is derived from the hierarchy "
+                            "(cluster, noc, memory), never written; write it there");
+    reject_unknown(obj, mesh_device_keys(), where);
+    DeviceSpecification d;
+    d.name = read_string(obj, "name", d.name, where);
+    d.topology = "dmm_mesh";
+    if (obj.contains("array")) {
+        const json& s = obj.at("array");
+        const std::string w = where + ".array";
+        reject_unknown(s, array_keys(), w);
+        d.array.rows = read_optional_dim(s, "rows", w);
+        d.array.cols = read_optional_dim(s, "cols", w);
+    }
+    if (obj.contains("cluster")) {
+        const json& s = obj.at("cluster");
+        const std::string w = where + ".cluster";
+        reject_unknown(s, cluster_keys(), w);
+        DeviceSpecification::Cluster c;
+        if (s.contains("l3_tile")) {
+            const json& t = s.at("l3_tile");
+            const std::string wt = w + ".l3_tile";
+            reject_unknown(t, l3_tile_keys(), wt);
+            auto& l = c.l3_tile;
+            l.capacity_tiles = read_dim(t, "capacity_tiles", l.capacity_tiles, wt);
+            l.banks = read_dim(t, "banks", l.banks, wt);
+            l.bank_ports = read_dim(t, "bank_ports", l.bank_ports, wt);
+            l.noc_ports = read_dim(t, "noc_ports", l.noc_ports, wt);
+            l.l2_ports = read_dim(t, "l2_ports", l.l2_ports, wt);
+            if (t.contains("block_movers")) {
+                const json& m = t.at("block_movers");
+                const std::string wm = wt + ".block_movers";
+                reject_unknown(m, block_mover_keys(), wm);
+                l.block_movers.bytes_per_cycle = read_double(m, "bytes_per_cycle", l.block_movers.bytes_per_cycle, wm);
+                if (m.contains("vector")) l.block_movers.vector = read_vector_unit(m.at("vector"), wm + ".vector");
+            }
+        }
+        if (s.contains("compute_tile")) {
+            const json& t = s.at("compute_tile");
+            const std::string wt = w + ".compute_tile";
+            reject_unknown(t, compute_tile_keys(), wt);
+            auto& k = c.compute_tile;
+            if (t.contains("l2")) {
+                const json& x = t.at("l2");
+                reject_unknown(x, ct_l2_keys(), wt + ".l2");
+                k.l2.slots = read_dim(x, "slots", k.l2.slots, wt + ".l2");
+                k.l2.banks = read_dim(x, "banks", k.l2.banks, wt + ".l2");
+            }
+            if (t.contains("streamers")) {
+                const json& x = t.at("streamers");
+                reject_unknown(x, ct_streamer_keys(), wt + ".streamers");
+                k.streamers.count = read_dim(x, "count", k.streamers.count, wt + ".streamers");
+                k.streamers.bytes_per_cycle = read_double(x, "bytes_per_cycle", k.streamers.bytes_per_cycle, wt + ".streamers");
+            }
+            if (t.contains("l1")) {
+                const json& x = t.at("l1");
+                reject_unknown(x, l1_keys(), wt + ".l1");
+                k.l1.vectors = read_dim(x, "vectors", k.l1.vectors, wt + ".l1");
+            }
+            if (t.contains("fabric")) {
+                const json& x = t.at("fabric");
+                reject_unknown(x, ct_fabric_keys(), wt + ".fabric");
+                k.fabric.pe_rows = read_dim(x, "pe_rows", k.fabric.pe_rows, wt + ".fabric");
+                k.fabric.pe_cols = read_dim(x, "pe_cols", k.fabric.pe_cols, wt + ".fabric");
+                k.fabric.dataflow = read_string(x, "dataflow", k.fabric.dataflow, wt + ".fabric");
+                k.fabric.element_bytes = read_dim(x, "element_bytes", k.fabric.element_bytes, wt + ".fabric");
+            }
+            if (t.contains("combiner")) k.combiner = read_vector_unit(t.at("combiner"), wt + ".combiner");
+        }
+        d.cluster = c;
+    }
+    if (obj.contains("noc")) {
+        const json& s = obj.at("noc");
+        const std::string w = where + ".noc";
+        reject_unknown(s, mesh_noc_keys(), w);
+        DeviceSpecification::MeshNoc n;
+        n.link_bytes_per_cycle = read_double(s, "link_bytes_per_cycle", n.link_bytes_per_cycle, w);
+        n.link_queue_blocks = read_dim(s, "link_queue_blocks", n.link_queue_blocks, w);
+        n.credit_queue = read_dim(s, "credit_queue", n.credit_queue, w);
+        d.mesh_noc = n;
+    }
+    if (obj.contains("memory")) {
+        const json& s = obj.at("memory");
+        const std::string w = where + ".memory";
+        reject_unknown(s, mesh_memory_keys(), w);
+        // controllers and dram as on any device
+        json plain = json::object();
+        for (const char* k : {"controllers", "dram"})
+            if (s.contains(k)) plain[k] = s.at(k);
+        const DeviceSpecification m = read_device(json{{"memory", plain}}, where);
+        d.memory = m.memory;
+        if (s.contains("dma")) {
+            const json& x = s.at("dma");
+            const std::string wd = w + ".dma";
+            reject_unknown(x, mesh_dma_keys(), wd);
+            const Dim per = read_dim(x, "engines_per_controller", 1, wd);
+            const std::uint64_t engines = std::uint64_t(per) * d.memory.controllers.value_or(1);
+            if (engines > 0xFFFFFFFFull)
+                throw SpecError("deployment: " + wd + ".engines_per_controller (" + std::to_string(per) + ") over " +
+                                std::to_string(d.memory.controllers.value_or(1)) + " controllers is more engines than the spec can count");
+            d.dma.engines = static_cast<Dim>(engines);
+            d.dma.bytes_per_cycle = read_double(x, "bytes_per_cycle", d.dma.bytes_per_cycle, wd);
+            d.dma.burst_bytes = read_optional_dim(x, "burst_bytes", wd);
+            d.dma.window = read_optional_dim(x, "window", wd);
+        } else {
+            d.dma.engines = d.memory.controllers.value_or(1);
+        }
+        if (s.contains("periphery")) d.periphery = read_periphery(s.at("periphery"), w + ".periphery");
+    }
+    if (obj.contains("cpu")) {
+        const json& s = obj.at("cpu");
+        reject_unknown(s, cpu_keys(), where + ".cpu");
+        d.cpu.harts = read_optional_dim(s, "harts", where + ".cpu");
+    }
+    if (obj.contains("analytical")) {
+        const json& s = obj.at("analytical");
+        const std::string w = where + ".analytical";
+        reject_unknown(s, analytical_keys(), w);
+        d.analytical.bytes_per_cycle = read_double(s, "bytes_per_cycle", d.analytical.bytes_per_cycle, w);
+        d.analytical.pj_per_mac = read_double(s, "pj_per_mac", d.analytical.pj_per_mac, w);
+        d.analytical.pj_per_byte = read_double(s, "pj_per_byte", d.analytical.pj_per_byte, w);
+    }
+    derive_mesh_views(d);
+    return d;
+}
+
+json memory_json(const DeviceSpecification& d) {
+        json mem = json::object();
+        if (d.memory.controllers) mem["controllers"] = *d.memory.controllers;
+        if (d.memory.dram) {
+            const auto& m = *d.memory.dram;
+            json r = json::object();
+            r["technology"] = m.technology;
+            r["channels"] = m.channels;
+            r["channel_width_bits"] = m.channel_width_bits;
+            r["ranks"] = m.ranks;
+            r["bank_groups"] = m.bank_groups;
+            r["banks_per_group"] = m.banks_per_group;
+            r["page_bytes"] = m.page_bytes;
+            r["burst_bytes"] = m.burst_bytes;
+            r["data_rate_mtps"] = m.data_rate_mtps;
+            r["capacity_bytes"] = m.capacity_bytes;
+            r["map"] = m.map;
+            if (!m.xor_folds.empty()) {
+                json folds = json::array();
+                for (const auto& f : m.xor_folds)
+                    folds.push_back(json{{"into", f.into}, {"from", f.from},
+                                         {"bits", f.bits}, {"from_lsb", f.from_lsb}});
+                r["xor_folds"] = folds;
+            }
+            mem["dram"] = r;
+        }
+        return mem;
+}
+
+// A dmm_mesh: the hierarchy, and nothing flat (#635); the flat fields are its views.
+json write_mesh_device(const DeviceSpecification& d) {
+    // The hierarchy is what is written, so it must be the spec: a flat field edited to disagree with
+    // it would be dropped silently, and a zero controller count would divide below.
+    if (const std::string bad = mesh_problem(d); !bad.empty())
+        throw SpecError("deployment: device \"" + d.name + "\": " + bad);
+    if (d.memory.controllers.value_or(1) == 0) throw SpecError("deployment: device \"" + d.name + "\": memory.controllers is zero");
+    json o = json::object();
+    o["name"] = d.name;
+    o["topology"] = d.topology;
+    json arr = json::object();
+    if (d.array.rows) arr["rows"] = *d.array.rows;
+    if (d.array.cols) arr["cols"] = *d.array.cols;
+    o["array"] = arr;
+    const auto unit_json = [](const DeviceSpecification::Movers::VectorUnit& u) {
+        return json{{"lanes", u.lanes}, {"rate", u.rate}, {"ops", u.ops}};
+    };
+    if (d.cluster) {
+        const auto& t = d.cluster->l3_tile;
+        const auto& k = d.cluster->compute_tile;
+        json bm = json{{"bytes_per_cycle", t.block_movers.bytes_per_cycle}};
+        if (t.block_movers.vector) bm["vector"] = unit_json(*t.block_movers.vector);
+        json l3 = json{{"capacity_tiles", t.capacity_tiles}, {"banks", t.banks}, {"bank_ports", t.bank_ports},
+                       {"block_movers", bm}, {"noc_ports", t.noc_ports}, {"l2_ports", t.l2_ports}};
+        json ct = json::object();
+        ct["l2"] = json{{"slots", k.l2.slots}, {"banks", k.l2.banks}};
+        ct["streamers"] = json{{"count", k.streamers.count}, {"bytes_per_cycle", k.streamers.bytes_per_cycle}};
+        ct["l1"] = json{{"vectors", k.l1.vectors}};
+        ct["fabric"] = json{{"pe_rows", k.fabric.pe_rows}, {"pe_cols", k.fabric.pe_cols}, {"dataflow", k.fabric.dataflow},
+                            {"element_bytes", k.fabric.element_bytes}};
+        if (k.combiner) ct["combiner"] = unit_json(*k.combiner);
+        o["cluster"] = json{{"l3_tile", l3}, {"compute_tile", ct}};
+    }
+    if (d.mesh_noc)
+        o["noc"] = json{{"link_bytes_per_cycle", d.mesh_noc->link_bytes_per_cycle},
+                        {"link_queue_blocks", d.mesh_noc->link_queue_blocks}, {"credit_queue", d.mesh_noc->credit_queue}};
+    json mem = memory_json(d);
+    json dma = json{{"engines_per_controller", d.dma.engines / d.memory.controllers.value_or(1)},
+                    {"bytes_per_cycle", d.dma.bytes_per_cycle}};
+    if (d.dma.burst_bytes) dma["burst_bytes"] = *d.dma.burst_bytes;
+    if (d.dma.window) dma["window"] = *d.dma.window;
+    mem["dma"] = dma;
+    if (d.periphery) {
+        const auto& p = *d.periphery;
+        json pj = json{{"topology", p.topology}, {"queue_blocks", p.queue_blocks}};
+        if (!p.mc_after_port.empty()) pj["mc_after_port"] = p.mc_after_port;
+        mem["periphery"] = pj;
+    }
+    o["memory"] = mem;
+    if (d.cpu.harts) o["cpu"] = json{{"harts", *d.cpu.harts}};
+    json an = json::object();
+    an["bytes_per_cycle"] = d.analytical.bytes_per_cycle;
+    an["pj_per_mac"] = d.analytical.pj_per_mac;
+    an["pj_per_byte"] = d.analytical.pj_per_byte;
+    o["analytical"] = an;
+    return o;
+}
+
+
 json write_device(const DeviceSpecification& d) {
+    if (d.topology == "dmm_mesh") return write_mesh_device(d);
     json o = json::object();
     o["name"] = d.name;
     o["topology"] = d.topology;
@@ -510,34 +781,7 @@ json write_device(const DeviceSpecification& d) {
         if (d.array.cols) a["cols"] = *d.array.cols;
         o["array"] = a;
     }
-    if (d.memory.controllers || d.memory.dram) {
-        json mem = json::object();
-        if (d.memory.controllers) mem["controllers"] = *d.memory.controllers;
-        if (d.memory.dram) {
-            const auto& m = *d.memory.dram;
-            json r = json::object();
-            r["technology"] = m.technology;
-            r["channels"] = m.channels;
-            r["channel_width_bits"] = m.channel_width_bits;
-            r["ranks"] = m.ranks;
-            r["bank_groups"] = m.bank_groups;
-            r["banks_per_group"] = m.banks_per_group;
-            r["page_bytes"] = m.page_bytes;
-            r["burst_bytes"] = m.burst_bytes;
-            r["data_rate_mtps"] = m.data_rate_mtps;
-            r["capacity_bytes"] = m.capacity_bytes;
-            r["map"] = m.map;
-            if (!m.xor_folds.empty()) {
-                json folds = json::array();
-                for (const auto& f : m.xor_folds)
-                    folds.push_back(json{{"into", f.into}, {"from", f.from},
-                                         {"bits", f.bits}, {"from_lsb", f.from_lsb}});
-                r["xor_folds"] = folds;
-            }
-            mem["dram"] = r;
-        }
-        o["memory"] = mem;
-    }
+    if (d.memory.controllers || d.memory.dram) o["memory"] = memory_json(d);
     if (d.cpu.harts) o["cpu"] = json{{"harts", *d.cpu.harts}};
     // Written in full when declared, so a round trip states the defaults it relied on.
     if (d.noc) {
@@ -546,13 +790,6 @@ json write_device(const DeviceSpecification& d) {
                         {"port", json{{"input_queue_blocks", n.port.input_queue_blocks},
                                       {"output_queue_blocks", n.port.output_queue_blocks},
                                       {"arbitration", n.port.arbitration}}}};
-    }
-
-    if (d.periphery) {
-        const auto& p = *d.periphery;
-        json o2 = json{{"topology", p.topology}, {"queue_blocks", p.queue_blocks}};
-        if (!p.mc_after_port.empty()) o2["mc_after_port"] = p.mc_after_port;
-        o["periphery"] = o2;
     }
 
     json an = json::object();

@@ -1,26 +1,45 @@
 {
   "name": "dmm1x1",
   "topology": "dmm_mesh",
-  "compute_tiles": 1,
-  "macs_per_cycle": 4096,
   "array": {
     "rows": 1,
     "cols": 1
   },
-  "dma": {
-    "engines": 1,
-    "bytes_per_cycle": 64
+  "cluster": {
+    "l3_tile": {
+      "capacity_tiles": 16,
+      "banks": 4,
+      "bank_ports": 1,
+      "block_movers": {
+        "bytes_per_cycle": 128
+      },
+      "noc_ports": 4,
+      "l2_ports": 4
+    },
+    "compute_tile": {
+      "l2": {
+        "slots": 8,
+        "banks": 4
+      },
+      "streamers": {
+        "count": 1,
+        "bytes_per_cycle": 256
+      },
+      "l1": {
+        "vectors": 2
+      },
+      "fabric": {
+        "pe_rows": 64,
+        "pe_cols": 64,
+        "dataflow": "os",
+        "element_bytes": 4
+      }
+    }
   },
-  "l3": {
-    "tiles": 1,
-    "banks": 4,
-    "capacity_tiles": 16
-  },
-  "l2": {
-    "banks_per_tile": 4
-  },
-  "l1": {
-    "vectors": 2
+  "noc": {
+    "link_bytes_per_cycle": 64,
+    "link_queue_blocks": 2,
+    "credit_queue": 2
   },
   "memory": {
     "controllers": 1,
@@ -36,15 +55,14 @@
       "data_rate_mtps": 8533,
       "capacity_bytes": 4294967296,
       "map": "co:ch:rk:bg:ba:mc:ro"
+    },
+    "dma": {
+      "engines_per_controller": 1,
+      "bytes_per_cycle": 64
+    },
+    "periphery": {
+      "topology": "ring",
+      "queue_blocks": 2
     }
-  },
-  "periphery": {
-    "topology": "ring",
-    "queue_blocks": 2
-  },
-  "movers": {
-    "block_movers": 8,
-    "streamers": 1,
-    "noc_bytes_per_cycle": 64
   }
 }

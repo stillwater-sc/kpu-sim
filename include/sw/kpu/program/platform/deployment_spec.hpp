@@ -246,6 +246,45 @@ struct DeviceSpecification {
     };
     std::optional<Periphery> periphery;
 
+    // THE CLUSTER of a `dmm_mesh` (#635; docs/plans/distributed-csp-programs.md §3.1): the spec every
+    // node shares, as the SoC hierarchy has it -- SoC -> cluster -> sub-cluster -> resource. A node is
+    // an L3 tile and its compute tile. The L3 tile holds, and its BlockMovers drive the NoC and the L2
+    // traffic; the compute tile feeds and computes: its L2, the Streamers (L2 -> L1), its L1, the
+    // fabric and the Combiner (L1 -> L2). On a dmm_mesh this is the ONE place those resources are
+    // written: the flat fields above (compute_tiles, macs_per_cycle, l3, l2, l1, movers, combiner,
+    // fabric) are derived from it (derive_mesh_views), never written, and a spec whose flat fields
+    // disagree with its cluster is refused (mesh_problem).
+    struct Cluster {
+        struct L3Tile {
+            Dim capacity_tiles = 16;            // slots in ONE L3 tile
+            Dim banks = 4;
+            Dim bank_ports = 1;                 // concurrent accesses per bank
+            struct BlockMovers {                // eight of them (mesh_layout.hpp), one CSP each
+                double bytes_per_cycle = 64.0;
+                std::optional<Movers::VectorUnit> vector;   // bm.egress / bm.ingress stages
+            } block_movers;
+            Dim noc_ports = 4;                  // one per NEWS link, each in and out
+            Dim l2_ports = 4;                   // feeds a, b, x in; the drain out
+        } l3_tile;
+        struct ComputeTile {
+            struct L2 { Dim slots = 8; Dim banks = 4; } l2;
+            struct Streamers { Dim count = 1; double bytes_per_cycle = 256.0; } streamers;
+            struct L1 { Dim vectors = 2; } l1;
+            struct Fabric { Dim pe_rows = 16; Dim pe_cols = 16; std::string dataflow = "os"; Dim element_bytes = 4; } fabric;
+            std::optional<Movers::VectorUnit> combiner;
+        } compute_tile;
+    };
+    std::optional<Cluster> cluster;
+
+    // THE NoC CLUSTER of a `dmm_mesh`: the one-hop mesh links and the credit network. Absent = the
+    // defaults. (The checkerboard's folded torus is `noc` above.)
+    struct MeshNoc {
+        double link_bytes_per_cycle = 64.0;
+        Dim link_queue_blocks = 2;              // per link: blocks in flight
+        Dim credit_queue = 2;                   // per credit link
+    };
+    std::optional<MeshNoc> mesh_noc;
+
     // Analytical-harness coefficients. The executors do not use these; the
     // first-order model is a different tier with a different job.
     struct Analytical {
@@ -464,16 +503,118 @@ inline std::string dram_problem(const DeviceSpecification& d) {
 // ----------------------------------------------------------------------------
 inline bool known_periphery_topology(const std::string& t) { return t == "ring"; }
 
+inline bool same_vector_unit(const std::optional<DeviceSpecification::Movers::VectorUnit>& a,
+                             const std::optional<DeviceSpecification::Movers::VectorUnit>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    return !a || (a->lanes == b->lanes && a->rate == b->rate && a->ops == b->ops);
+}
+
+// The fields L-B, L-T1, the naming map and the floorplan read, derived from a dmm_mesh's hierarchy
+// (array, cluster, noc, memory.dma): one owner per resource, and these are its views. Called by the
+// reader; a spec built in C++ calls it after filling the hierarchy.
+inline void derive_mesh_views(DeviceSpecification& d) {
+    if (d.topology != "dmm_mesh" || !d.cluster || !d.array.rows || !d.array.cols) return;
+    const auto& c = *d.cluster;
+    const Dim nodes = *d.array.rows * *d.array.cols;
+    d.compute_tiles = nodes;
+    d.l3.tiles = nodes;
+    d.l3.banks = c.l3_tile.banks;
+    d.l3.capacity_tiles = c.l3_tile.capacity_tiles * nodes;
+    d.l2.banks_per_tile = c.compute_tile.l2.banks;
+    d.l1.vectors = c.compute_tile.l1.vectors;
+    d.fabric.pe_rows = c.compute_tile.fabric.pe_rows;
+    d.fabric.pe_cols = c.compute_tile.fabric.pe_cols;
+    d.fabric.dataflow = c.compute_tile.fabric.dataflow;
+    d.macs_per_cycle = static_cast<double>(c.compute_tile.fabric.pe_rows) * c.compute_tile.fabric.pe_cols;
+    d.element_bytes = c.compute_tile.fabric.element_bytes;
+    d.movers.block_movers = 8 * nodes;
+    d.movers.bm_bytes_per_cycle = c.l3_tile.block_movers.bytes_per_cycle;
+    d.movers.bm_vector = c.l3_tile.block_movers.vector;
+    d.movers.streamers = c.compute_tile.streamers.count * nodes;
+    d.movers.str_bytes_per_cycle = c.compute_tile.streamers.bytes_per_cycle;
+    const DeviceSpecification::MeshNoc n = d.mesh_noc.value_or(DeviceSpecification::MeshNoc{});
+    d.movers.noc_bytes_per_cycle = n.link_bytes_per_cycle;
+    d.movers.noc_links = 2 * (*d.array.rows * (*d.array.cols - 1) + *d.array.cols * (*d.array.rows - 1));
+    d.combiner = c.compute_tile.combiner;
+}
+
+// Empty when a dmm_mesh's cluster and NoC cluster are consistent resources, and its flat fields are
+// the views derived from them; otherwise the first problem, naming the field.
+inline std::string cluster_problem(const DeviceSpecification& d) {
+    if (!d.cluster) return "a dmm_mesh declares its cluster: the L3 tile and the compute tile every node is made of";
+    const auto& c = *d.cluster;
+    const auto& t = c.l3_tile;
+    const auto& k = c.compute_tile;
+    if (t.capacity_tiles == 0) return "cluster.l3_tile.capacity_tiles must be non-zero";
+    // The derived totals are 32-bit: check them in 64 before they are formed.
+    if (d.array.rows && d.array.cols) {
+        constexpr std::uint64_t kMax = 0xFFFFFFFFull;
+        const std::uint64_t nodes = std::uint64_t(*d.array.rows) * *d.array.cols;
+        if (nodes * 8 > kMax) return "the mesh's " + std::to_string(nodes) + " nodes are more than the spec can count";
+        if (nodes * t.capacity_tiles > kMax)
+            return "cluster.l3_tile.capacity_tiles (" + std::to_string(t.capacity_tiles) + ") over " + std::to_string(nodes) +
+                   " nodes is more L3 slots than the spec can count";
+        if (nodes * c.compute_tile.streamers.count > kMax)
+            return "cluster.compute_tile.streamers.count over the mesh is more than the spec can count";
+    }
+    if (t.banks == 0 || !power_of_two(t.banks)) return "cluster.l3_tile.banks must be a power of two";
+    if (t.bank_ports == 0) return "cluster.l3_tile.bank_ports must be non-zero";
+    if (!finite_positive(t.block_movers.bytes_per_cycle)) return std::string("cluster.l3_tile.block_movers.bytes_per_cycle") + kFinitePos;
+    if (t.noc_ports != 4) return "cluster.l3_tile.noc_ports is " + std::to_string(t.noc_ports) + "; a node has one per NEWS link, 4";
+    if (t.l2_ports != 4) return "cluster.l3_tile.l2_ports is " + std::to_string(t.l2_ports) + "; the feeds a, b, x and the drain make 4";
+    if (k.l2.slots == 0) return "cluster.compute_tile.l2.slots must be non-zero";
+    if (k.l2.banks == 0 || !power_of_two(k.l2.banks)) return "cluster.compute_tile.l2.banks must be a power of two";
+    if (k.streamers.count == 0) return "cluster.compute_tile.streamers.count must be non-zero";
+    if (!finite_positive(k.streamers.bytes_per_cycle)) return std::string("cluster.compute_tile.streamers.bytes_per_cycle") + kFinitePos;
+    if (k.l1.vectors == 0) return "cluster.compute_tile.l1.vectors must be non-zero";
+    if (k.fabric.pe_rows == 0 || k.fabric.pe_cols == 0) return "cluster.compute_tile.fabric's pe_rows and pe_cols must be non-zero";
+    if (k.fabric.dataflow != "os" && k.fabric.dataflow != "ws" && k.fabric.dataflow != "is")
+        return "cluster.compute_tile.fabric.dataflow '" + k.fabric.dataflow + "' must be os, ws or is";
+    if (k.fabric.element_bytes == 0) return "cluster.compute_tile.fabric.element_bytes must be non-zero";
+    if (d.mesh_noc) {
+        if (!finite_positive(d.mesh_noc->link_bytes_per_cycle)) return std::string("noc.link_bytes_per_cycle") + kFinitePos;
+        if (d.mesh_noc->link_queue_blocks == 0) return "noc.link_queue_blocks must be non-zero";
+        if (d.mesh_noc->credit_queue == 0) return "noc.credit_queue must be non-zero";
+    }
+    if (d.noc) return "noc on a dmm_mesh is the mesh's NoC cluster; the folded torus's hubs and ports are the checkerboard's";
+    if (d.systolic) return "systolic is the checkerboard's RTL tile; a dmm_mesh's compute tile is cluster.compute_tile";
+    // The flat fields are views: they must be what the hierarchy derives.
+    DeviceSpecification v = d;
+    derive_mesh_views(v);
+    const auto differs = [&](const char* field) {
+        return std::string(field) + " disagrees with the cluster; on a dmm_mesh it is derived from the hierarchy, "
+               "never written (derive_mesh_views)";
+    };
+    if (v.compute_tiles != d.compute_tiles) return differs("compute_tiles");
+    if (v.l3.tiles != d.l3.tiles || v.l3.banks != d.l3.banks || v.l3.capacity_tiles != d.l3.capacity_tiles) return differs("l3");
+    if (v.l2.banks_per_tile != d.l2.banks_per_tile) return differs("l2.banks_per_tile");
+    if (v.l1.vectors != d.l1.vectors) return differs("l1.vectors");
+    if (v.macs_per_cycle != d.macs_per_cycle || v.fabric.pe_rows != d.fabric.pe_rows || v.fabric.pe_cols != d.fabric.pe_cols ||
+        v.fabric.dataflow != d.fabric.dataflow || v.element_bytes != d.element_bytes)
+        return differs("macs_per_cycle / fabric / element_bytes");
+    if (v.movers.block_movers != d.movers.block_movers || v.movers.bm_bytes_per_cycle != d.movers.bm_bytes_per_cycle ||
+        v.movers.streamers != d.movers.streamers || v.movers.str_bytes_per_cycle != d.movers.str_bytes_per_cycle ||
+        v.movers.noc_bytes_per_cycle != d.movers.noc_bytes_per_cycle || v.movers.noc_links != d.movers.noc_links)
+        return differs("movers");
+    if (!same_vector_unit(v.movers.bm_vector, d.movers.bm_vector) || !same_vector_unit(v.combiner, d.combiner))
+        return differs("the vector units (movers.vector.bm, combiner)");
+    return {};
+}
+
 // Empty when the device is no dmm_mesh and declares no periphery, or is a consistent one.
 inline std::string mesh_problem(const DeviceSpecification& d) {
     if (d.topology != "dmm_mesh") {
         if (d.periphery)
             return "periphery applies to the dmm_mesh topology, not '" + d.topology + "'";
+        if (d.cluster || d.mesh_noc)
+            return "a cluster and the mesh's NoC cluster apply to the dmm_mesh topology, not '" + d.topology + "'";
         return {};
     }
     // Checked here, not only in validate(): MeshLayout::of calls this directly.
     if (!d.array.rows || !d.array.cols || *d.array.rows == 0 || *d.array.cols == 0)
         return "a dmm_mesh declares its array.rows and array.cols, both non-zero: the nodes of the mesh";
+    // The hierarchy first: the flat counts below are its views.
+    if (std::string bad = cluster_problem(d); !bad.empty()) return bad;
     const std::uint64_t nodes = static_cast<std::uint64_t>(*d.array.rows) * *d.array.cols;
     if (nodes != d.compute_tiles)
         return "a dmm_mesh of " + std::to_string(*d.array.rows) + "x" + std::to_string(*d.array.cols) +
@@ -608,6 +749,8 @@ inline std::string DeploymentSpec::validate() const {
                        std::to_string(*d.fabric.pe_cols) + " PEs, but macs_per_cycle is " +
                        std::to_string(d.macs_per_cycle) + "; one PE does one MAC a cycle, so they must agree";
         }
+        if (d.systolic && d.topology == "dmm_mesh")
+            return where + ": systolic is the checkerboard's RTL tile; a dmm_mesh's compute tile is cluster.compute_tile";
         if (d.systolic) {
             const auto& y = *d.systolic;
             if (y.dataflow != "output_stationary" && y.dataflow != "weight_stationary" &&
