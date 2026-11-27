@@ -438,14 +438,16 @@ if(KPU_BUILD_TESTS)
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
         # A run directory whose trace.json is already a link to another of its own files (#601's
         # reviews): its counters.json, its summary.txt or its run.json. Each is refused on the
-        # directory's own paths, before its run.json is written.
-        foreach(_target counters summary run)
-            set(_ext json)
+        # directory's own paths, before its run.json is written. And its run.json.tmp.
+        foreach(_target counters summary run runtmp)
+            set(_file ${_target}.json)
             if(_target STREQUAL "summary")
-                set(_ext txt)
+                set(_file summary.txt)
+            elseif(_target STREQUAL "runtmp")
+                set(_file run.json.tmp)   # the manifest's temporary, renamed to run.json as it is written
             endif()
             add_test(NAME kpu_run_alias_run_dir_${_target}
-                COMMAND ${CMAKE_COMMAND} -E create_symlink ${_target}.${_ext} ${_alias}/to_${_target}/trace.json)
+                COMMAND ${CMAKE_COMMAND} -E create_symlink ${_file} ${_alias}/to_${_target}/trace.json)
             add_test(NAME kpu_run_alias_run_dir_${_target}_dir
                 COMMAND ${CMAKE_COMMAND} -E make_directory ${_alias}/to_${_target})
             set_tests_properties(kpu_run_alias_run_dir_${_target}_dir PROPERTIES FIXTURES_SETUP alias_dirs

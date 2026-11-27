@@ -768,6 +768,7 @@ bool distinct_artifacts(std::vector<std::pair<std::string, std::string>> outs, c
     if (!run_dir.empty()) {
         outs.push_back({"the run directory's summary.txt", run_dir + "/summary.txt"});
         outs.push_back({"the run directory's run.json", run_dir + "/run.json"});
+        outs.push_back({"the run directory's run.json.tmp", run_dir + "/run.json.tmp"});   // the manifest's temporary
     }
     std::vector<std::pair<std::string, std::string>> resolved;
     for (const auto& [what, path] : outs)
