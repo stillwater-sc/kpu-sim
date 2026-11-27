@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The level-2 CSP program and its text form, `dcsp 1`** (#605; distributed CSP programs, step 2).
+  `include/sw/kpu/program/csp/distributed.hpp` defines a distributed program for the DMM mesh, with no
+  global order:
+  - **Processes:** each has a place and a role (`dma[m, e]`, a node's movers `bm.N`/`E`/`S`/`W`/`a`/`b`/`x`/`c`,
+    and its compute tile `cf[t]`), and runs its own action list.
+  - **Channels:** each is one sender into one receiving pool, and owns its slots.
+  - **Actions:** load, push, feed, drain, store, and call (to a new result, or `acc` into a live one).
+  - **Residencies:** every write that fills a slot states the reads its residency serves. The last
+    read frees the slot and returns its credit to the channel's sender, so there is no Release action.
+  - **Checks:** `validate_structure` refuses an action outside its process's role, node, channel or
+    slots, naming its line. The machine's rules (D1-D6) are #606 and #607.
+  - **Text form:** `csp/lang/distributed_text.hpp` reads and prints `dcsp 1`, and a printed program
+    reads back the same.
+  - **Samples:** `tests/program/csp/distributed/vector_to_node3.dcsp` (one vector, DRAM to the far
+    corner, a hop at a time) and `gemm_one_tile_node1.dcsp`.
+
 - **The DMM mesh as a deployment** (#604; distributed CSP programs, step 1, `docs/plans/distributed-csp-programs.md`).
   A `dmm_mesh` topology beside the checkerboard:
   - **The machine:** a rows × cols mesh of nodes, each an L3 tile with its own compute tile. Neighbours
