@@ -232,3 +232,13 @@ TEST_CASE("A strided Writeback into an L3 slot is contiguous rows, or refused", 
     const L3Program l3p{l3_load(0, kDram, 128), l3_read(0, 128), l3_write(1, 128), l3_release(0), l3_release(1)};
     CHECK_THROWS_WITH(L3BmRig(l3p, l2p, L3BmRig::Options{}), ContainsSubstring("rows 128 bytes apart"));
 }
+
+TEST_CASE("A read inside its slot but past the tile produced in it is a fault", "[cycle][l3][blockmover][join]") {
+    // #600's review: a 64-byte tile in a 1024-byte slot; a 64-byte read at offset 128 is inside the
+    // slot, but past the tile: its bytes would be an earlier tile's.
+    const L3Program l3p{l3_load(0, kDram, 64), l3_read(0, 64), l3_release(0)};
+    const L2Program l2p{l2_move(0, tile(MatrixID::A, 0), at(0) + 128, 64, 1), l2_release(0, tile(MatrixID::A, 0))};
+    L3BmRig r(l3p, l2p, L3BmRig::Options{});
+    r.channel.preload(kDram, std::vector<std::uint8_t>(64, 1));
+    CHECK_THROWS_WITH(r.sim.run_until_idle(kLimit), ContainsSubstring("past the 64-byte tile"));
+}

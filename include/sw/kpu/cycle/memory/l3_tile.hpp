@@ -209,10 +209,14 @@ public:
         } else if (serve_read) {
             const BmRead& r = bm_reads_[bm_read_head_];
             const Slot& sl = slots_[r.slot];
-            if (r.bytes > sl.tile_bytes)
+            // The request inside the tile the slot holds, not only inside the slot: past it are
+            // bytes the producer did not write (an earlier residency's, after the slot's reuse).
+            const std::uint64_t req_off = bm_req_->address - std::uint64_t(r.slot) * config_.slot_bytes;
+            if (req_off >= sl.tile_bytes || bm_req_->bytes > sl.tile_bytes - req_off)
                 throw std::logic_error(where(now) + ": action " + std::to_string(r.ticket) + " reads " +
-                                       std::to_string(r.bytes) + " bytes from slot " + std::to_string(r.slot) +
-                                       ", which holds a tile of " + std::to_string(sl.tile_bytes));
+                                       std::to_string(bm_req_->bytes) + " bytes at offset " + std::to_string(req_off) +
+                                       " of slot " + std::to_string(r.slot) + ", past the " +
+                                       std::to_string(sl.tile_bytes) + "-byte tile it holds");
             const std::uint32_t off =
                 static_cast<std::uint32_t>(bm_req_->address - std::uint64_t(r.slot) * config_.slot_bytes) + bm_sent_;
             Beat b;
