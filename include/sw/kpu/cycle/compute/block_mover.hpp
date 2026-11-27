@@ -137,9 +137,12 @@ public:
         if (a.action.kind == L2Action::Kind::Move) (dense ? move_dense(now, a.action, moved, waiting) : move(now, a.action, moved, waiting));
         else (dense ? writeback_dense(now, a.action, moved, waiting) : writeback(now, a.action, moved, waiting));
 
-        // A dense Writeback ends with its last beat to L3; every other transfer with its last row.
-        const bool finished = dense && a.action.kind == L2Action::Kind::Writeback ? sent_ == a.action.dense_bytes()
-                                                                                    : done_ == a.action.rows;
+        // A dense Writeback ends with its last beat to L3; a dense Move with its last lane and its
+        // whole response taken (the padding beats too: a next Move must not receive them); every
+        // other transfer with its last row.
+        const bool finished = !dense ? done_ == a.action.rows
+                            : a.action.kind == L2Action::Kind::Writeback ? sent_ == a.action.dense_bytes()
+                                                                         : done_ == a.action.rows && tile_.size() == a.action.dense_bytes();
         if (finished) {
             counters().complete();
             ++head_;
@@ -315,7 +318,9 @@ private:
     // A dense Move: the whole tile from L3 into the tile buffer, its lanes out to L2.
     template <class Waiting>
     void move_dense(Cycle now, const L2Action& a, bool& moved, Waiting&& waiting) {
-        const std::uint32_t lane = a.lane_bytes(), e = a.element_bytes, whole = a.tile_rows * a.tile_cols * e;
+        // Sizes checked against the row and the tile buffer when the program was (validate_l2_program).
+        const auto lane = static_cast<std::uint32_t>(a.lane_bytes());
+        const std::uint32_t e = a.element_bytes, whole = a.tile_rows * a.tile_cols * e;
         const bool columns = a.layout == L2Action::Layout::DenseColumns;
         // The next lane to L2, once its bytes are in: a row's own, or (a column) the whole tile's.
         if (done_ < a.rows) {
@@ -357,7 +362,7 @@ private:
         // The tile's one request.
         if (requested_ == 0) {
             if (l3_reads_->can_push(now)) {
-                l3_reads_->push(now, L3RowRead{++id_, a.l3_address, a.dense_bytes(), 0});
+                l3_reads_->push(now, L3RowRead{++id_, a.l3_address, static_cast<std::uint32_t>(a.dense_bytes()), 0});
                 requested_ = 1;
                 moved = true;
             } else {
@@ -369,7 +374,8 @@ private:
     // A dense Writeback: the slot's rows from L2, packed into the tile buffer, out to L3 by beats.
     template <class Waiting>
     void writeback_dense(Cycle now, const L2Action& a, bool& moved, Waiting&& waiting) {
-        const std::uint32_t lane = a.lane_bytes(), bus = config_.bus_bytes, whole = a.tile_rows * a.tile_cols * a.element_bytes;
+        const auto lane = static_cast<std::uint32_t>(a.lane_bytes());
+        const std::uint32_t bus = config_.bus_bytes, whole = a.tile_rows * a.tile_cols * a.element_bytes;
         // The next beat out to L3, once its bytes are in (the last one padded with zeros).
         if (sent_ < a.dense_bytes()) {
             const bool all_in = done_ == a.rows;

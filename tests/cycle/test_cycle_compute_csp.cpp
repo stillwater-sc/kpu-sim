@@ -316,3 +316,19 @@ TEST_CASE("Rung 6: an int8 64^3 matmul on kpu_s1's 128x64 array, its 16x16 tiles
     check_properties(plan, run, 128);
     check_early_release(plan, run);
 }
+
+TEST_CASE("The plan's L2 geometry holds its largest padded tile: a 1 x 1 gemm", "[cycle][csp][compute]") {
+    // #599's review: one 16-byte L2 row held a 1 x 1 tile's lane, not its 64-byte beat, so the
+    // BlockMover's tile buffer (one slot) refused the plan's own geometry.
+    const auto dev = device("kpu_soc_2x2.json");
+    const std::string text =
+        "csp 1.1\nprogram mm machine flat(l3 = 8, l2 = 3) {\n"
+        "  tensor A[1,1] int8 tile 1x1 in;\n  tensor B[1,1] int8 tile 1x1 in;\n  tensor C[1,1] int32 tile 1x1 out;\n"
+        "  resident B[:, 0];\n  resident A[0, :];\n"
+        "  acc C[0, 0] in fabric dataflow os { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
+        "  store C[0, 0];\n  release A[0, :];\n  release B[:, 0];\n}\n";
+    const Case c = compile(text, dev);
+    const CspComputePlan plan = plan_compute(c.p, c.in, c.lb);
+    CHECK(std::uint64_t(plan.rows_per_slot) * plan.row_bytes >= plan.slot_bytes);
+    run_and_check(plan, dev, Setup{});
+}

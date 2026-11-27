@@ -441,3 +441,33 @@ TEST_CASE("Dense layouts are checked before anything runs", "[cycle][l2][blockmo
                           ContainsSubstring("a dense tile of 4 x 4 elements of 3 bytes"));
     }
 }
+
+TEST_CASE("A dense Move completes only once its whole response is in, padding beats included",
+          "[cycle][l2][blockmover][dense]") {
+    // #599's review: a 1 x 16 int8 tile is one lane after its first beat, but its request is the
+    // 64-byte beat, four 16-byte beats. The Move must take them all before the next one starts, or
+    // the next Move receives a stray beat.
+    L2BmRig::Options o;
+    o.l2.rows_per_slot = 4;
+    o.l2.row_bytes = 16;
+    o.bus_bytes = 16;
+    const std::vector<std::uint8_t> t = dense_tile(1, 16, 1);
+    const L2Program p{l2_move_dense(0, tile(0), kIn, 1, 16, 1, false), l2_move_dense(1, tile(1), kIn + 0x1000, 1, 16, 1, false),
+                      l2_writeback_dense(0, tile(0), kOut, 1, 16, 1), l2_writeback_dense(1, tile(1), kOut + 0x1000, 1, 16, 1),
+                      l2_release(0, tile(0)), l2_release(1, tile(1))};
+    L2BmRig r(p, o);
+    r.l3.load(kIn, t);
+    r.l3.load(kIn + 0x1000, transposed(t, 1, 16, 1));   // another tile's bytes: a 16 x 1 is the same
+    REQUIRE(r.sim.run_until_idle(kLimit));
+    CHECK(r.l3.peek(kOut, 64) == t);
+    CHECK(r.l3.peek(kOut + 0x1000, 64) == transposed(t, 1, 16, 1));
+}
+
+TEST_CASE("Dense sizes are checked wide: a shape whose bytes wrap 32 bits is refused", "[cycle][l2][blockmover][dense]") {
+    // #599's review: 1073741825 x 1 int32 lanes are 2^32 + 4 bytes, which wrapped to 4.
+    L2BmRig::Options o;
+    L2Action a = l2_move_dense(0, tile(0), kIn, 1073741825u, 1, 4, true);
+    CHECK_THROWS_WITH(L2BmRig(L2Program{a}, o), ContainsSubstring("past the L2's 256-byte row"));
+    L2Action b = l2_move_dense(0, tile(0), kIn, 1, 1073741825u, 4, true);   // 2^30 + 1 lanes
+    CHECK_THROWS(L2BmRig(L2Program{b}, o));
+}

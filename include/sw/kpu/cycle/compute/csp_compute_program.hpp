@@ -183,6 +183,10 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
     }
     if (plan.rows_per_slot == 0) throw std::invalid_argument("plan_compute: the program has no Call");
     plan.row_bytes = (lane_bytes + row_align - 1) / row_align * row_align;
+    // A slot also holds the largest tile whole, padded to its beats: the BlockMover's tile buffer is
+    // one slot (block_mover.hpp). A tile of few lanes (a 1 x 1 gemm) needs more rows than lanes.
+    plan.rows_per_slot = std::max<std::uint32_t>(plan.rows_per_slot,
+                                                 static_cast<std::uint32_t>((plan.slot_bytes + plan.row_bytes - 1) / plan.row_bytes));
     plan.l3_slots = static_cast<std::uint32_t>(p.channel(sw::kpu::program::csp::Chan::L3).capacity);
 
     auto role_of = [&](std::size_t i, const TileCoord& t) {

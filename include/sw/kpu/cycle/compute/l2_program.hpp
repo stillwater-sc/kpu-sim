@@ -65,11 +65,14 @@ struct L2Action {
     Layout layout = Layout::Strided;
     std::uint32_t tile_rows = 0, tile_cols = 0, element_bytes = 0;
 
-    // A dense tile's bytes in L3: its elements, then zeros to whole 64-byte beats.
-    [[nodiscard]] std::uint32_t dense_bytes() const { return (tile_rows * tile_cols * element_bytes + 63) / 64 * 64; }
+    // A dense tile's bytes in L3: its elements, then zeros to whole 64-byte beats. Wide: a shape
+    // whose bytes pass 32 bits is refused by its size, never wrapped (validate_l2_program).
+    [[nodiscard]] std::uint64_t dense_bytes() const {
+        return (std::uint64_t(tile_rows) * tile_cols * element_bytes + 63) / 64 * 64;
+    }
     // A dense lane's bytes: tile_cols elements (DenseRows) or tile_rows (DenseColumns).
-    [[nodiscard]] std::uint32_t lane_bytes() const {
-        return (layout == Layout::DenseColumns ? tile_rows : tile_cols) * element_bytes;
+    [[nodiscard]] std::uint64_t lane_bytes() const {
+        return std::uint64_t(layout == Layout::DenseColumns ? tile_rows : tile_cols) * element_bytes;
     }
 };
 using L2Program = std::vector<L2Action>;
