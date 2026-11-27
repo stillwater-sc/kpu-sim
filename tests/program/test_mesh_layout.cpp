@@ -496,3 +496,39 @@ TEST_CASE("the structure record nests each node's tiles in its cluster", "[progr
     CHECK(parent.at("dmm2x2/l3[1]/bm[7]") == "dmm2x2/l3[1]");            // the movers: the L3 tile's
     CHECK(parent.at("dmm2x2/cf[1]/l2[0]") == "dmm2x2/cf[1]");            // the L2: the compute tile's
 }
+
+// ---- regressions from the review of #636
+
+TEST_CASE("derived totals that would not fit 32 bits are refused, not wrapped", "[program][platform][mesh]") {
+    CHECK_THAT(problem([](auto& d) {
+                   d.cluster->l3_tile.capacity_tiles = 2147483648u;   // x4 nodes wraps to 0: "unbounded"
+               }),
+               ContainsSubstring("is more L3 slots than the spec can count"));
+    std::string t = to_json(dmm2x2());
+    const std::string from = "\"engines_per_controller\": 1";
+    t.replace(t.find(from), from.size(), "\"engines_per_controller\": 2147483649");   // x2 controllers wraps to 2
+    CHECK_THROWS_WITH(from_json(t), ContainsSubstring("is more engines than the spec can count"));
+}
+
+TEST_CASE("a vector unit's contents, not only its presence, are the hierarchy's", "[program][platform][mesh]") {
+    DeploymentSpec s = dmm2x2();
+    DeviceSpecification& d = s.device(0);
+    d.cluster->l3_tile.block_movers.vector = DeviceSpecification::Movers::VectorUnit{16, 1.0, {"add"}};
+    derive_mesh_views(d);
+    REQUIRE(s.validate().empty());
+    d.cluster->l3_tile.block_movers.vector->lanes = 32;    // the hierarchy changed, its view did not
+    CHECK_THAT(s.validate(), ContainsSubstring("the vector units (movers.vector.bm, combiner) disagrees with the cluster"));
+}
+
+TEST_CASE("the writer refuses a mesh whose flat fields disagree with its hierarchy", "[program][platform][mesh]") {
+    DeploymentSpec s = dmm2x2();
+    s.device(0).movers.bm_bytes_per_cycle = 256;           // the cluster still says 128
+    CHECK_THROWS_WITH(to_json(s), ContainsSubstring("movers disagrees with the cluster"));
+}
+
+TEST_CASE("adjacent clusters share their rounded edges at a fractional pitch", "[program][platform][mesh][floorplan]") {
+    const DeploymentSpec s = dmm2x2();
+    const SocFloorplan fp = generate_floorplan(s, 0, FloorplanStyle{1000.0004, 40, 400});
+    INFO(validate_floorplan(fp, s));
+    CHECK(validate_floorplan(fp, s).empty());
+}

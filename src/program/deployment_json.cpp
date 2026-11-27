@@ -585,7 +585,11 @@ DeviceSpecification read_mesh_device(const json& obj, const std::string& where) 
             const std::string wd = w + ".dma";
             reject_unknown(x, mesh_dma_keys(), wd);
             const Dim per = read_dim(x, "engines_per_controller", 1, wd);
-            d.dma.engines = per * d.memory.controllers.value_or(1);
+            const std::uint64_t engines = std::uint64_t(per) * d.memory.controllers.value_or(1);
+            if (engines > 0xFFFFFFFFull)
+                throw SpecError("deployment: " + wd + ".engines_per_controller (" + std::to_string(per) + ") over " +
+                                std::to_string(d.memory.controllers.value_or(1)) + " controllers is more engines than the spec can count");
+            d.dma.engines = static_cast<Dim>(engines);
             d.dma.bytes_per_cycle = read_double(x, "bytes_per_cycle", d.dma.bytes_per_cycle, wd);
             d.dma.burst_bytes = read_optional_dim(x, "burst_bytes", wd);
             d.dma.window = read_optional_dim(x, "window", wd);
@@ -642,6 +646,11 @@ json memory_json(const DeviceSpecification& d) {
 
 // A dmm_mesh: the hierarchy, and nothing flat (#635); the flat fields are its views.
 json write_mesh_device(const DeviceSpecification& d) {
+    // The hierarchy is what is written, so it must be the spec: a flat field edited to disagree with
+    // it would be dropped silently, and a zero controller count would divide below.
+    if (const std::string bad = mesh_problem(d); !bad.empty())
+        throw SpecError("deployment: device \"" + d.name + "\": " + bad);
+    if (d.memory.controllers.value_or(1) == 0) throw SpecError("deployment: device \"" + d.name + "\": memory.controllers is zero");
     json o = json::object();
     o["name"] = d.name;
     o["topology"] = d.topology;

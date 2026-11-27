@@ -65,8 +65,8 @@ struct Rect {
     double x_um = 0, y_um = 0, w_um = 0, h_um = 0;
     double cx() const { return x_um + w_um / 2; }
     double cy() const { return y_um + h_um / 2; }
-    bool inside(const Rect& outer) const;     // with a sub-nanometre tolerance
-    bool overlaps(const Rect& o) const;       // interiors intersect (shared edges are fine)
+    bool inside(const Rect& outer) const;     // within one nanometre, the rounding grain
+    bool overlaps(const Rect& o) const;       // interiors intersect by more than a nanometre (shared edges are fine)
     bool operator==(const Rect& o) const {
         return x_um == o.x_um && y_um == o.y_um && w_um == o.w_um && h_um == o.h_um;
     }

@@ -503,6 +503,12 @@ inline std::string dram_problem(const DeviceSpecification& d) {
 // ----------------------------------------------------------------------------
 inline bool known_periphery_topology(const std::string& t) { return t == "ring"; }
 
+inline bool same_vector_unit(const std::optional<DeviceSpecification::Movers::VectorUnit>& a,
+                             const std::optional<DeviceSpecification::Movers::VectorUnit>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    return !a || (a->lanes == b->lanes && a->rate == b->rate && a->ops == b->ops);
+}
+
 // The fields L-B, L-T1, the naming map and the floorplan read, derived from a dmm_mesh's hierarchy
 // (array, cluster, noc, memory.dma): one owner per resource, and these are its views. Called by the
 // reader; a spec built in C++ calls it after filling the hierarchy.
@@ -540,6 +546,17 @@ inline std::string cluster_problem(const DeviceSpecification& d) {
     const auto& t = c.l3_tile;
     const auto& k = c.compute_tile;
     if (t.capacity_tiles == 0) return "cluster.l3_tile.capacity_tiles must be non-zero";
+    // The derived totals are 32-bit: check them in 64 before they are formed.
+    if (d.array.rows && d.array.cols) {
+        constexpr std::uint64_t kMax = 0xFFFFFFFFull;
+        const std::uint64_t nodes = std::uint64_t(*d.array.rows) * *d.array.cols;
+        if (nodes * 8 > kMax) return "the mesh's " + std::to_string(nodes) + " nodes are more than the spec can count";
+        if (nodes * t.capacity_tiles > kMax)
+            return "cluster.l3_tile.capacity_tiles (" + std::to_string(t.capacity_tiles) + ") over " + std::to_string(nodes) +
+                   " nodes is more L3 slots than the spec can count";
+        if (nodes * c.compute_tile.streamers.count > kMax)
+            return "cluster.compute_tile.streamers.count over the mesh is more than the spec can count";
+    }
     if (t.banks == 0 || !power_of_two(t.banks)) return "cluster.l3_tile.banks must be a power of two";
     if (t.bank_ports == 0) return "cluster.l3_tile.bank_ports must be non-zero";
     if (!finite_positive(t.block_movers.bytes_per_cycle)) return std::string("cluster.l3_tile.block_movers.bytes_per_cycle") + kFinitePos;
@@ -579,7 +596,7 @@ inline std::string cluster_problem(const DeviceSpecification& d) {
         v.movers.streamers != d.movers.streamers || v.movers.str_bytes_per_cycle != d.movers.str_bytes_per_cycle ||
         v.movers.noc_bytes_per_cycle != d.movers.noc_bytes_per_cycle || v.movers.noc_links != d.movers.noc_links)
         return differs("movers");
-    if (v.movers.bm_vector.has_value() != d.movers.bm_vector.has_value() || v.combiner.has_value() != d.combiner.has_value())
+    if (!same_vector_unit(v.movers.bm_vector, d.movers.bm_vector) || !same_vector_unit(v.combiner, d.combiner))
         return differs("the vector units (movers.vector.bm, combiner)");
     return {};
 }
