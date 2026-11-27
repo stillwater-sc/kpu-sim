@@ -119,6 +119,7 @@ inline void write_counters_json(const Simulator& sim, const std::string& path) {
         first = false;
     }
     out << "\n]}\n";
+    out.close();   // a failure flushing the last bytes is the write's failure too
     if (!out) throw std::runtime_error("cycle::write_counters_json: writing " + path + " failed");
 }
 

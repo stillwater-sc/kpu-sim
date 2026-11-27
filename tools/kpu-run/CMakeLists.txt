@@ -413,11 +413,14 @@ if(KPU_BUILD_TESTS)
     # anything is written (a link `latest` -> `logs`). Not on Windows, where links need privileges.
     if(NOT WIN32)
         set(_alias ${CMAKE_CURRENT_BINARY_DIR}/runs/alias)
+        add_test(NAME kpu_run_alias_clean
+            COMMAND ${CMAKE_COMMAND} -E rm -rf ${_alias})   # a rerun starts without the last run's links
+        set_tests_properties(kpu_run_alias_clean PROPERTIES FIXTURES_SETUP alias_dirs)
         add_test(NAME kpu_run_alias_setup
             COMMAND ${CMAKE_COMMAND} -E make_directory ${_alias}/logs)
         add_test(NAME kpu_run_alias_link
             COMMAND ${CMAKE_COMMAND} -E create_symlink ${_alias}/logs ${_alias}/latest)
-        set_tests_properties(kpu_run_alias_setup PROPERTIES FIXTURES_SETUP alias_dirs)
+        set_tests_properties(kpu_run_alias_setup PROPERTIES FIXTURES_SETUP alias_dirs DEPENDS kpu_run_alias_clean)
         set_tests_properties(kpu_run_alias_link PROPERTIES FIXTURES_SETUP alias_dirs DEPENDS kpu_run_alias_setup)
         add_test(NAME kpu_run_system_artifacts_through_a_link
             COMMAND ${CMAKE_COMMAND}
@@ -433,6 +436,22 @@ if(KPU_BUILD_TESTS)
                 -DEXPECT_CODE=2
                 -DMUST_MATCH=name.the.same.file
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+        # A run directory whose trace.json is already a link to its counters.json (#601's review):
+        # the check runs on the directory's own paths, before its run.json is written.
+        add_test(NAME kpu_run_alias_run_dir_link
+            COMMAND ${CMAKE_COMMAND} -E create_symlink counters.json ${_alias}/logs/trace.json)
+        set_tests_properties(kpu_run_alias_run_dir_link PROPERTIES FIXTURES_SETUP alias_dirs DEPENDS kpu_run_alias_setup)
+        foreach(_mode system compute-subsystem)
+            add_test(NAME kpu_run_${_mode}_run_dir_through_a_link
+                COMMAND ${CMAKE_COMMAND}
+                    -DCMD=$<TARGET_FILE:run>
+                    -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--${_mode}$<SEMICOLON>--run-dir$<SEMICOLON>${_alias}/logs
+                    -DEXPECT_CODE=2
+                    -DMUST_MATCH=name.the.same.file
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+            set_tests_properties(kpu_run_${_mode}_run_dir_through_a_link PROPERTIES FIXTURES_REQUIRED alias_dirs
+                                 LABELS "program;driver;cycle;system")
+        endforeach()
         set_tests_properties(kpu_run_system_artifacts_through_a_link kpu_run_compute_artifacts_through_a_link
                              PROPERTIES LABELS "program;driver;cycle;system" FIXTURES_REQUIRED alias_dirs)
     endif()

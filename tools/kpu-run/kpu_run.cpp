@@ -742,13 +742,22 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
     }
 }
 
-// A path as the file it names: absolute, its links resolved as far as they exist (weakly_canonical),
-// so two paths to one file through a link compare equal. Never throws (it runs before the run's try).
+// A path as the file it names: absolute, its links resolved (weakly_canonical, after following the
+// path's own link chain: a link to a file not yet written is resolved too), so two paths to one file
+// through a link compare equal. Never throws (it runs before the run's try).
 std::string resolved_path(const std::string& path) {
+    namespace fs = std::filesystem;
     std::error_code ec;
-    std::filesystem::path p = std::filesystem::absolute(path, ec);
+    fs::path p = fs::absolute(path, ec);
     if (ec) p = path;
-    const std::filesystem::path r = std::filesystem::weakly_canonical(p, ec);
+    for (int hops = 0; hops < 40; ++hops) {   // the path itself a link, perhaps to a file not there yet
+        std::error_code e;
+        if (!fs::is_symlink(fs::symlink_status(p, e)) || e) break;
+        const fs::path target = fs::read_symlink(p, e);
+        if (e) break;
+        p = target.is_absolute() ? target : p.parent_path() / target;
+    }
+    const fs::path r = fs::weakly_canonical(p, ec);
     return (ec ? p : r).lexically_normal().string();
 }
 
@@ -787,8 +796,6 @@ int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast
         trace_path = run_dir + "/trace.json";
         counters_path = run_dir + "/counters.json";
         heatmap_path = run_dir + "/heatmap.json";
-        manifest.emplace(run_dir, a, device->name, "compute-subsystem");
-        if (!manifest->write()) return 2;
     }
     // The heatmap is a .json (its data) with an .svg beside it (its picture), under the same stem.
     const std::string heatmap_svg =
@@ -812,6 +819,11 @@ int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast
                               << outs[i].second << "\n";
                     return 2;
                 }
+    }
+    // After the checks on the final destinations: a refused run writes no run.json.
+    if (!run_dir.empty()) {
+        manifest.emplace(run_dir, a, device->name, "compute-subsystem");
+        if (!manifest->write()) return 2;
     }
     try {
         const auto target = csp::lang::target_from(*device);
@@ -899,10 +911,6 @@ int run_system_level(const std::vector<std::string>& a, const csp::lang::Program
         std::cerr << "kpu-run: " << err << "\n";
         return 2;
     }
-    if (!trace_path.empty() && !counters_path.empty() && resolved_path(trace_path) == resolved_path(counters_path)) {
-        std::cerr << "kpu-run: --system-trace and --system-counters name the same file\n";
-        return 2;
-    }
     std::optional<RunManifest> manifest;
     if (!run_dir.empty()) {
         for (const char* k : {"--system-trace", "--system-counters"})
@@ -918,6 +926,13 @@ int run_system_level(const std::vector<std::string>& a, const csp::lang::Program
         }
         trace_path = run_dir + "/trace.json";
         counters_path = run_dir + "/counters.json";
+    }
+    // On the final destinations (a run directory's own, links and all), before anything is written.
+    if (!trace_path.empty() && !counters_path.empty() && resolved_path(trace_path) == resolved_path(counters_path)) {
+        std::cerr << "kpu-run: the trace and the counters name the same file, " << resolved_path(trace_path) << "\n";
+        return 2;
+    }
+    if (!run_dir.empty()) {
         manifest.emplace(run_dir, a, device->name, "system");
         if (!manifest->write()) return 2;
     }
