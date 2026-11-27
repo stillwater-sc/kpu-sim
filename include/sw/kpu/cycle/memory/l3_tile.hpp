@@ -23,8 +23,10 @@
 // THE BLOCKMOVER'S SIDE (#548, the join; connect_blockmover): the compute subsystem's BlockMover
 // reads tiles for its Moves into L2 and writes its Writebacks' result tiles, on its own links, by
 // address (a slot's bytes are at slot * slot_bytes), in 64-byte beats:
-//   - a READ (l3_program.hpp's Read, a Move of the tile) is served in the program's order of the
-//     Reads, once the slot is READY with the tile it is bound to (the producer before it into its
+//   - a READ (l3_program.hpp's Read, a Move of the tile) is one request (a dense Move's whole tile)
+//     or several (a strided Move's rows), each inside the slot, and done when its bytes have all
+//     been served. Reads are served in the program's order, once the slot is READY with the tile
+//     it is bound to (the producer before it into its
 //     slot): the BlockMover never reads early, nor another residency's tile. A Release waits until
 //     every Read of its tile before it in the program has been served: a Read is a consumer, as a
 //     Store is;
@@ -141,13 +143,20 @@ public:
             if (bm_read_head_ >= bm_reads_.size())
                 throw std::logic_error(where(now) + ": a read of " + std::to_string(q.bytes) + " bytes at " +
                                        std::to_string(q.address) + " from the BlockMover, past the program's Reads");
+            // A Read is one request (a dense Move's whole tile) or several (a strided Move's rows), each
+            // inside its slot and in whole beats; it is done when its bytes have all been served.
             const BmRead& r = bm_reads_[bm_read_head_];
-            if (q.address != std::uint64_t(r.slot) * config_.slot_bytes || q.bytes != r.bytes)
-                throw std::logic_error(where(now) + ": a read of " + std::to_string(q.bytes) + " bytes at " +
-                                       std::to_string(q.address) + " from the BlockMover, where action " +
-                                       std::to_string(r.ticket) + " reads " + std::to_string(r.bytes) + " bytes of slot " +
-                                       std::to_string(r.slot) + " (at " +
-                                       std::to_string(std::uint64_t(r.slot) * config_.slot_bytes) + ")");
+            const std::uint64_t base = std::uint64_t(r.slot) * config_.slot_bytes;
+            const std::string what = where(now) + ": a read of " + std::to_string(q.bytes) + " bytes at " +
+                                     std::to_string(q.address) + " from the BlockMover, where action " +
+                                     std::to_string(r.ticket) + " reads " + std::to_string(r.bytes) + " bytes of slot " +
+                                     std::to_string(r.slot) + " (at " + std::to_string(base) + ")";
+            if (q.address < base || q.address - base + q.bytes > config_.slot_bytes || q.bytes == 0 ||
+                q.bytes % kL3BeatBytes || (q.address - base) % kL3BeatBytes)
+                throw std::logic_error(what + ": outside its slot, or not whole beats");
+            if (bm_read_served_ + q.bytes > r.bytes)
+                throw std::logic_error(what + ": " + std::to_string(bm_read_served_) + " served already, past the " +
+                                       std::to_string(r.bytes) + " bytes action " + std::to_string(r.ticket) + " reads");
             bm_req_ = bm_reads_in_->pop(now);
             bm_sent_ = 0;
             moved = true;
@@ -202,20 +211,26 @@ public:
                 throw std::logic_error(where(now) + ": action " + std::to_string(r.ticket) + " reads " +
                                        std::to_string(r.bytes) + " bytes from slot " + std::to_string(r.slot) +
                                        ", which holds a tile of " + std::to_string(sl.tile_bytes));
+            const std::uint32_t off =
+                static_cast<std::uint32_t>(bm_req_->address - std::uint64_t(r.slot) * config_.slot_bytes) + bm_sent_;
             Beat b;
             b.id = ++beat_id_;
             b.address = bm_req_->address + bm_sent_;
-            b.bytes.assign(sl.bytes.begin() + bm_sent_, sl.bytes.begin() + bm_sent_ + kL3BeatBytes);
+            b.bytes.assign(sl.bytes.begin() + off, sl.bytes.begin() + off + kL3BeatBytes);
             b.tag = bm_req_->tag;
             b.first = bm_sent_ == 0;
-            read_bank = bank(bm_sent_);
+            read_bank = bank(off);
             bm_sent_ += kL3BeatBytes;
-            b.last = bm_sent_ >= r.bytes;
+            b.last = bm_sent_ >= bm_req_->bytes;
             bm_data_->push(now, std::move(b));
-            if (bm_sent_ >= r.bytes) {
-                reads_done_[bm_read_head_] = true;
-                ++bm_read_head_;
+            if (bm_sent_ >= bm_req_->bytes) {   // the request is served; the Read when all its bytes are
+                bm_read_served_ += bm_req_->bytes;
                 bm_req_.reset();
+                if (bm_read_served_ == r.bytes) {
+                    reads_done_[bm_read_head_] = true;
+                    ++bm_read_head_;
+                    bm_read_served_ = 0;
+                }
             }
             moved = true;
             read_turn_ = false;
@@ -465,6 +480,7 @@ private:
         bm_write_beats_ = 0;
         bm_req_.reset();
         bm_sent_ = 0;
+        bm_read_served_ = 0;
         read_turn_ = write_turn_ = false;
     }
 
@@ -485,7 +501,8 @@ private:
     std::vector<bool> reads_done_;
     std::size_t bm_read_head_ = 0, bm_write_head_ = 0, bm_write_beats_ = 0;
     std::optional<L3RowRead> bm_req_;
-    std::uint32_t bm_sent_ = 0;
+    std::uint32_t bm_sent_ = 0;          // the current request's bytes sent
+    std::uint32_t bm_read_served_ = 0;   // the head Read's bytes served by its finished requests
     bool read_turn_ = false, write_turn_ = false;   // the BlockMover's turn at the read / write port
     Link<L3RowRead>* bm_reads_in_ = nullptr;
     Link<Beat>* bm_data_ = nullptr;

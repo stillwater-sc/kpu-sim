@@ -175,3 +175,40 @@ TEST_CASE("The slot credits start with each slot's first producer", "[cycle][l3]
     CHECK_THROWS_WITH(validate_l3_program(L3Program{l3_read(0, 100)}, 1, 1024, "test"),
                       ContainsSubstring("not a positive multiple of 64"));
 }
+
+TEST_CASE("A strided Move's per-row reads make one Read; it completes when all its bytes are served",
+          "[cycle][l3][blockmover][join]") {
+    // #600's review: a strided Move asks L3 for each row at l3_address + k * pitch. Two 64-byte rows
+    // of slot 0 (the program's Read of 128 bytes), written back strided into slot 1.
+    std::vector<std::uint8_t> t(128);
+    for (std::uint32_t i = 0; i < 128; ++i) t[i] = static_cast<std::uint8_t>(i * 5 + 3);
+    const L3Program l3p{l3_load(0, kDram, 128), l3_read(0, 128), l3_write(1, 128), l3_store(1, kDram + 0x1000, 128),
+                        l3_release(0), l3_release(1)};
+    L2Action wb = l2_writeback(0, tile(MatrixID::A, 0), at(1), 64, 2);
+    wb.l3_slot = 1;
+    const L2Program l2p{l2_move(0, tile(MatrixID::A, 0), at(0), 64, 2), wb, l2_release(0, tile(MatrixID::A, 0))};
+    L3BmRig r(l3p, l2p, L3BmRig::Options{});
+    r.channel.preload(kDram, t);
+    REQUIRE(r.sim.run_until_idle(kLimit));
+    CHECK(r.channel.peek(kDram + 0x1000, 128) == t);
+}
+
+TEST_CASE("A read past its Read's bytes, or past the program's Reads, is a fault", "[cycle][l3][blockmover][join]") {
+    SECTION("one request larger than the Read") {
+        // The program reads 64 bytes of slot 0; the dense Move asks for its whole 256-byte tile.
+        const L3Program l3p{l3_load(0, kDram, 256), l3_read(0, 64), l3_release(0)};
+        const L2Program l2p{l2_move_dense(0, tile(MatrixID::A, 0), at(0), 16, 16, 1, false), l2_release(0, tile(MatrixID::A, 0))};
+        L3BmRig r(l3p, l2p, L3BmRig::Options{});
+        r.channel.preload(kDram, tile16(1));
+        CHECK_THROWS_WITH(r.sim.run_until_idle(kLimit), ContainsSubstring("past the 64 bytes action 1 reads"));
+    }
+    SECTION("more rows than the Read's bytes") {
+        // The program reads 64 bytes of slot 0; the strided Move asks for two 64-byte rows: the first
+        // completes the Read, the second has none left.
+        const L3Program l3p{l3_load(0, kDram, 128), l3_read(0, 64), l3_release(0)};
+        const L2Program l2p{l2_move(0, tile(MatrixID::A, 0), at(0), 64, 2), l2_release(0, tile(MatrixID::A, 0))};
+        L3BmRig r(l3p, l2p, L3BmRig::Options{});
+        r.channel.preload(kDram, std::vector<std::uint8_t>(128, 1));
+        CHECK_THROWS_WITH(r.sim.run_until_idle(kLimit), ContainsSubstring("past the program's Reads"));
+    }
+}
