@@ -142,9 +142,11 @@ class CheckRunDirSelfTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
-@unittest.skipUnless(len(sys.argv) > 2 or COMPUTE_DIR, "no compute run directory given")
 class CheckComputeRunDirSelfTest(unittest.TestCase):
     def setUp(self):
+        # Decided after the arguments are parsed: a unittest option (-v) is not a compute directory.
+        if COMPUTE_DIR is None:
+            self.skipTest("no compute run directory given")
         self.tmp = Path(tempfile.mkdtemp(prefix="compute-run-dir-selftest-"))
         self.d = self.tmp / "run"
         shutil.copytree(COMPUTE_DIR, self.d)

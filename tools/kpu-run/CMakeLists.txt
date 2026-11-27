@@ -264,6 +264,12 @@ if(KPU_BUILD_TESTS)
         # The self-test checks a compute run's directory too (#547).
         set_tests_properties(kpu_run_run_dir_check_selftest PROPERTIES
                              FIXTURES_REQUIRED "memory_s1_run_dir;compute_s1_run_dir")
+        # Without the compute directory, and with a unittest option, its compute tests skip (#597's
+        # review: `-v` once counted as the directory).
+        add_test(NAME kpu_run_run_dir_check_selftest_memory_only
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir} -v)
+        set_tests_properties(kpu_run_run_dir_check_selftest_memory_only PROPERTIES
+                             LABELS "program;driver;cycle;memory;mflow" FIXTURES_REQUIRED memory_s1_run_dir)
         add_test(NAME kpu_run_memory_mflow_check_t4
             COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/mflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/memory_t4.mflow)
