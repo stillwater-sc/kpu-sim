@@ -241,3 +241,12 @@ TEST_CASE("any 32-bit count prints and reads back; a larger one is refused", "[p
     CHECK_THAT(refusal(gemm_with("load A[0,0] to l3[1]:0 reads 1", "load A[0,0] to l3[1]:0 reads 4294967296")),
                ContainsSubstring("is out of range (at most 4294967295)"));
 }
+
+TEST_CASE("an operand near the 32-bit maximum still has its tiles", "[program][csp][distributed]") {
+    std::string t = read_file(std::string(kDir) + "vector_to_node3.dcsp");
+    const std::string from = "tensor A[16,16] int8 tile 16x16 in;";
+    t.replace(t.find(from), from.size(), "tensor A[4294967295,16] int8 tile 16x16 in;");
+    const DistributedProgram p = parse_distributed(t);     // A[0,0] is inside A's tiles
+    CHECK(p.operands[0].tile_grid_rows() == 268435456u);   // ceil(4294967295 / 16)
+    CHECK(p.operands[0].tile_grid_cols() == 1u);
+}

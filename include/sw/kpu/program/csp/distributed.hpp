@@ -180,8 +180,10 @@ struct Operand2 {
     std::string type = "fp32";
     std::string io;                     // in | out | inout
 
-    Dim tile_grid_rows() const { return tile_rows ? (rows + tile_rows - 1) / tile_rows : 0; }
-    Dim tile_grid_cols() const { return is_vector ? 1 : tile_cols ? (cols + tile_cols - 1) / tile_cols : 0; }
+    // A ceiling without the addition, which could wrap for a size near the 32-bit maximum.
+    static Dim ceil_div(Dim n, Dim d) { return d ? n / d + (n % d != 0) : 0; }
+    Dim tile_grid_rows() const { return ceil_div(rows, tile_rows); }
+    Dim tile_grid_cols() const { return is_vector ? 1 : ceil_div(cols, tile_cols); }
 };
 
 struct DistributedProgram {
