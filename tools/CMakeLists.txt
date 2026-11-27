@@ -103,6 +103,9 @@ add_subdirectory(kpu-run)
 # ============================================================================
 add_subdirectory(csp-gen)
 
+# CSP program checker -- a level-2 program against its deployment (#607)
+add_subdirectory(csp-check)
+
 # ============================================================================
 # Floorplan — the physical shape of a deployment (#286 step 1)
 # ============================================================================
