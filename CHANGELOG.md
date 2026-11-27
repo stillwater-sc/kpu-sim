@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The join, Phase 3, step 3d: the evaluation** (#548): `docs/analysis/cycle-prototype-evaluation.md`.
+  It covers where the cycles go, which components bound the run, and the RTL's 907/744 against the core,
+  and gives a recommendation on decision 5 (the cycle core as L-CA), which is the user's to make.
+  - **The int8 64³ on `kpu_s1`** is L3-bound at 9 tiles (6905 clocks). From 16 tiles up it is bound by
+    the BlockMover and the L2 slots (5897 clocks): every call moves both operands, since the program
+    stages nothing.
+  - **The array is at 0.54%:** a 16×16 tile can use at most 3.1% of the 128×64 PEs.
+  - **On the RTL's 8×8×16** the core's double buffering pays 0.65×, against the RTL's 0.82× and today's
+    L-CA's 0.96×. The counts are not yet calibrated.
+
 - **The join, Phase 3, step 3c: the joined machine** (#548): `cycle/system/kpu_system.hpp` and
   `kpu-run --system` (with `--system-trace`, `--system-counters`, or `--run-dir`). The memory subsystem and
   the compute subsystem run on one simulator, from one CSP program: DRAM → DMA → L3 → BlockMover → L2 →

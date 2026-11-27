@@ -1,6 +1,6 @@
 # A bottom-up, cycle-based KPU prototype: the cycle core, the memory subsystem, the compute subsystem
 
-**Status:** planned 2026-11-24. The direction (§2) and the decisions (§8) are the user's. Phase 0 is next.
+**Status:** planned 2026-11-24; Phases 0–3 built by 2026-11-27 (the evaluation: `docs/analysis/cycle-prototype-evaluation.md`). The direction (§2) and the decisions (§8) are the user's; decision 5 is open.
 **Replaces, as the route to a working prototype:** #401's slices 3 and later (`docs/plans/systolic-tile-at-lca.md`).
 That plan's RTL analysis (§1, §3.2) stays the reference for what the compute subsystem must do.
 **Parked:** branch `feat/issue-458-systolic-array-lca` (an OS gemm timed by the RTL's formulas inside the
