@@ -29,6 +29,7 @@ ARTIFACTS = {
                          "mflow": "mem.mflow"},
     "compute-subsystem": {"summary": "summary.txt", "counters": "counters.json", "perfetto": "trace.json",
                           "heatmap": "heatmap.json", "heatmap_svg": "heatmap.svg"},
+    "system": {"summary": "summary.txt", "counters": "counters.json", "perfetto": "trace.json"},
 }
 STATUSES = ("running", "ok", "failed", "error")
 

@@ -324,7 +324,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:run>
             -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--compute-subsystem$<SEMICOLON>--memory-subsystem
             -DEXPECT_CODE=2
-            -DMUST_MATCH=separate.runs.until.the.join
+            -DMUST_MATCH=are.separate.runs
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
     # #547's review: the trace and the heatmap's .svg naming one file would leave only the last written.
     add_test(NAME kpu_run_compute_artifacts_are_distinct
@@ -352,6 +352,61 @@ if(KPU_BUILD_TESTS)
                     ${CMAKE_CURRENT_BINARY_DIR}/runs/compute_s1/counters.json)
         set_tests_properties(kpu_run_compute_run_dir_check kpu_run_compute_run_dir_trace_check
                              PROPERTIES LABELS "program;driver;cycle;compute" FIXTURES_REQUIRED compute_s1_run_dir)
+    endif()
+
+    # --system (#548, the join): the int8 64^3 on kpu_s1 from DRAM to DRAM, with Phase 1's L3 of 9
+    # tiles (its slots reused). Its trace and counters answer to check_trace.py, its directory to
+    # check_run_dir.py.
+    add_test(NAME csp_gen_system_s1
+        COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 64 --tile 16 --dtype int8 --l3 9
+                --target ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json
+                -o ${CMAKE_CURRENT_BINARY_DIR}/system_s1.csp)
+    set_tests_properties(csp_gen_system_s1 PROPERTIES LABELS "program;driver;cycle;system" FIXTURES_SETUP system_s1_program)
+    add_test(NAME kpu_run_system_s1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/system_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--system$<SEMICOLON>--system-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/system_s1.json$<SEMICOLON>--system-counters$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/system_s1.counters.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=16.of.16.stored.tiles.in.DRAM.bit.for.bit,.L-B.s..laws:.hold.on.every.row.*DMA.*array.*utilization
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_system_s1 PROPERTIES LABELS "program;driver;cycle;system"
+                         FIXTURES_REQUIRED system_s1_program FIXTURES_SETUP system_s1_run)
+    add_test(NAME kpu_run_system_run_dir_s1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/system_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--system$<SEMICOLON>--run-dir$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/system_s1
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=16.of.16.stored.tiles.in.DRAM.bit.for.bit
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_system_run_dir_s1 PROPERTIES LABELS "program;driver;cycle;system"
+                         FIXTURES_REQUIRED system_s1_program FIXTURES_SETUP system_s1_run_dir)
+    add_test(NAME kpu_run_system_needs_a_deployment
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--system
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--system.needs.--deploy
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    add_test(NAME kpu_run_system_trace_needs_the_run
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--system-trace$<SEMICOLON>x.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--system-trace.records.a.--system.run
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_system_needs_a_deployment kpu_run_system_trace_needs_the_run
+                         PROPERTIES LABELS "program;driver;cycle;system")
+    if(KPU_RUN_PYTHON3)
+        add_test(NAME kpu_run_system_trace_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tests/cycle/check_trace.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/system_s1.json ${CMAKE_CURRENT_BINARY_DIR}/system_s1.counters.json)
+        set_tests_properties(kpu_run_system_trace_check PROPERTIES LABELS "program;driver;cycle;system"
+                             FIXTURES_REQUIRED system_s1_run)
+        add_test(NAME kpu_run_system_run_dir_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/check_run_dir.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/runs/system_s1 --status ok)
+        set_tests_properties(kpu_run_system_run_dir_check PROPERTIES LABELS "program;driver;cycle;system"
+                             FIXTURES_REQUIRED system_s1_run_dir)
     endif()
 
     # A level with no interpreter must be refused, NOT silently substituted -- and the

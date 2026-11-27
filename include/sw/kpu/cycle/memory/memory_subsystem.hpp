@@ -181,9 +181,9 @@ inline MemoryRun run_memory_subsystem(const CspL3Plan& plan, const program::plat
     return out;
 }
 
-// The summary kpu-run prints: what ran, the data and the laws, X, U and the stalls of the DMA
-// engine, the channel, the NoC and the L3 tile, then every component's and link's row.
-inline std::string format_memory_summary(const CspL3Plan& plan, const MemoryRun& r) {
+// The DMA engine's, the channel's, the NoC's and the L3 tile's lines of the summary: X, U, the
+// stalls, and each one's own counts (the joined system's summary prints them too, #548).
+inline std::string format_memory_lines(const MemoryRun& r, std::uint32_t slots) {
     std::string s;
     char b[512];
     auto row = [&](const std::string& name) -> const ReportRow* {
@@ -197,19 +197,6 @@ inline std::string format_memory_summary(const CspL3Plan& plan, const MemoryRun&
             if (c.stalls[k]) t += std::string(t.empty() ? "" : ", ") + to_string(static_cast<Stall>(k)) + " " + std::to_string(c.stalls[k]);
         return t.empty() ? std::string("none") : t;
     };
-    std::snprintf(b, sizeof b, "memory subsystem: %zu Loads, %zu Fills (C, from L-B), %zu Stores, %zu Releases; %u L3 slots of %u bytes, %s\n",
-                  plan.loads, plan.fills, plan.stores, plan.releases, plan.slots, plan.slot_bytes,
-                  r.noc ? "over the NoC" : "on a direct link");
-    s += b;
-    if (r.deadlock) s += "DEADLOCK: " + *r.deadlock + "\n";
-    if (r.violation) s += "INVARIANT VIOLATED: " + *r.violation + "\n";
-    if (!r.finished && !r.deadlock && !r.violation) s += "the run did not finish within its limit\n";
-    std::snprintf(b, sizeof b, "  run          %.3f us; data: %zu of %zu slots and %zu of %zu stored tiles bit for bit; laws: %s\n",
-                  double(r.end) / 1e6, r.slots_checked, plan.placed.size(), r.tiles_checked, plan.outputs.size(),
-                  r.law_errors.empty() ? "hold on every row" : "VIOLATED");
-    s += b;
-    for (const auto& e : r.data_errors) s += "  DATA: " + e + "\n";
-    for (const auto& e : r.law_errors) s += "  LAW: " + e + "\n";
     if (const ReportRow* d = row("dma")) {
         std::snprintf(b, sizeof b, "  DMA          X %.4f/cycle, U %.3f; %llu read and %llu write bursts, at most %llu in flight; stalls: %s\n",
                       d->c.throughput(), d->c.utilization(), (unsigned long long)r.dma.read_bursts,
@@ -247,10 +234,32 @@ inline std::string format_memory_summary(const CspL3Plan& plan, const MemoryRun&
     }
     if (const ReportRow* d = row("l3")) {
         std::snprintf(b, sizeof b, "  L3           X %.4f tiles/cycle, U %.3f; slots live: mean %.2f, at most %llu of %u; a tile's mean residence %.1f cycles; stalls: %s\n",
-                      d->c.throughput(), d->c.utilization(), r.l3_mean_live, (unsigned long long)r.l3_max_live, plan.slots,
+                      d->c.throughput(), d->c.utilization(), r.l3_mean_live, (unsigned long long)r.l3_max_live, slots,
                       d->c.mean_residence(), stalls(d->c).c_str());
         s += b;
     }
+    return s;
+}
+
+// The summary kpu-run prints: what ran, the data and the laws, X, U and the stalls of the DMA
+// engine, the channel, the NoC and the L3 tile, then every component's and link's row.
+inline std::string format_memory_summary(const CspL3Plan& plan, const MemoryRun& r) {
+    std::string s;
+    char b[512];
+    std::snprintf(b, sizeof b, "memory subsystem: %zu Loads, %zu Fills (C, from L-B), %zu Stores, %zu Releases; %u L3 slots of %u bytes, %s\n",
+                  plan.loads, plan.fills, plan.stores, plan.releases, plan.slots, plan.slot_bytes,
+                  r.noc ? "over the NoC" : "on a direct link");
+    s += b;
+    if (r.deadlock) s += "DEADLOCK: " + *r.deadlock + "\n";
+    if (r.violation) s += "INVARIANT VIOLATED: " + *r.violation + "\n";
+    if (!r.finished && !r.deadlock && !r.violation) s += "the run did not finish within its limit\n";
+    std::snprintf(b, sizeof b, "  run          %.3f us; data: %zu of %zu slots and %zu of %zu stored tiles bit for bit; laws: %s\n",
+                  double(r.end) / 1e6, r.slots_checked, plan.placed.size(), r.tiles_checked, plan.outputs.size(),
+                  r.law_errors.empty() ? "hold on every row" : "VIOLATED");
+    s += b;
+    for (const auto& e : r.data_errors) s += "  DATA: " + e + "\n";
+    for (const auto& e : r.law_errors) s += "  LAW: " + e + "\n";
+    s += format_memory_lines(r, plan.slots);
     s += format_report(r.rows);
     return s;
 }

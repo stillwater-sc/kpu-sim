@@ -68,6 +68,22 @@ in place of `mem.mflow/`:
 - **`heatmap.json`** has each PE's clocks by cause.
 - **`heatmap.svg`** shades each PE by its useful fraction; hover a cell for its counts.
 
+### The joined machine
+
+`--system` runs the whole program on one simulator, the memory subsystem and the compute subsystem
+joined (`docs/plans/cycle-based-kpu-prototype.md` §6): DRAM → L3 → array → L3 → DRAM. No L3 size
+limit applies here; the L3's slots are reused as the program releases them:
+
+```bash
+./build/tools/csp-gen/kpu-csp-gen --algo matmul --size 64 --tile 16 --dtype int8 --l3 9 \
+    --target tests/program/deploy/kpu_s1.json -o build/runs/mm64s.csp
+./build/tools/kpu-run/kpu-run --program build/runs/mm64s.csp --deploy tests/program/deploy/kpu_s1.json \
+    --system --run-dir build/runs/mm64s
+```
+
+It checks DRAM against L-B, bit for bit, and prints both subsystems' lines. The run directory holds
+`summary.txt`, `counters.json`, `trace.json` and `run.json`.
+
 ## 2. Check
 
 Check before you look: a check that fails names the burst, command or request to look at.
