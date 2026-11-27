@@ -32,6 +32,7 @@
 #include <sw/kpu/cycle/compute/compute_subsystem.hpp>
 #include <sw/kpu/cycle/compute/csp_compute_program.hpp>
 #include <sw/kpu/cycle/memory/csp_l3_program.hpp>
+#include <sw/kpu/cycle/system/kpu_system.hpp>
 #include <sw/kpu/cycle/memory/memory_subsystem.hpp>
 #include <sw/kpu/cycle/record/mflow_recorder.hpp>
 #include <sw/kpu/cycle/trace.hpp>
@@ -152,6 +153,16 @@ kpu-run runs a program; it does not write one. kpu-csp-gen writes CSP programs.
   --compute-counters <file.json> its counters, for tests/cycle/check_trace.py
   --compute-heatmap <file.json>  the array's utilization heatmap: each PE's clocks by cause, and
                             the picture beside it (<file>.svg)
+  --system                  run the program on the JOINED MACHINE (docs/plans/cycle-based-kpu-
+                            prototype.md §6): DRAM -> DMA -> L3 -> BlockMover -> L2 -> Streamer ->
+                            the deployment's PE array -> Combiner -> L2 -> L3 -> DMA -> DRAM, on one
+                            simulator. Nothing hypothesized: C reaches DRAM from the array. It
+                            checks DRAM against L-B bit for bit, the invariants every cycle and the
+                            laws, and prints both subsystems' counters. An int8 OS gemm on a
+                            single-L3 deployment. Needs --deploy; takes only --system-trace,
+                            --system-counters and --run-dir
+  --system-trace <file.json>     its Perfetto trace: a track per component and link
+  --system-counters <file.json>  its counters, for tests/cycle/check_trace.py
   --run-dir <dir>           write the run's artifacts into one directory, under fixed names:
                             summary.txt, counters.json, trace.json (Perfetto), and mem.mflow/
                             (a memory run) or heatmap.json and heatmap.svg (a compute run), and
@@ -731,6 +742,47 @@ int run_memory(const std::vector<std::string>& a, const csp::lang::Program& ast,
     }
 }
 
+// A path as the file it names: absolute, its links resolved (weakly_canonical, after following the
+// path's own link chain: a link to a file not yet written is resolved too), so two paths to one file
+// through a link compare equal. Never throws (it runs before the run's try).
+std::string resolved_path(const std::string& path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p = fs::absolute(path, ec);
+    if (ec) p = path;
+    for (int hops = 0; hops < 40; ++hops) {   // the path itself a link, perhaps to a file not there yet
+        std::error_code e;
+        if (!fs::is_symlink(fs::symlink_status(p, e)) || e) break;
+        const fs::path target = fs::read_symlink(p, e);
+        if (e) break;
+        p = target.is_absolute() ? target : p.parent_path() / target;
+    }
+    const fs::path r = fs::weakly_canonical(p, ec);
+    return (ec ? p : r).lexically_normal().string();
+}
+
+// Every artifact a run writes is its own file: two destinations naming one file (by a link, a
+// run directory's own included) would leave only the last written. False, with the reason on stderr,
+// if two do. `run_dir`: its summary.txt and run.json are destinations too.
+bool distinct_artifacts(std::vector<std::pair<std::string, std::string>> outs, const std::string& run_dir) {
+    if (!run_dir.empty()) {
+        outs.push_back({"the run directory's summary.txt", run_dir + "/summary.txt"});
+        outs.push_back({"the run directory's run.json", run_dir + "/run.json"});
+        outs.push_back({"the run directory's run.json.tmp", run_dir + "/run.json.tmp"});   // the manifest's temporary
+    }
+    std::vector<std::pair<std::string, std::string>> resolved;
+    for (const auto& [what, path] : outs)
+        if (!path.empty()) resolved.push_back({what, resolved_path(path)});
+    for (std::size_t i = 0; i < resolved.size(); ++i)
+        for (std::size_t k = i + 1; k < resolved.size(); ++k)
+            if (resolved[i].second == resolved[k].second) {
+                std::cerr << "kpu-run: " << resolved[i].first << " and " << resolved[k].first << " name the same file, "
+                          << resolved[i].second << "\n";
+                return false;
+            }
+    return true;
+}
+
 // --compute-subsystem: the program's compute traffic on the cycle core (#547).
 int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast, const platform::DeviceSpecification* device) {
     static const std::set<std::string> kCompute = {"--program", "--deploy", "--compute-subsystem", "--compute-trace",
@@ -766,8 +818,6 @@ int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast
         trace_path = run_dir + "/trace.json";
         counters_path = run_dir + "/counters.json";
         heatmap_path = run_dir + "/heatmap.json";
-        manifest.emplace(run_dir, a, device->name, "compute-subsystem");
-        if (!manifest->write()) return 2;
     }
     // The heatmap is a .json (its data) with an .svg beside it (its picture), under the same stem.
     const std::string heatmap_svg =
@@ -776,25 +826,16 @@ int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast
         std::cerr << "kpu-run: --compute-heatmap names the .json; its .svg is written beside it\n";
         return 2;
     }
-    {
-        // Every artifact its own file: two paths naming one file would leave only the last written.
-        std::vector<std::pair<std::string, std::string>> outs;
-        for (const auto& [what, path] : {std::pair<const char*, const std::string*>{"--compute-trace", &trace_path},
-                                         {"--compute-counters", &counters_path},
-                                         {"--compute-heatmap", &heatmap_path},
-                                         {"--compute-heatmap's .svg", &heatmap_svg}})
-            if (!path->empty()) {
-                std::error_code ec;
-                const std::filesystem::path abs = std::filesystem::absolute(*path, ec);
-                outs.push_back({what, (ec ? std::filesystem::path(*path) : abs).lexically_normal().string()});
-            }
-        for (std::size_t i = 0; i < outs.size(); ++i)
-            for (std::size_t k = i + 1; k < outs.size(); ++k)
-                if (outs[i].second == outs[k].second) {
-                    std::cerr << "kpu-run: " << outs[i].first << " and " << outs[k].first << " name the same file, "
-                              << outs[i].second << "\n";
-                    return 2;
-                }
+    if (!distinct_artifacts({{"--compute-trace", trace_path},
+                             {"--compute-counters", counters_path},
+                             {"--compute-heatmap", heatmap_path},
+                             {"--compute-heatmap's .svg", heatmap_svg}},
+                            run_dir))
+        return 2;
+    // After the checks on the final destinations: a refused run writes no run.json.
+    if (!run_dir.empty()) {
+        manifest.emplace(run_dir, a, device->name, "compute-subsystem");
+        if (!manifest->write()) return 2;
     }
     try {
         const auto target = csp::lang::target_from(*device);
@@ -862,6 +903,104 @@ int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast
     }
 }
 
+// --system: the program on the joined machine, DRAM -> L3 -> array -> L3 -> DRAM (#548).
+int run_system_level(const std::vector<std::string>& a, const csp::lang::Program& ast,
+                     const platform::DeviceSpecification* device) {
+    static const std::set<std::string> kSystem = {"--program", "--deploy", "--system", "--system-trace",
+                                                  "--system-counters", "--run-dir"};
+    for (const std::string& t : a)
+        if (t.rfind("--", 0) == 0 && !kSystem.count(t)) {
+            std::cerr << "kpu-run: " << t << " does not apply to a --system run\n";
+            return 2;
+        }
+    if (!device) {
+        std::cerr << "kpu-run: --system needs --deploy: the machine it runs on\n";
+        return 2;
+    }
+    std::string err, trace_path, counters_path, run_dir;
+    if (!arg_required(a, "--system-trace", trace_path, err) || !arg_required(a, "--system-counters", counters_path, err) ||
+        !arg_required(a, "--run-dir", run_dir, err)) {
+        std::cerr << "kpu-run: " << err << "\n";
+        return 2;
+    }
+    std::optional<RunManifest> manifest;
+    if (!run_dir.empty()) {
+        for (const char* k : {"--system-trace", "--system-counters"})
+            if (arg_present(a, k)) {
+                std::cerr << "kpu-run: --run-dir names every artifact itself; drop " << k << "\n";
+                return 2;
+            }
+        std::error_code ec;
+        std::filesystem::create_directories(run_dir, ec);
+        if (ec) {
+            std::cerr << "kpu-run: cannot create " << run_dir << ": " << ec.message() << "\n";
+            return 2;
+        }
+        trace_path = run_dir + "/trace.json";
+        counters_path = run_dir + "/counters.json";
+    }
+    // On the final destinations (a run directory's own, links and all), before anything is written.
+    if (!distinct_artifacts({{"--system-trace", trace_path}, {"--system-counters", counters_path}}, run_dir)) return 2;
+    if (!run_dir.empty()) {
+        manifest.emplace(run_dir, a, device->name, "system");
+        if (!manifest->write()) return 2;
+    }
+    try {
+        const auto target = csp::lang::target_from(*device);
+        const csp::CspProgram p = csp::lang::compile(ast, &target);
+        const TileProgram in = csp_inputs(ast);
+        const CspLevelOutcome lb = csp_run_level(ExecutionLevel::Behavioral, ast, device, in);
+        if (lb.skipped) {
+            std::cerr << "kpu-run: L-B, the data oracle, did not run: " << *lb.skipped << "\n";
+            if (manifest) manifest->j["error"] = "L-B did not run: " + *lb.skipped;
+            if (manifest) manifest->finish("error", 1);
+            return 1;
+        }
+        const sw::kpu::cycle::SystemPlan plan = sw::kpu::cycle::plan_system(p, in, lb.values);
+        sw::kpu::cycle::Tracer tracer;
+        sw::kpu::cycle::SystemOptions o;
+        o.tracer = trace_path.empty() ? nullptr : &tracer;
+        o.counters = counters_path;
+        const sw::kpu::cycle::SystemRun r = sw::kpu::cycle::run_system(plan, *device, o);
+        const std::string summary = sw::kpu::cycle::format_system_summary(plan, r);
+        std::cout << summary;
+        if (o.tracer) tracer.write(trace_path);
+        const int code = r.ok() ? 0 : 1;
+        if (manifest) {
+            {
+                std::ofstream out(run_dir + "/summary.txt");
+                out << summary;
+                out.close();
+                if (!out) {
+                    std::cerr << "kpu-run: cannot write " << run_dir << "/summary.txt\n";
+                    manifest->j["error"] = "cannot write summary.txt";
+                    manifest->finish("error", 2);
+                    return 2;
+                }
+            }
+            manifest->j["artifacts"] = {{"summary", "summary.txt"}, {"counters", "counters.json"}, {"perfetto", "trace.json"}};
+            manifest->j["result"] = {{"finished", r.memory.finished},
+                                     {"end_ps", r.memory.end},
+                                     {"kpu_cycles", r.compute.kpu_cycles},
+                                     {"deadlock", r.memory.deadlock.has_value()},
+                                     {"violation", r.memory.violation.has_value()},
+                                     {"data_errors", r.memory.data_errors.size()},
+                                     {"law_errors", r.memory.law_errors.size()},
+                                     {"tiles_checked", r.memory.tiles_checked},
+                                     {"array_utilization", r.compute.utilization()}};
+            if (!manifest->finish(r.ok() ? "ok" : "failed", code)) return 2;
+        }
+        return code;
+    } catch (const std::exception& e) {
+        std::cerr << "kpu-run: --system: " << e.what() << "\n";
+        if (manifest) {
+            manifest->j["error"] = e.what();
+            manifest->finish("error", 1);
+        }
+        return 1;
+    }
+}
+
 int run_csp_program(const std::vector<std::string>& a, const std::string& path) {
     // What a CSP program run accepts. Everything else is the L0 path's (or the generator's:
     // --algo and friends are kpu-csp-gen's), and is refused by name rather than ignored.
@@ -874,7 +1013,8 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
                                                    "--tile-commands", "--bubbles", "--memory-subsystem",
                                                    "--memory-trace", "--memory-counters",
                                                    "--memory-mflow", "--run-dir", "--compute-subsystem",
-                                                   "--compute-trace", "--compute-counters", "--compute-heatmap"};
+                                                   "--compute-trace", "--compute-counters", "--compute-heatmap",
+                                                   "--system", "--system-trace", "--system-counters"};
     for (const std::string& t : a)
         if (t.rfind("--", 0) == 0 && !kOptions.count(t)) {
             std::cerr << "kpu-run: " << t << " does not apply to a CSP program"
@@ -961,10 +1101,12 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
         }
     }
     const platform::DeviceSpecification* device = deployment ? &deployment->devices.front() : nullptr;
-    if (has_flag(a, "--memory-subsystem") && has_flag(a, "--compute-subsystem")) {
-        std::cerr << "kpu-run: --memory-subsystem and --compute-subsystem are separate runs until the join\n";
+    if (int(has_flag(a, "--memory-subsystem")) + int(has_flag(a, "--compute-subsystem")) + int(has_flag(a, "--system")) > 1) {
+        std::cerr << "kpu-run: --memory-subsystem, --compute-subsystem and --system are separate runs; --system joins "
+                     "the two\n";
         return 2;
     }
+    if (has_flag(a, "--system")) return run_system_level(a, *ast, device);
     if (has_flag(a, "--memory-subsystem")) return run_memory(a, *ast, device);
     if (has_flag(a, "--compute-subsystem")) return run_compute(a, *ast, device);
     for (const char* k : {"--memory-trace", "--memory-counters", "--memory-mflow"})
@@ -977,8 +1119,13 @@ int run_csp_program(const std::vector<std::string>& a, const std::string& path) 
             std::cerr << "kpu-run: " << k << " records a --compute-subsystem run\n";
             return 2;
         }
+    for (const char* k : {"--system-trace", "--system-counters"})
+        if (arg_present(a, k)) {
+            std::cerr << "kpu-run: " << k << " records a --system run\n";
+            return 2;
+        }
     if (arg_present(a, "--run-dir")) {
-        std::cerr << "kpu-run: --run-dir records a --memory-subsystem run or a --compute-subsystem run\n";
+        std::cerr << "kpu-run: --run-dir records a --memory-subsystem run or a --compute-subsystem run or a --system run\n";
         return 2;
     }
 

@@ -65,30 +65,102 @@
 
 namespace sw::kpu::cycle {
 
-// The whole path, wired (step 2d's rig, #545, made the library's: kpu-run and the tests build the
-// same machine).
+// The compute subsystem's components and links, the BlockMover's L3 side left to its L3: what the
+// compute machine below (with the stand-in L3) and the joined machine (#548, with the memory
+// subsystem's L3 tile; system/kpu_system.hpp) both build, so there is one wiring of the path.
+struct ComputeOptions {
+    L2::Config l2{6, 16, 4, 16, 4, 2, 1};   // 16-byte rows: K up to 16 int8 a command, 4 int32 a result row
+    std::uint32_t lanes = 4;                 // R: the array's rows
+    std::uint32_t cols = 0;                  // C: its columns (0: R)
+    std::uint32_t fifo_depth = 0;            // the north FIFOs' (0: C)
+    bool log = true;                         // the array's MAC and launch log
+    std::uint32_t read_delay = 32;
+    std::int32_t drain_adjust = 0;
+    std::uint32_t bus_bytes = 16;
+    double kpu_ghz = 1.0;
+    double l2_ghz = 0.25;
+    std::size_t streamer_link = 32;
+    std::size_t result_link = 16;           // the Combiner -> L2 crossing's entries
+    Tracer* tracer = nullptr;
+};
+
+struct ComputeParts {
+    BlockMover* bm = nullptr;
+    L2* l2 = nullptr;
+    Streamer* st = nullptr;
+    PEArray* array = nullptr;
+    Combiner* combiner = nullptr;
+    // The BlockMover's L3 side, for its L3 to connect: its read requests, the beats back, its writes.
+    Link<L3RowRead>* l3_reads = nullptr;
+    Link<Beat>* l3_data = nullptr;
+    Link<Beat>* l3_writes = nullptr;
+};
+
+// Adds the BlockMover, the L2, the Streamer, the array and the Combiner to `sim`, the BlockMover's
+// L3 links to `l3`, and wires everything but the L3's end of those links. Registers the three-way
+// L2 slot-credit check.
+inline ComputeParts build_compute(Simulator& sim, Domain& kpu, Domain& l2d, Component& l3, const L2Program& program,
+                                  const StreamerProgram& commands, const ComputeOptions& o) {
+    const std::uint32_t cols = o.cols ? o.cols : o.lanes;
+    ComputeParts p;
+    p.bm = &sim.add<BlockMover>("bm", kpu, BlockMover::Config{o.l2.slots, o.l2.rows_per_slot, o.l2.row_bytes, o.bus_bytes, 2, 8},
+                                program);
+    p.l2 = &sim.add<L2>("l2", l2d, o.l2, program);
+    p.st = &sim.add<Streamer>("st", kpu,
+                              Streamer::Config{o.lanes, cols, o.l2.slots, o.l2.rows_per_slot, o.l2.row_bytes, 1,
+                                               o.read_delay, 0, o.drain_adjust},
+                              commands, program);
+    p.array = &sim.add<PEArray>("array", kpu, PEArray::Config{o.lanes, cols, 1, o.log});
+    p.combiner = &sim.add<Combiner>("combiner", kpu, Combiner::Config{cols, o.fifo_depth ? o.fifo_depth : cols, o.l2.row_bytes},
+                                    commands);
+    check_feeds(commands, program);
+    BlockMover& bm = *p.bm;
+    L2& l2 = *p.l2;
+    Streamer& st = *p.st;
+    PEArray& array = *p.array;
+    Combiner& combiner = *p.combiner;
+    p.l3_reads = &sim.link<L3RowRead>("bm->l3 reads", bm, l3, 2);
+    p.l3_data = &sim.link<Beat>("l3->bm", l3, bm, 2);
+    p.l3_writes = &sim.link<Beat>("bm->l3 writes", bm, l3, 2);
+    auto& l2_writes = sim.crossing<L2RowWrite>("bm->l2 writes", bm, l2, 4);
+    auto& l2_reads = sim.crossing<L2RowRead>("bm->l2 reads", bm, l2, 4);
+    auto& l2_data = sim.crossing<L2RowData>("l2->bm", l2, bm, 4);
+    auto& credits = sim.crossing<SlotCredit>("l2 credits", l2, bm, o.l2.slots, 2, 2);
+    auto& st_reads = sim.crossing<L2RowRead>("st->l2 reads", st, l2, o.streamer_link);
+    auto& st_data = sim.crossing<L2RowData>("l2->st", l2, st, o.streamer_link);
+    auto& ready = sim.crossing<SlotReady>("l2 tile-ready", l2, st, 4);
+    auto& st_credits = sim.crossing<SlotCredit>("l2 result credits", l2, st, o.l2.slots, 2, 2);
+    auto& results = sim.crossing<L2RowWrite>("combiner->l2", combiner, l2, o.result_link);
+    std::vector<Link<L1Element>*> a, b;
+    std::vector<Link<ArrayResult>*> c;
+    for (std::uint32_t m = 0; m < o.lanes; ++m)
+        a.push_back(&sim.link<L1Element>("A lane " + std::to_string(m), st, array, 2));
+    for (std::uint32_t m = 0; m < cols; ++m) {
+        b.push_back(&sim.link<L1Element>("B lane " + std::to_string(m), st, array, 2));
+        c.push_back(&sim.link<ArrayResult>("north " + std::to_string(m), array, combiner, 2));
+    }
+    bm.connect(*p.l3_reads, *p.l3_data, *p.l3_writes, l2_writes, l2_reads, l2_data, credits);
+    l2.connect(l2_writes, l2_reads, l2_data, credits);
+    l2.connect_streamer(st_reads, st_data, ready, &st_credits);
+    l2.connect_combiner(results);
+    st.connect(st_reads, st_data, ready, a, b, &st_credits);
+    array.connect(a, b, c);
+    combiner.connect(c, results);
+    sim.add_invariant("l2 slot credits", [&bm, &st, &l2] { check_l2_slot_credits(bm, st, l2); });
+    return p;
+}
+
+// The whole path with the stand-in L3 (step 2d's rig, #545, made the library's: kpu-run and the
+// tests build the same machine).
 struct ComputeMachine {
-    struct Options {
-        L2::Config l2{6, 16, 4, 16, 4, 2, 1};   // 16-byte rows: K up to 16 int8 a command, 4 int32 a result row
-        std::uint32_t lanes = 4;                 // R: the array's rows
-        std::uint32_t cols = 0;                  // C: its columns (0: R)
-        std::uint32_t fifo_depth = 0;            // the north FIFOs' (0: C)
-        bool log = true;                         // the array's MAC and launch log
-        std::uint32_t read_delay = 32;
-        std::int32_t drain_adjust = 0;
-        std::uint32_t bus_bytes = 16;
-        double kpu_ghz = 1.0;
-        double l2_ghz = 0.25;
-        std::size_t streamer_link = 32;
-        std::size_t result_link = 16;           // the Combiner -> L2 crossing's entries
-        Tracer* tracer = nullptr;
-    };
+    using Options = ComputeOptions;
 
     std::uint32_t cols;
     Simulator sim;
     Domain& kpu;
     Domain& l2d;
     L3Standin& l3;
+    ComputeParts parts;
     BlockMover& bm;
     L2& l2;
     Streamer& st;
@@ -100,48 +172,13 @@ struct ComputeMachine {
           kpu(traced(sim, o.tracer).add_domain(Domain::from_ghz("kpu", o.kpu_ghz))),
           l2d(sim.add_domain(Domain::from_ghz("l2", o.l2_ghz))),
           l3(sim.add<L3Standin>("l3", kpu, o.bus_bytes)),
-          bm(sim.add<BlockMover>("bm", kpu,
-                                 BlockMover::Config{o.l2.slots, o.l2.rows_per_slot, o.l2.row_bytes, o.bus_bytes, 2, 8},
-                                 program)),
-          l2(sim.add<L2>("l2", l2d, o.l2, program)),
-          st(sim.add<Streamer>("st", kpu,
-                               Streamer::Config{o.lanes, cols, o.l2.slots, o.l2.rows_per_slot, o.l2.row_bytes, 1,
-                                                o.read_delay, 0, o.drain_adjust},
-                               commands, program)),
-          array(sim.add<PEArray>("array", kpu, PEArray::Config{o.lanes, cols, 1, o.log})),
-          combiner(sim.add<Combiner>("combiner", kpu,
-                                     Combiner::Config{cols, o.fifo_depth ? o.fifo_depth : cols, o.l2.row_bytes},
-                                     commands)) {
-        check_feeds(commands, program);
-        auto& l3_reads = sim.link<L3RowRead>("bm->l3 reads", bm, l3, 2);
-        auto& l3_data = sim.link<Beat>("l3->bm", l3, bm, 2);
-        auto& l3_writes = sim.link<Beat>("bm->l3 writes", bm, l3, 2);
-        auto& l2_writes = sim.crossing<L2RowWrite>("bm->l2 writes", bm, l2, 4);
-        auto& l2_reads = sim.crossing<L2RowRead>("bm->l2 reads", bm, l2, 4);
-        auto& l2_data = sim.crossing<L2RowData>("l2->bm", l2, bm, 4);
-        auto& credits = sim.crossing<SlotCredit>("l2 credits", l2, bm, o.l2.slots, 2, 2);
-        auto& st_reads = sim.crossing<L2RowRead>("st->l2 reads", st, l2, o.streamer_link);
-        auto& st_data = sim.crossing<L2RowData>("l2->st", l2, st, o.streamer_link);
-        auto& ready = sim.crossing<SlotReady>("l2 tile-ready", l2, st, 4);
-        auto& st_credits = sim.crossing<SlotCredit>("l2 result credits", l2, st, o.l2.slots, 2, 2);
-        auto& results = sim.crossing<L2RowWrite>("combiner->l2", combiner, l2, o.result_link);
-        std::vector<Link<L1Element>*> a, b;
-        std::vector<Link<ArrayResult>*> c;
-        for (std::uint32_t m = 0; m < o.lanes; ++m)
-            a.push_back(&sim.link<L1Element>("A lane " + std::to_string(m), st, array, 2));
-        for (std::uint32_t m = 0; m < cols; ++m) {
-            b.push_back(&sim.link<L1Element>("B lane " + std::to_string(m), st, array, 2));
-            c.push_back(&sim.link<ArrayResult>("north " + std::to_string(m), array, combiner, 2));
-        }
-        l3.connect(l3_reads, l3_data, l3_writes);
-        bm.connect(l3_reads, l3_data, l3_writes, l2_writes, l2_reads, l2_data, credits);
-        l2.connect(l2_writes, l2_reads, l2_data, credits);
-        l2.connect_streamer(st_reads, st_data, ready, &st_credits);
-        l2.connect_combiner(results);
-        st.connect(st_reads, st_data, ready, a, b, &st_credits);
-        array.connect(a, b, c);
-        combiner.connect(c, results);
-        sim.add_invariant("l2 slot credits", [this] { check_l2_slot_credits(bm, st, l2); });
+          parts(build_compute(sim, kpu, l2d, l3, program, commands, o)),
+          bm(*parts.bm),
+          l2(*parts.l2),
+          st(*parts.st),
+          array(*parts.array),
+          combiner(*parts.combiner) {
+        l3.connect(*parts.l3_reads, *parts.l3_data, *parts.l3_writes);
     }
 
 private:
@@ -327,7 +364,9 @@ inline ComputeRun run_compute_subsystem(const CspComputePlan& plan, const progra
 
 // The summary kpu-run prints: what ran, the data and the laws, the array, the L2's banks, the
 // Streamer, the BlockMover and the Combiner, then every component's and link's row.
-inline std::string format_compute_summary(const CspComputePlan& plan, const ComputeRun& r) {
+// The array's, the L2 banks', the Streamer's, the BlockMover's and the Combiner's lines of the
+// summary (the joined system's summary prints them too, #548).
+inline std::string format_compute_lines(const ComputeRun& r) {
     std::string s;
     char b[512];
     auto row = [&](const std::string& name) -> const ReportRow* {
@@ -341,21 +380,6 @@ inline std::string format_compute_summary(const CspComputePlan& plan, const Comp
             if (c.stalls[k]) t += std::string(t.empty() ? "" : ", ") + to_string(static_cast<Stall>(k)) + " " + std::to_string(c.stalls[k]);
         return t.empty() ? std::string("none") : t;
     };
-    std::snprintf(b, sizeof b,
-                  "compute subsystem: %zu Moves, %zu Feeds, %zu commands (%zu result tiles), %zu Writebacks, %zu L2 "
-                  "Releases; %u L2 slots of %u rows x %u bytes; a %u x %u array\n",
-                  plan.moves, plan.feeds, plan.calls, plan.drains, plan.writebacks, plan.l2_releases, plan.l2_slots,
-                  plan.rows_per_slot, plan.row_bytes, r.rows_pe, r.cols_pe);
-    s += b;
-    if (r.deadlock) s += "DEADLOCK: " + *r.deadlock + "\n";
-    if (r.violation) s += "INVARIANT VIOLATED: " + *r.violation + "\n";
-    if (!r.finished && !r.deadlock && !r.violation) s += "the run did not finish within its limit\n";
-    std::snprintf(b, sizeof b, "  run          %.3f us, %llu KPU clocks; data: %zu of %zu result tiles exact; laws: %s\n",
-                  double(r.end) / 1e6, (unsigned long long)r.kpu_cycles, r.tiles_checked, plan.outputs.size(),
-                  r.law_errors.empty() ? "hold on every row" : "VIOLATED");
-    s += b;
-    for (const auto& e : r.data_errors) s += "  DATA: " + e + "\n";
-    for (const auto& e : r.law_errors) s += "  LAW: " + e + "\n";
     const double pe_clocks = double(r.rows_pe) * r.cols_pe * double(r.array_cycles);
     auto pct = [&](std::uint64_t n) { return pe_clocks > 0 ? 100.0 * double(n) / pe_clocks : 0.0; };
     std::snprintf(b, sizeof b,
@@ -400,6 +424,28 @@ inline std::string format_compute_summary(const CspComputePlan& plan, const Comp
                       fmax);
         s += b;
     }
+    return s;
+}
+
+inline std::string format_compute_summary(const CspComputePlan& plan, const ComputeRun& r) {
+    std::string s;
+    char b[512];
+    std::snprintf(b, sizeof b,
+                  "compute subsystem: %zu Moves, %zu Feeds, %zu commands (%zu result tiles), %zu Writebacks, %zu L2 "
+                  "Releases; %u L2 slots of %u rows x %u bytes; a %u x %u array\n",
+                  plan.moves, plan.feeds, plan.calls, plan.drains, plan.writebacks, plan.l2_releases, plan.l2_slots,
+                  plan.rows_per_slot, plan.row_bytes, r.rows_pe, r.cols_pe);
+    s += b;
+    if (r.deadlock) s += "DEADLOCK: " + *r.deadlock + "\n";
+    if (r.violation) s += "INVARIANT VIOLATED: " + *r.violation + "\n";
+    if (!r.finished && !r.deadlock && !r.violation) s += "the run did not finish within its limit\n";
+    std::snprintf(b, sizeof b, "  run          %.3f us, %llu KPU clocks; data: %zu of %zu result tiles exact; laws: %s\n",
+                  double(r.end) / 1e6, (unsigned long long)r.kpu_cycles, r.tiles_checked, plan.outputs.size(),
+                  r.law_errors.empty() ? "hold on every row" : "VIOLATED");
+    s += b;
+    for (const auto& e : r.data_errors) s += "  DATA: " + e + "\n";
+    for (const auto& e : r.law_errors) s += "  LAW: " + e + "\n";
+    s += format_compute_lines(r);
     s += format_report(r.rows);
     return s;
 }

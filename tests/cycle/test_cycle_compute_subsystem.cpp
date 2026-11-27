@@ -271,4 +271,7 @@ TEST_CASE("A trace or heatmap whose last bytes cannot be flushed is a failed wri
     CHECK_THROWS_WITH(write_heatmap_svg(r, "/dev/full"), ContainsSubstring("failed"));
     Tracer t;
     CHECK_THROWS_WITH(t.write("/dev/full"), ContainsSubstring("failed"));
+    // The counters file the same way (#601's review).
+    Simulator sim;
+    CHECK_THROWS_WITH(write_counters_json(sim, "/dev/full"), ContainsSubstring("failed"));
 }

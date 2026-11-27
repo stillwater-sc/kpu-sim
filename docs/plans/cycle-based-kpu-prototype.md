@@ -189,8 +189,8 @@ As built in step 2e (`cycle/compute/csp_compute_program.hpp`):
   it is Phase 1's dense, row-major packing. The BlockMover transforms each tile on its write into
   L2: A by rows, B by columns (the transpose, which waits for the whole tile), and C's rows back to
   the dense tile.
-- **Each L3 slot holds one residency over the run.** A program that reuses a slot needs its Loads
-  run in time, which is also the join's work. So the 64³ runs with `l3 = 96`.
+- **Each L3 slot holds one residency over the run** (the compute subsystem alone, so its 64³ runs with `l3 = 96`). At the join
+  (step 3c, `--system`) the memory subsystem's Loads run in time and the slots are reused.
 - **A chain ends at its last call,** since the RTL's `last` launches its results north at once. A
   deferred Drain (`store … late`) is the same L2 Result, in program order.
 - **A call needs A and B in two L2 slots.** The Streamer reads both in the same clocks, while the CSP

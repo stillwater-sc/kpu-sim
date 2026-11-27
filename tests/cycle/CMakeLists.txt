@@ -301,3 +301,17 @@ kpu_set_target_options(test_cycle_l3_blockmover)
 set_target_properties(test_cycle_l3_blockmover PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_l3_blockmover COMMAND test_cycle_l3_blockmover)
 set_tests_properties(test_cycle_l3_blockmover PROPERTIES LABELS "cycle;l3;blockmover;memory;compute;v0.10")
+
+# Step 3c (#548): the join, DRAM -> L3 -> array -> L3 -> DRAM from one CSP program.
+add_executable(test_cycle_system test_cycle_system.cpp)
+target_link_libraries(test_cycle_system PRIVATE Catch2::Catch2WithMain kpu_simulator kpu_memory_components kpu_trace
+                      kpu_program)
+target_include_directories(test_cycle_system PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_cycle_system PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+kpu_set_target_options(test_cycle_system)
+if(MSVC)
+    target_compile_options(test_cycle_system PRIVATE /bigobj)   # as kpu-run (C1128)
+endif()
+set_target_properties(test_cycle_system PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_system COMMAND test_cycle_system)
+set_tests_properties(test_cycle_system PROPERTIES LABELS "cycle;system;memory;compute;v0.10")

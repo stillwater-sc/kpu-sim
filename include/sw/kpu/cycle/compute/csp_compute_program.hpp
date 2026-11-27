@@ -121,12 +121,26 @@ inline sw::kpu::timing::TileID tile_id(char role, const TileCoord& t) {
 
 }  // namespace csp_compute_detail
 
-// `inputs`: every operand as it is before the run; `result`: as L-B leaves it after. `row_align`: the
-// L2's row is a multiple of it (the BlockMover's bus).
+// How the plan is made.
+struct CspComputeOptions {
+    std::uint32_t row_align = 16;        // the L2's row is a multiple of it (the BlockMover's bus)
+    // The L3 starts with every tile in place (the compute subsystem alone, step 2e): an L3 slot that
+    // holds two residencies over the run is refused. False at the join (#548), where the memory
+    // subsystem's Loads run in time and a slot is reused after its Release.
+    bool preloaded = true;
+    // The L3 slot's size, when the L3 is the memory subsystem's (its plan_l3 sizes it): at least the
+    // largest tile here. 0: this plan's own.
+    std::uint64_t l3_slot_bytes = 0;
+    // A Writeback names its L3 slot (L2Action::l3_slot), for the BlockMover to wait for its credit.
+    bool l3_credits = false;
+};
+
+// `inputs`: every operand as it is before the run; `result`: as L-B leaves it after.
 inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
                                    const sw::kpu::program::TileProgram& inputs,
-                                   const sw::kpu::program::TileProgram& result, std::uint32_t row_align = 16) {
+                                   const sw::kpu::program::TileProgram& result, const CspComputeOptions& opt) {
     using namespace csp_compute_detail;
+    const std::uint32_t row_align = opt.row_align;
     CspComputePlan plan;
     auto at = [&](std::size_t i, const std::string& what) {
         return std::invalid_argument("plan_compute: action " + std::to_string(i) + " (" +
@@ -182,6 +196,12 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
         lane_bytes = std::max({lane_bytes, sa.cols, sc.cols * 4});
     }
     if (plan.rows_per_slot == 0) throw std::invalid_argument("plan_compute: the program has no Call");
+    if (opt.l3_slot_bytes) {
+        if (opt.l3_slot_bytes < plan.slot_bytes)
+            throw std::invalid_argument("plan_compute: an L3 slot of " + std::to_string(opt.l3_slot_bytes) +
+                                        " bytes, under the largest tile's " + std::to_string(plan.slot_bytes));
+        plan.slot_bytes = opt.l3_slot_bytes;
+    }
     plan.row_bytes = (lane_bytes + row_align - 1) / row_align * row_align;
     // A slot also holds the largest tile whole, padded to its beats: the BlockMover's tile buffer is
     // one slot (block_mover.hpp). A tile of few lanes (a 1 x 1 gemm) needs more rows than lanes.
@@ -244,7 +264,8 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
                 const std::uint32_t s = l3_slot(i);
                 if (s >= plan.l3_slots && plan.l3_slots) throw at(i, "names L3 slot " + std::to_string(s));
                 const auto [it, fresh] = owner.emplace(s, i);
-                if (!fresh)
+                if (!fresh && !opt.preloaded) it->second = i;   // the slot's next residency, after its Release
+                else if (!fresh)
                     throw at(i, "opens a second residency in L3 slot " + std::to_string(s) + " (action " +
                                     std::to_string(it->second) +
                                     " opened the first): step 2e starts with every tile in place, so each slot "
@@ -255,7 +276,9 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
                     if (r != 'C') throw at(i, "writes back an operand the gemm reads");
                     const std::uint32_t slot = l2_slot(i);
                     const Shape sc = shape(result.operand(a.tile.operand), a.tile.ti, a.tile.tj);
-                    plan.l2.push_back(l2_writeback_dense(slot, tile_id('C', a.tile), address, sc.rows, sc.cols, 4));
+                    L2Action wb = l2_writeback_dense(slot, tile_id('C', a.tile), address, sc.rows, sc.cols, 4);
+                    if (opt.l3_credits) wb.l3_slot = s;
+                    plan.l2.push_back(wb);
                     ++plan.writebacks;
                     plan.outputs.push_back(
                         {a.tile, s, address, csp_l3_detail::pack(result.operand(a.tile.operand), a.tile.ti, a.tile.tj)});
@@ -355,6 +378,14 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
         for (const auto& [s, i] : owner) plan.l3_slots = std::max(plan.l3_slots, s + 1);
     validate_l2_program(plan.l2, plan.l2_slots, plan.rows_per_slot, plan.row_bytes, "plan_compute");
     return plan;
+}
+
+inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
+                                   const sw::kpu::program::TileProgram& inputs,
+                                   const sw::kpu::program::TileProgram& result, std::uint32_t row_align = 16) {
+    CspComputeOptions o;
+    o.row_align = row_align;
+    return plan_compute(p, inputs, result, o);
 }
 
 }  // namespace sw::kpu::cycle

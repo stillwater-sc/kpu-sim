@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The join, Phase 3, step 3c: the joined machine** (#548): `cycle/system/kpu_system.hpp` and
+  `kpu-run --system` (with `--system-trace`, `--system-counters`, or `--run-dir`). The memory subsystem and
+  the compute subsystem run on one simulator, from one CSP program: DRAM → DMA → L3 → BlockMover → L2 →
+  Streamer → array → Combiner → L2 → L3 → DMA → DRAM.
+  - **Nothing is hypothesized.** C reaches DRAM from the array, and DRAM ends with L-B's result bit for
+    bit.
+  - `plan_system` makes one L3 program from the walker's actions: Moves become the BlockMover's Reads,
+    Writebacks its Writes, Inherits Fills. It takes the DRAM layout and L-B's DRAM image from `plan_l3`,
+    and the compute programs from `plan_compute`, whose L3 is now the memory subsystem's: slots reused
+    after their Releases, each Writeback under its L3 slot's credit.
+  - **One wiring.** `build_compute` wires the compute half once, for the stand-in L3 (`ComputeMachine`)
+    and for the L3 tile (`SystemMachine`). The summaries' per-component lines (`format_memory_lines`,
+    `format_compute_lines`) are shared too.
+  - **The RTL's 8×8×16** on `kpu_soc_2x2` runs single- and double-buffered in L2, C exact.
+  - **The int8 64³ on `kpu_s1`** runs with Phase 1's L3 of 9 tiles, its slots reused. It takes 6905
+    clocks, and C is exact. It is **L3-bound**: the DMA engine waits for a slot's credit 6257 cycles, and
+    the 9 slots average 7.3 live.
+
 - **The join, Phase 3, step 3b: the L3 tile's BlockMover side** (#548). Phase 1's L3 tile now has the
   compute subsystem's BlockMover on its other side, in place of the stand-in L3.
   - Two L3 actions, `Read` and `Write` (`l3_program.hpp`): the BlockMover's Move of a slot's tile, and
