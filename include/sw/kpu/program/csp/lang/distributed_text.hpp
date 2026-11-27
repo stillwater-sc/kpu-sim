@@ -33,6 +33,7 @@
 #include <sw/kpu/program/csp/distributed.hpp>
 #include <sw/kpu/program/csp/lang/parse.hpp>
 
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <utility>
@@ -97,9 +98,16 @@ private:
     }
     std::uint64_t integer(const char* what) {
         if (peek().kind != Token::Kind::Int) throw SyntaxError(line(), std::string("expected ") + what + ", found '" + peek().text + "'");
+        // Every count and index here is 32-bit: the bound is the type's, not a digit count.
         const std::string s = take().text;
-        if (s.size() > 9) throw SyntaxError(line(), std::string(what) + " " + s + " is out of range");
-        return std::stoull(s);
+        std::uint64_t v = 0;
+        for (char c : s) {
+            v = v * 10 + static_cast<std::uint64_t>(c - '0');
+            if (v > std::numeric_limits<std::uint32_t>::max())
+                throw SyntaxError(line(), std::string(what) + " " + s + " is out of range (at most " +
+                                          std::to_string(std::numeric_limits<std::uint32_t>::max()) + ")");
+        }
+        return v;
     }
     Dim dim(const char* what) { return static_cast<Dim>(integer(what)); }
 

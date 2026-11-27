@@ -207,3 +207,37 @@ TEST_CASE("a program with CRLF line endings reads as the same program", "[progra
     }
     CHECK(print_distributed(parse_distributed(crlf)) == print_distributed(parse_distributed(lf)));
 }
+
+// ---- regressions from the review of #631
+
+TEST_CASE("an operand's I/O mode is in, out or inout", "[program][csp][distributed]") {
+    DistributedProgram p = parse_distributed(read_file(std::string(kDir) + "vector_to_node3.dcsp"));
+    for (const char* io : {"in", "out", "inout"}) {
+        p.operands[0].io = io;
+        CHECK(validate_structure(p).empty());
+    }
+    p.operands[0].io = "";                                 // would print `... tile 16x16 ;`, which no reader reads
+    CHECK_THAT(validate_structure(p), ContainsSubstring("operand A is '', not in, out or inout"));
+}
+
+TEST_CASE("each action kind fills its own pool", "[program][csp][distributed]") {
+    // A feed into an L3 slot its channel owns: the channel and node checks alone let it through.
+    std::string t = gemm_with("channel fa : bm.a[1] -> l2[1] slots 0;", "channel fa : bm.a[1] -> l3[1] slots 3;");
+    const std::string from = "feed A[0,0] from l3[1]:0 to l2[1]:0 reads 1 via fa;";
+    t.replace(t.find(from), from.size(), "feed A[0,0] from l3[1]:0 to l3[1]:3 reads 1 via fa;");
+    CHECK_THAT(refusal(t), ContainsSubstring("a feed fills an L2 slot, not l3[1]:3"));
+    // A drain into an L2 slot.
+    std::string d = gemm_with("channel dc : bm.c[1] -> l3[1] slots 2;", "channel dc : bm.c[1] -> l2[1] slots 7;");
+    const std::string dfrom = "drain C[0,0] from l2[1]:2 to l3[1]:2 reads 1 via dc;";
+    d.replace(d.find(dfrom), dfrom.size(), "drain C[0,0] from l2[1]:2 to l2[1]:7 reads 1 via dc;");
+    CHECK_THAT(refusal(d), ContainsSubstring("a drain fills an L3 slot, not l2[1]:7"));
+}
+
+TEST_CASE("any 32-bit count prints and reads back; a larger one is refused", "[program][csp][distributed]") {
+    DistributedProgram p = parse_distributed(read_file(std::string(kDir) + "vector_to_node3.dcsp"));
+    p.actions[0].reads = 4000000000u;                      // ten digits, within uint32
+    const DistributedProgram q = parse_distributed(print_distributed(p));
+    CHECK(q.actions[0].reads == 4000000000u);
+    CHECK_THAT(refusal(gemm_with("load A[0,0] to l3[1]:0 reads 1", "load A[0,0] to l3[1]:0 reads 4294967296")),
+               ContainsSubstring("is out of range (at most 4294967295)"));
+}

@@ -218,6 +218,8 @@ inline std::string validate_structure(const DistributedProgram& p) {
         if (!names.insert(o.name).second) return "operand " + o.name + " is declared twice";
         if (o.rows == 0 || o.tile_rows == 0 || (!o.is_vector && (o.cols == 0 || o.tile_cols == 0)))
             return "operand " + o.name + " has an empty shape or tile";
+        if (o.io != "in" && o.io != "out" && o.io != "inout")
+            return "operand " + o.name + " is '" + o.io + "', not in, out or inout";
     }
     std::set<std::string> chans;
     std::map<SlotRef, std::string> owner;
@@ -301,6 +303,12 @@ inline std::string validate_structure(const DistributedProgram& p) {
                 if (c.to != Channel2::To::Dma) return w + "channel " + c.name + " goes to " + c.destination() + ", not a DMA engine";
                 continue;
             }
+            // The kind fills its own pool: a load, push or drain an L3 slot; a feed or call an L2 slot.
+            const SlotRef::Pool fills = a.kind == Action2::Kind::Feed || a.kind == Action2::Kind::Call ? SlotRef::Pool::L2
+                                                                                                      : SlotRef::Pool::L3;
+            if (a.to->pool != fills)
+                return w + "a " + std::string(k) + " fills an " + (fills == SlotRef::Pool::L3 ? "L3" : "L2") +
+                       " slot, not " + a.to->to_string();
             const Channel2::To want = a.to->pool == SlotRef::Pool::L3 ? Channel2::To::L3 : Channel2::To::L2;
             if (c.to != want || c.node != a.to->node)
                 return w + "it fills " + a.to->to_string() + " through channel " + c.name + ", which goes to " + c.destination();
