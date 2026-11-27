@@ -93,34 +93,6 @@ struct MemoryRun {
     }
 };
 
-// The laws on the counters, row by row; an empty list when every one holds. Flow balance: a
-// component holds what it accepted and has not completed; a link, whose holding is counted in its
-// sender's cycles (a crossing's receiver may pop after the sender's last), is empty at the end of
-// a run that `finished`.
-inline std::vector<std::string> check_laws(const std::vector<ReportRow>& rows, bool finished) {
-    std::vector<std::string> bad;
-    auto close = [](double a, double b) { return std::fabs(a - b) <= 1e-9 * std::max(1.0, std::fabs(b)); };
-    for (const ReportRow& r : rows) {
-        const Counters& c = r.c;
-        const std::string who = (r.link ? "link " : "component ") + r.name;
-        if (!r.link && c.busy + c.stalled() + c.idle != c.cycles)
-            bad.push_back(who + ": busy " + std::to_string(c.busy) + " + stalled " + std::to_string(c.stalled()) +
-                          " + idle " + std::to_string(c.idle) + " != T " + std::to_string(c.cycles));
-        if (c.arrivals < c.completions || (!r.link && c.arrivals - c.completions != c.occupancy) ||
-            (r.link && finished && c.arrivals != c.completions))
-            bad.push_back(who + ": " + std::to_string(c.arrivals) + " arrivals - " + std::to_string(c.completions) +
-                          " completions, " + std::to_string(c.occupancy) + " held");
-        if (c.completions > 0) {
-            if (!close(c.utilization(), c.throughput() * c.service_time()))
-                bad.push_back(who + ": U != X S");
-            if (!close(c.mean_occupancy(), c.throughput() * c.mean_residence()))
-                bad.push_back(who + ": N != X R");
-        }
-        if (c.utilization() > 1.0 + 1e-12) bad.push_back(who + ": U > 1");
-    }
-    return bad;
-}
-
 inline MemoryRun run_memory_subsystem(const CspL3Plan& plan, const program::platform::DeviceSpecification* device,
                                       const MemoryRunOptions& o) {
     MemoryRun out;

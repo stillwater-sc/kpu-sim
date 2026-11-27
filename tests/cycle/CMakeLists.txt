@@ -274,3 +274,19 @@ kpu_set_target_options(test_cycle_compute_csp)
 set_target_properties(test_cycle_compute_csp PROPERTIES FOLDER "Tests/Cycle")
 add_test(NAME test_cycle_compute_csp COMMAND test_cycle_compute_csp)
 set_tests_properties(test_cycle_compute_csp PROPERTIES LABELS "cycle;csp;compute;v0.10")
+
+# Step 2f (#547): the compute subsystem as kpu-run --compute-subsystem runs it: its counters summary,
+# its trace's lanes and its array heatmap.
+add_executable(test_cycle_compute_subsystem test_cycle_compute_subsystem.cpp)
+target_link_libraries(test_cycle_compute_subsystem PRIVATE Catch2::Catch2WithMain kpu_program
+                      $<TARGET_NAME_IF_EXISTS:nlohmann_json::nlohmann_json>)
+target_include_directories(test_cycle_compute_subsystem PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_definitions(test_cycle_compute_subsystem PRIVATE KPU_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+                           KPU_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+kpu_set_target_options(test_cycle_compute_subsystem)
+if(MSVC)
+    target_compile_options(test_cycle_compute_subsystem PRIVATE /bigobj)   # as kpu-run (C1128)
+endif()
+set_target_properties(test_cycle_compute_subsystem PROPERTIES FOLDER "Tests/Cycle")
+add_test(NAME test_cycle_compute_subsystem COMMAND test_cycle_compute_subsystem)
+set_tests_properties(test_cycle_compute_subsystem PROPERTIES LABELS "cycle;compute;counters;v0.10")

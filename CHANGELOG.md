@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **12, the guide** (#573): `docs/02-simulation/debugging-a-cycle-core-run.md`, run, check, serve and
     view.
 
-- **The compute subsystem on the cycle core, Phase 2 steps 2a–2e** (#542–#546; epic #532,
+- **The compute subsystem on the cycle core, Phase 2 steps 2a–2f** (#542–#547; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §5).
   - **2a, the L2 and the BlockMover** (#542, #592): `cycle/compute/l2.hpp`, `block_mover.hpp` and
     `l2_program.hpp`.
@@ -108,6 +108,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Refused before any cycle: a call reading A and B from one L2 slot (the Streamer reads both in the
       same clocks: `l2 = 2`, or `l2 = 3` with late stores), an L3 slot holding two residencies (the Loads
       run in time at the join), merges, init streams, stages, and anything but an int8 OS gemm.
+  - **2f, counters, trace and heatmap** (#547): `cycle/compute/compute_subsystem.hpp` and `kpu-run
+    --compute-subsystem` (with `--compute-trace`, `--compute-counters`, `--compute-heatmap`, or
+    `--run-dir`). The run checks the result tiles against L-B, the invariants every cycle and the
+    operational laws (`check_laws`, now in `report.hpp`).
+    - The summary reports:
+      - array utilization, and the PE-clocks by cause (useful, padded, draining, waiting on L1);
+      - each L2 bank's port use and reads in flight (mean, peak);
+      - the Streamer's and the BlockMover's busy clocks and stalls by cause;
+      - the Combiner's tiles in flight and its north FIFOs' peaks.
+    - The int8 64³ on `kpu_s1` runs 5632 clocks at 0.57% array utilization: a 16×16 tile on a 128×64
+      array, with the BlockMover busy 80% of the run. Each L2 bank has 1.64 reads in flight on
+      average, 8 at most. The PE counts equal what the program implies, exactly.
+    - The Perfetto trace adds lanes for each L1 lane buffer, PE row, north FIFO, L2 bank and L2 slot.
+      The heatmap is each PE's clocks by cause, as JSON and as an SVG.
+    - The wired machine (`ComputeMachine`) and the stand-in L3 (`l3_standin.hpp`) moved from the tests
+      into the library, so kpu-run and the tests build the same machine.
 - **The memory subsystem on the cycle core, Phase 1 steps 1b–1e** (#538–#541; epic #532,
   `docs/plans/cycle-based-kpu-prototype.md` §4). DRAM, the DMA engine, the NoC and the L3 tile, built
   bottom-up on the cycle core and checked bit for bit against L-B's data.

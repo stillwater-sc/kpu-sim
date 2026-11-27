@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Check a kpu-run --run-dir directory (docs/plans/cycle-mflow-and-debug-server.md step 3): its
+Check a kpu-run --run-dir directory (docs/plans/cycle-mflow-and-debug-server.md step 3; a compute
+run's, #547): its
 run.json says what ran, how it ended and where its artifacts are, and every artifact it names is
 there, under the fixed names.
 
@@ -21,9 +22,14 @@ import re
 import sys
 from pathlib import Path
 
-# The artifacts a --memory-subsystem run directory holds, under its fixed names.
-ARTIFACTS = {"summary": "summary.txt", "counters": "counters.json", "perfetto": "trace.json",
-             "mflow": "mem.mflow"}
+# The artifacts a run directory holds, under its fixed names, by the run's kind: a --memory-subsystem
+# run's, and a --compute-subsystem run's (#547).
+ARTIFACTS = {
+    "memory-subsystem": {"summary": "summary.txt", "counters": "counters.json", "perfetto": "trace.json",
+                         "mflow": "mem.mflow"},
+    "compute-subsystem": {"summary": "summary.txt", "counters": "counters.json", "perfetto": "trace.json",
+                          "heatmap": "heatmap.json", "heatmap_svg": "heatmap.svg"},
+}
 STATUSES = ("running", "ok", "failed", "error")
 
 
@@ -57,16 +63,30 @@ def check(d, want_status):
         expect = {"ok": (0,), "failed": (1,), "error": (1, 2)}.get(m.get("status"))
         if expect is not None and m.get("exit_code") not in expect:
             bad.append(f"status {m.get('status')} with exit_code {m.get('exit_code')}")
-    if m.get("status") in ("ok", "failed"):
+    # A kind of another type ([] or {}) is a diagnostic above, and has no artifacts to look up.
+    kind = m.get("kind") if isinstance(m.get("kind"), str) else None
+    if isinstance(m.get("kind"), str) and kind not in ARTIFACTS:
+        bad.append(f"kind {kind!r} is not one of {', '.join(ARTIFACTS)}")
+    if m.get("status") in ("ok", "failed") and kind in ARTIFACTS:
+        want = ARTIFACTS[kind]
         arts = m.get("artifacts", {})
-        if arts != ARTIFACTS:
-            bad.append(f"artifacts are {arts}, expected {ARTIFACTS}")
-        for key, name in ARTIFACTS.items():
+        if arts != want:
+            bad.append(f"artifacts are {arts}, expected {want}")
+        for key, name in want.items():
             there = (d / name).is_dir() if key == "mflow" else (d / name).is_file()
             if not there:
                 bad.append(f"{name} is named but is not there as a {'directory' if key == 'mflow' else 'file'}")
-        if not (d / "mem.mflow" / "manifest.json").is_file():
+        if "mflow" in want and not (d / "mem.mflow" / "manifest.json").is_file():
             bad.append("mem.mflow has no manifest.json")
+        if "heatmap" in want and (d / "heatmap.json").is_file():
+            try:
+                h = json.loads((d / "heatmap.json").read_text())
+            except (OSError, ValueError) as e:
+                bad.append(f"heatmap.json: {e}")
+            else:
+                if (not isinstance(h, dict) or h.get("format") != "kpu-array-heatmap"
+                        or not isinstance(h.get("useful"), list) or len(h["useful"]) != h.get("rows")):
+                    bad.append("heatmap.json is not a kpu-array-heatmap with a row per PE row")
         res = m.get("result")
         if not isinstance(res, dict) or not isinstance(res.get("finished"), bool):
             bad.append("a run that ran states its result")

@@ -1,6 +1,6 @@
 # Debugging a cycle-core run
 
-How to run a program's memory traffic on the cycle core, check what it recorded, serve the
+How to run a program's memory traffic (and its compute traffic, §1) on the cycle core, check what it recorded, serve the
 records to a browser on your laptop, and read them in the views. The plan behind this is
 `docs/plans/cycle-mflow-and-debug-server.md`.
 
@@ -35,6 +35,38 @@ exits 0 only when the data and the laws both hold. `build/runs/mm64/` then holds
 
 Use `--deploy tests/program/deploy/kpu_t4.json` (and a program written for it) for the T4,
 whose L3 traffic crosses its NoC.
+
+### The compute subsystem
+
+`--compute-subsystem` runs the same program's compute traffic: the BlockMover, the L2, the
+Streamer, the L1 lanes, the deployment's PE array and the Combiner, with the L3 starting with A
+and B in place (`docs/plans/cycle-based-kpu-prototype.md` §5). It takes an int8 OS gemm whose L3
+slots each hold one residency, so give the generator an L3 that large:
+
+```bash
+./build/tools/csp-gen/kpu-csp-gen --algo matmul --size 64 --tile 16 --dtype int8 --l3 96 \
+    --target tests/program/deploy/kpu_s1.json -o build/runs/mm64c.csp
+./build/tools/kpu-run/kpu-run --program build/runs/mm64c.csp --deploy tests/program/deploy/kpu_s1.json \
+    --compute-subsystem --run-dir build/runs/mm64c
+```
+
+Its summary has:
+- every result tile checked against L-B's, and the laws;
+- the array's utilization and its PE-clocks by cause: useful, padded (a column past the tile),
+  draining (a result passing north) and waiting on L1;
+- each L2 bank's port use and reads in flight;
+- the Streamer's and the BlockMover's stalls;
+- the Combiner's occupancy.
+
+`check_run_dir.py` and `check_trace.py` check its directory as they do a memory run's. It holds
+`summary.txt`, `counters.json`, `trace.json` and `run.json`, and `heatmap.json` and `heatmap.svg`
+in place of `mem.mflow/`:
+
+- **`trace.json`** has lanes for each L1 lane buffer and PE row (`cmd n` while it streams or
+  multiplies), each north FIFO's occupancy and each L2 bank's reads in flight (counter tracks), and
+  each L2 slot's tile.
+- **`heatmap.json`** has each PE's clocks by cause.
+- **`heatmap.svg`** shades each PE by its useful fraction; hover a cell for its counts.
 
 ## 2. Check
 

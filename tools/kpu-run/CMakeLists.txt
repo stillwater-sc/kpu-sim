@@ -256,15 +256,102 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(kpu_run_mflow_check_run_selftest PROPERTIES LABELS "program;driver;cycle;memory;mflow"
                              FIXTURES_REQUIRED memory_s1_run_dir)
         add_test(NAME kpu_run_run_dir_check_selftest
-            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir})
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir}
+                    ${CMAKE_CURRENT_BINARY_DIR}/runs/compute_s1)
         set_tests_properties(kpu_run_run_dir_check kpu_run_run_dir_mflow_check kpu_run_run_dir_trace_check
                              kpu_run_run_dir_check_selftest
                              PROPERTIES LABELS "program;driver;cycle;memory;mflow" FIXTURES_REQUIRED memory_s1_run_dir)
+        # The self-test checks a compute run's directory too (#547).
+        set_tests_properties(kpu_run_run_dir_check_selftest PROPERTIES
+                             FIXTURES_REQUIRED "memory_s1_run_dir;compute_s1_run_dir")
+        # Without the compute directory, and with a unittest option, its compute tests skip (#597's
+        # review: `-v` once counted as the directory).
+        add_test(NAME kpu_run_run_dir_check_selftest_memory_only
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir} -v)
+        set_tests_properties(kpu_run_run_dir_check_selftest_memory_only PROPERTIES
+                             LABELS "program;driver;cycle;memory;mflow" FIXTURES_REQUIRED memory_s1_run_dir)
         add_test(NAME kpu_run_memory_mflow_check_t4
             COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/mflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/memory_t4.mflow)
         set_tests_properties(kpu_run_memory_mflow_check_t4 PROPERTIES LABELS "program;driver;cycle;memory;mflow;noc"
                              FIXTURES_REQUIRED memory_t4_run)
+    endif()
+
+    # --compute-subsystem (#547): a program's compute traffic on the cycle core's compute subsystem.
+    # An int8 64^3 on kpu_s1's 128 x 64 array, its L3 large enough that each slot holds one
+    # residency (the L3 starts with A and B in place). The trace and counters answer to
+    # check_trace.py; the run directory to check_run_dir.py.
+    add_test(NAME csp_gen_compute_s1
+        COMMAND $<TARGET_FILE:csp-gen> --algo matmul --size 64 --tile 16 --dtype int8 --l3 96
+                --target ${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json
+                -o ${CMAKE_CURRENT_BINARY_DIR}/compute_s1.csp)
+    set_tests_properties(csp_gen_compute_s1 PROPERTIES LABELS "program;driver;cycle;compute"
+                         FIXTURES_SETUP compute_s1_program)
+    add_test(NAME kpu_run_compute_subsystem_s1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/compute_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--compute-subsystem$<SEMICOLON>--compute-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/compute_s1.json$<SEMICOLON>--compute-counters$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/compute_s1.counters.json$<SEMICOLON>--compute-heatmap$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/compute_s1.heatmap.json
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=a.128.x.64.array.*16.of.16.result.tiles.exact.*laws:.hold.on.every.row.*array.*utilization
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_compute_subsystem_s1 PROPERTIES LABELS "program;driver;cycle;compute"
+                         FIXTURES_REQUIRED compute_s1_program FIXTURES_SETUP compute_s1_run)
+    add_test(NAME kpu_run_compute_run_dir_s1
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/compute_s1.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--compute-subsystem$<SEMICOLON>--run-dir$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/runs/compute_s1
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=16.of.16.result.tiles.exact.*laws:.hold.on.every.row
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_compute_run_dir_s1 PROPERTIES LABELS "program;driver;cycle;compute"
+                         FIXTURES_REQUIRED compute_s1_program FIXTURES_SETUP compute_s1_run_dir)
+    add_test(NAME kpu_run_compute_subsystem_needs_a_deployment
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--compute-subsystem
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--compute-subsystem.needs.--deploy
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    add_test(NAME kpu_run_compute_trace_needs_the_run
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--compute-trace$<SEMICOLON>x.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--compute-trace.records.a.--compute-subsystem.run
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    add_test(NAME kpu_run_compute_and_memory_are_separate
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--compute-subsystem$<SEMICOLON>--memory-subsystem
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=separate.runs.until.the.join
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    # #547's review: the trace and the heatmap's .svg naming one file would leave only the last written.
+    add_test(NAME kpu_run_compute_artifacts_are_distinct
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--compute-subsystem$<SEMICOLON>--compute-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/clash/../clash.svg$<SEMICOLON>--compute-heatmap$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/clash.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--compute-trace.and.--compute-heatmap.s..svg.name.the.same.file
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    set_tests_properties(kpu_run_compute_subsystem_needs_a_deployment kpu_run_compute_trace_needs_the_run
+                         kpu_run_compute_and_memory_are_separate kpu_run_compute_artifacts_are_distinct
+                         PROPERTIES LABELS "program;driver;cycle;compute")
+    if(KPU_RUN_PYTHON3)
+        add_test(NAME kpu_run_compute_trace_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tests/cycle/check_trace.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/compute_s1.json ${CMAKE_CURRENT_BINARY_DIR}/compute_s1.counters.json)
+        set_tests_properties(kpu_run_compute_trace_check PROPERTIES LABELS "program;driver;cycle;compute"
+                             FIXTURES_REQUIRED compute_s1_run)
+        add_test(NAME kpu_run_compute_run_dir_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/check_run_dir.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/runs/compute_s1 --status ok)
+        add_test(NAME kpu_run_compute_run_dir_trace_check
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tests/cycle/check_trace.py
+                    ${CMAKE_CURRENT_BINARY_DIR}/runs/compute_s1/trace.json
+                    ${CMAKE_CURRENT_BINARY_DIR}/runs/compute_s1/counters.json)
+        set_tests_properties(kpu_run_compute_run_dir_check kpu_run_compute_run_dir_trace_check
+                             PROPERTIES LABELS "program;driver;cycle;compute" FIXTURES_REQUIRED compute_s1_run_dir)
     endif()
 
     # A level with no interpreter must be refused, NOT silently substituted -- and the
