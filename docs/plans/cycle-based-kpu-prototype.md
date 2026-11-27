@@ -185,10 +185,10 @@ Streamer's command queues. The L3s start with A and B in the slots the program p
 state is Phase 1's verified result, or the same state loaded directly.
 
 As built in step 2e (`cycle/compute/csp_compute_program.hpp`):
-- **The L3 is loaded directly, in the L2's lane layout.** An A tile is one row per lane, and a B tile
-  one row per column, each padded to the L2's row. Phase 1 packs tiles densely, row-major. The
-  transform between the two layouts, B's transpose among it, belongs on the BlockMover's write into
-  L2, and the join (step 3) has to build it.
+- **The L3 is loaded directly.** At first (2e) it was in the L2's lane layout. Since step 3a (#548)
+  it is Phase 1's dense, row-major packing. The BlockMover transforms each tile on its write into
+  L2: A by rows, B by columns (the transpose, which waits for the whole tile), and C's rows back to
+  the dense tile.
 - **Each L3 slot holds one residency over the run.** A program that reuses a slot needs its Loads
   run in time, which is also the join's work. So the 64³ runs with `l3 = 96`.
 - **A chain ends at its last call,** since the RTL's `last` launches its results north at once. A

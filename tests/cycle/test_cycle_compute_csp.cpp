@@ -228,23 +228,32 @@ TEST_CASE("The plan maps the walker's actions onto the BlockMover's, the L2's an
         CHECK(cmd.result.has_value() == cmd.last);
         CHECK(cmd.a.slot != cmd.b.slot);
     }
-    // The L3 image: an A tile's lane m is its row m, a B tile's lane j its column j, a byte an
-    // element, each lane padded to the L2's row.
+    // The L3 image is Phase 1's (csp_l3_program.hpp): each tile densely, row-major, a byte an int8
+    // element, then zeros to the 64-byte beat. The BlockMover makes the lanes (#548).
+    CHECK(plan.slot_bytes == 64);   // a 4x4 int32 C tile; an int8 one is 16 bytes, padded
     std::size_t a = 0, b = 0;
     for (const auto& t : plan.inputs) {
         CAPTURE(t.tile.to_string());
-        REQUIRE(t.bytes.size() == 4 * 16);
+        REQUIRE(t.bytes.size() == 64);
+        CHECK(t.address == std::uint64_t(t.l3_slot) * 64);
         const auto& op = c.in.operand(t.tile.operand);
-        for (std::uint32_t m = 0; m < 4; ++m)
-            for (std::uint32_t e = 0; e < 16; ++e) {
-                const std::uint8_t want =
-                    e >= 4 ? 0
-                    : t.tile.operand == "A"
-                        ? static_cast<std::uint8_t>(op.word(t.tile.ti * 4 + m, t.tile.tj * 4 + e))
-                        : static_cast<std::uint8_t>(op.word(t.tile.ti * 4 + e, t.tile.tj * 4 + m));
-                CHECK(t.bytes[m * 16 + e] == want);
-            }
+        for (std::uint32_t r = 0; r < 4; ++r)
+            for (std::uint32_t k = 0; k < 4; ++k)
+                CHECK(t.bytes[r * 4 + k] == static_cast<std::uint8_t>(op.word(t.tile.ti * 4 + r, t.tile.tj * 4 + k)));
+        for (std::size_t e = 16; e < 64; ++e) CHECK(t.bytes[e] == 0);
         (t.tile.operand == "A" ? a : b)++;
+    }
+    // A's Moves are its rows, B's its columns (the transpose); C's Writebacks its rows, int32.
+    for (const L2Action& x : plan.l2) {
+        if (x.kind == L2Action::Kind::Move) {
+            CHECK(x.layout == (x.tile.matrix == sw::kpu::isa::MatrixID::B ? L2Action::Layout::DenseColumns
+                                                                          : L2Action::Layout::DenseRows));
+            CHECK(x.element_bytes == 1);
+        } else if (x.kind == L2Action::Kind::Writeback) {
+            CHECK(x.layout == L2Action::Layout::DenseRows);
+            CHECK(x.element_bytes == 4);
+            CHECK(x.dense_bytes() == 64);
+        }
     }
     CHECK(a == 16);   // A[i, :] is resident again for each j
     CHECK(b == 8);
@@ -306,4 +315,20 @@ TEST_CASE("Rung 6: an int8 64^3 matmul on kpu_s1's 128x64 array, its 16x16 tiles
     const Run run = run_and_check(plan, dev, s);
     check_properties(plan, run, 128);
     check_early_release(plan, run);
+}
+
+TEST_CASE("The plan's L2 geometry holds its largest padded tile: a 1 x 1 gemm", "[cycle][csp][compute]") {
+    // #599's review: one 16-byte L2 row held a 1 x 1 tile's lane, not its 64-byte beat, so the
+    // BlockMover's tile buffer (one slot) refused the plan's own geometry.
+    const auto dev = device("kpu_soc_2x2.json");
+    const std::string text =
+        "csp 1.1\nprogram mm machine flat(l3 = 8, l2 = 3) {\n"
+        "  tensor A[1,1] int8 tile 1x1 in;\n  tensor B[1,1] int8 tile 1x1 in;\n  tensor C[1,1] int32 tile 1x1 out;\n"
+        "  resident B[:, 0];\n  resident A[0, :];\n"
+        "  acc C[0, 0] in fabric dataflow os { call gemm(A[0, 0], B[0, 0]) +-> C[0, 0]; }\n"
+        "  store C[0, 0];\n  release A[0, :];\n  release B[:, 0];\n}\n";
+    const Case c = compile(text, dev);
+    const CspComputePlan plan = plan_compute(c.p, c.in, c.lb);
+    CHECK(std::uint64_t(plan.rows_per_slot) * plan.row_bytes >= plan.slot_bytes);
+    run_and_check(plan, dev, Setup{});
 }

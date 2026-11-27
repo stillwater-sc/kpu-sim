@@ -20,6 +20,18 @@
 // while one is free; and writes the oldest out to L3 one beat a clock, at l3_address + k * l3_pitch.
 // L2 holds its reads until the slot is READY with the tile: the BlockMover never asks early.
 //
+// THE DENSE LAYOUTS (#548, the join; l2_program.hpp): L3 holds the tile densely, row-major, as the
+// memory subsystem places it, and L2 one row a lane. The transform is the BlockMover's, on its
+// write into L2 (docs/01-architecture/memory-hierarchy-roles.md), through a TILE BUFFER of one L2
+// slot's bytes:
+//   - a dense Move asks L3 for the whole tile in one request, and takes its beats into the tile
+//     buffer, one a clock. A DenseRows lane (the tile's row m) goes to L2 as soon as its bytes are
+//     in; a DenseColumns lane (column j, B's transpose) needs every row, so its lanes go only once
+//     the whole tile is in: the transpose's latency, built as state;
+//   - a dense Writeback asks L2 for the slot's rows, as a strided one does, packs each row's first
+//     tile_cols elements into the tile buffer, and writes the buffer to L3 one beat a clock, each
+//     beat as soon as its bytes are in, the last padded with zeros to the 64-byte beat.
+//
 // COUNTERS. A Move or Writeback is an item: it arrives when it starts and completes when its last
 // row (or beat) is sent. The mover is busy in a clock it moves anything; otherwise stalled for a
 // credit (the slot's, or a link's) or for data (L3's beats, L2's rows).
@@ -64,6 +76,18 @@ public:
                                         ": slots, rows, row buffers and the read window must be positive, and a row "
                                         "whole beats of the bus");
         validate_l2_program(program, cfg.slots, cfg.rows_per_slot, cfg.row_bytes, "cycle::BlockMover " + this->name());
+        for (std::size_t i = 0; i < program.size(); ++i) {
+            const L2Action& a = program[i];
+            if ((a.kind != L2Action::Kind::Move && a.kind != L2Action::Kind::Writeback) ||
+                a.layout == L2Action::Layout::Strided)
+                continue;
+            if (a.dense_bytes() > std::uint64_t(cfg.rows_per_slot) * cfg.row_bytes || a.dense_bytes() % cfg.bus_bytes != 0)
+                throw std::invalid_argument("cycle::BlockMover " + this->name() + ": action " + std::to_string(i) +
+                                            "'s dense tile is " + std::to_string(a.dense_bytes()) +
+                                            " bytes, for a tile buffer of one slot (" +
+                                            std::to_string(cfg.rows_per_slot * cfg.row_bytes) + ") in " +
+                                            std::to_string(cfg.bus_bytes) + "-byte beats");
+        }
         program_ = program;
         for (std::size_t i = 0; i < program.size(); ++i)
             if (program[i].kind == L2Action::Kind::Move || program[i].kind == L2Action::Kind::Writeback)
@@ -109,15 +133,24 @@ public:
             started_ = true;
             counters().accept();
         }
-        if (a.action.kind == L2Action::Kind::Move) move(now, a.action, moved, waiting);
-        else writeback(now, a.action, moved, waiting);
+        const bool dense = a.action.layout != L2Action::Layout::Strided;
+        if (a.action.kind == L2Action::Kind::Move) (dense ? move_dense(now, a.action, moved, waiting) : move(now, a.action, moved, waiting));
+        else (dense ? writeback_dense(now, a.action, moved, waiting) : writeback(now, a.action, moved, waiting));
 
-        if (done_ == a.action.rows) {
+        // A dense Writeback ends with its last beat to L3; a dense Move with its last lane and its
+        // whole response taken (the padding beats too: a next Move must not receive them); every
+        // other transfer with its last row.
+        const bool finished = !dense ? done_ == a.action.rows
+                            : a.action.kind == L2Action::Kind::Writeback ? sent_ == a.action.dense_bytes()
+                                                                         : done_ == a.action.rows && tile_.size() == a.action.dense_bytes();
+        if (finished) {
             counters().complete();
             ++head_;
             started_ = false;
             requested_ = done_ = 0;
+            sent_ = 0;
             rows_.clear();
+            tile_.clear();
             moved = true;
         }
         if (moved) counters().busy();
@@ -127,6 +160,9 @@ public:
     [[nodiscard]] bool idle() const override { return head_ == actions_.size(); }
 
     void check(Cycle now) const override {
+        if (tile_.size() > std::size_t(config_.rows_per_slot) * config_.row_bytes)
+            throw std::logic_error(where(now) + ": " + std::to_string(tile_.size()) + " bytes in a tile buffer of " +
+                                   std::to_string(config_.rows_per_slot * config_.row_bytes));
         if (rows_.size() > config_.row_buffers)
             throw std::logic_error(where(now) + ": " + std::to_string(rows_.size()) + " rows held in " +
                                    std::to_string(config_.row_buffers) + " row buffers");
@@ -279,13 +315,127 @@ private:
         }
     }
 
+    // A dense Move: the whole tile from L3 into the tile buffer, its lanes out to L2.
+    template <class Waiting>
+    void move_dense(Cycle now, const L2Action& a, bool& moved, Waiting&& waiting) {
+        // Sizes checked against the row and the tile buffer when the program was (validate_l2_program).
+        const auto lane = static_cast<std::uint32_t>(a.lane_bytes());
+        const std::uint32_t e = a.element_bytes, whole = a.tile_rows * a.tile_cols * e;
+        const bool columns = a.layout == L2Action::Layout::DenseColumns;
+        // The next lane to L2, once its bytes are in: a row's own, or (a column) the whole tile's.
+        if (done_ < a.rows) {
+            const std::size_t need = columns ? whole : std::size_t(done_ + 1) * lane;
+            if (tile_.size() >= need) {
+                if (l2_writes_->can_push(now)) {
+                    std::vector<std::uint8_t> row(config_.row_bytes, 0);
+                    if (columns)
+                        for (std::uint32_t r = 0; r < a.tile_rows; ++r)
+                            for (std::uint32_t b = 0; b < e; ++b)
+                                row[std::size_t(r) * e + b] = tile_[(std::size_t(r) * a.tile_cols + done_) * e + b];
+                    else
+                        std::copy(tile_.begin() + std::size_t(done_) * lane, tile_.begin() + std::size_t(done_ + 1) * lane,
+                                  row.begin());
+                    l2_writes_->push(now, L2RowWrite{++id_, a.slot, done_, a.rows, a.tile, std::move(row)});
+                    ++done_;
+                    moved = true;
+                } else {
+                    waiting(Stall::NoCredit);
+                }
+            }
+        }
+        // One beat from L3 into the tile buffer: they return in order.
+        if (l3_data_->can_pop(now)) {
+            const Beat& b = l3_data_->peek(now);
+            const std::uint64_t want = a.l3_address + tile_.size();
+            if (requested_ == 0 || b.tag != 0 || b.address != want || b.bytes.size() != config_.bus_bytes ||
+                tile_.size() + b.bytes.size() > a.dense_bytes())
+                throw std::logic_error(where(now) + ": a beat from L3 at " + std::to_string(b.address) + " (" +
+                                       std::to_string(b.bytes.size()) + " bytes), expected " +
+                                       std::to_string(config_.bus_bytes) + " bytes at " + std::to_string(want) +
+                                       " of the dense tile " + a.tile.to_string());
+            const Beat beat = l3_data_->pop(now);
+            tile_.insert(tile_.end(), beat.bytes.begin(), beat.bytes.end());
+            moved = true;
+        } else if (requested_ && tile_.size() < a.dense_bytes()) {
+            waiting(Stall::NoData);
+        }
+        // The tile's one request.
+        if (requested_ == 0) {
+            if (l3_reads_->can_push(now)) {
+                l3_reads_->push(now, L3RowRead{++id_, a.l3_address, static_cast<std::uint32_t>(a.dense_bytes()), 0});
+                requested_ = 1;
+                moved = true;
+            } else {
+                waiting(Stall::NoCredit);
+            }
+        }
+    }
+
+    // A dense Writeback: the slot's rows from L2, packed into the tile buffer, out to L3 by beats.
+    template <class Waiting>
+    void writeback_dense(Cycle now, const L2Action& a, bool& moved, Waiting&& waiting) {
+        const auto lane = static_cast<std::uint32_t>(a.lane_bytes());
+        const std::uint32_t bus = config_.bus_bytes, whole = a.tile_rows * a.tile_cols * a.element_bytes;
+        // The next beat out to L3, once its bytes are in (the last one padded with zeros).
+        if (sent_ < a.dense_bytes()) {
+            const bool all_in = done_ == a.rows;
+            if (tile_.size() >= std::size_t(sent_) + bus || (all_in && sent_ < a.dense_bytes())) {
+                if (l3_writes_->can_push(now)) {
+                    if (all_in && tile_.size() < a.dense_bytes()) tile_.resize(a.dense_bytes(), 0);
+                    Beat b;
+                    b.id = ++id_;
+                    b.address = a.l3_address + sent_;
+                    b.bytes.assign(tile_.begin() + sent_, tile_.begin() + sent_ + bus);
+                    b.tag = 0;
+                    b.first = sent_ == 0;
+                    sent_ += bus;
+                    b.last = sent_ == a.dense_bytes();
+                    l3_writes_->push(now, std::move(b));
+                    moved = true;
+                } else {
+                    waiting(Stall::NoCredit);
+                }
+            }
+        }
+        // A row from L2: its first tile_cols elements into the tile buffer; they return in order.
+        if (l2_data_->can_pop(now)) {
+            const L2RowData& d = l2_data_->peek(now);
+            if (d.slot != a.slot || !(d.tile == a.tile) || d.row != done_ || d.bytes.size() != config_.row_bytes)
+                throw std::logic_error(where(now) + ": a row from L2 (slot " + std::to_string(d.slot) + ", " +
+                                       d.tile.to_string() + " row " + std::to_string(d.row) + "), expected row " +
+                                       std::to_string(done_) + " of " + a.tile.to_string() + " in slot " +
+                                       std::to_string(a.slot));
+            const L2RowData data = l2_data_->pop(now);
+            tile_.insert(tile_.end(), data.bytes.begin(), data.bytes.begin() + lane);
+            ++done_;
+            if (done_ == a.rows && tile_.size() != whole)
+                throw std::logic_error(where(now) + ": " + std::to_string(tile_.size()) + " bytes packed of a " +
+                                       std::to_string(whole) + "-byte tile");
+            moved = true;
+        } else if (requested_ > done_) {
+            waiting(Stall::NoData);
+        }
+        // The next row's request, within the read window.
+        if (requested_ < a.rows && requested_ - done_ < config_.read_window) {
+            if (l2_reads_->can_push(now)) {
+                l2_reads_->push(now, L2RowRead{++id_, a.slot, requested_, a.tile, requested_ == 0, requested_ + 1 == a.rows});
+                ++requested_;
+                moved = true;
+            } else {
+                waiting(Stall::NoCredit);
+            }
+        }
+    }
+
     void clear() {
         held_.assign(config_.slots, true);
         for (std::uint32_t s = 0; s < config_.slots; ++s) held_[s] = !streamer_holds_at_start(program_, s);
         head_ = 0;
         started_ = false;
         requested_ = done_ = 0;
+        sent_ = 0;
         rows_.clear();
+        tile_.clear();
         id_ = 0;
     }
 
@@ -297,6 +447,8 @@ private:
     bool started_ = false;
     std::uint32_t requested_ = 0, done_ = 0;
     std::deque<Row> rows_;
+    std::vector<std::uint8_t> tile_;   // a dense transfer's tile buffer
+    std::uint32_t sent_ = 0;           // a dense Writeback's bytes written out to L3
     std::uint64_t id_ = 0;
     Link<L3RowRead>* l3_reads_ = nullptr;
     Link<Beat>* l3_data_ = nullptr;

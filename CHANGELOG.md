@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The join, Phase 3, step 3a: the BlockMover's layout transform** (#548; epic #532,
+  `docs/plans/cycle-based-kpu-prototype.md` §6). The compute subsystem's L3 now holds tiles as the memory
+  subsystem places them: densely, row-major, padded to 64-byte beats.
+  - The BlockMover makes L2's pre-arranged lanes on its write into L2, as `memory-hierarchy-roles.md`
+    places transforms. A Move takes the tile into a tile buffer of one L2 slot.
+  - A `DenseRows` lane goes to L2 as soon as its bytes are in. A `DenseColumns` lane (B's transpose)
+    waits for the whole tile, so the transpose's latency is measured (15 beats more at 16-byte beats).
+  - A dense Writeback packs C's int32 rows back into the dense tile.
+  - `plan_compute` emits the dense Moves and Writebacks, and its L3 images are Phase 1's own packing.
+    This removes 2e's lane-layout preload.
+  - The int8 64³ on `kpu_s1` now runs 5824 clocks, C exact. The BlockMover is busy 52%: it moves
+    256-byte tiles in 4 beats, not 16 strided rows.
+
 - **The debug pattern, record to browser, steps 1–12** (#562–#573; epic #532,
   `docs/plans/cycle-mflow-and-debug-server.md`). A cycle-core run is recorded, checked, drawn and served
   by the same tools as the memory side's `kpu-memsim` runs.
