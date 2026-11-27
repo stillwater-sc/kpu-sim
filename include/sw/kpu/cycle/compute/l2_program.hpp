@@ -8,6 +8,15 @@
 //   Move       L3 -> L2: `rows` rows of the L2's row size, the first at `l3_address` and each next
 //              `l3_pitch` bytes on (strided), into slot `slot`'s rows 0..rows-1, as tile `tile`
 //   Writeback  L2 -> L3: the slot's rows, back to `l3_address`, `l3_pitch` apart
+// A Move or Writeback with a DENSE layout (#548, the join) moves a tile that L3 holds densely, as
+// the memory subsystem places it (csp_l3_program.hpp): `tile_rows` x `tile_cols` elements of
+// `element_bytes`, row-major from `l3_address`, padded to whole 64-byte beats. L2's data is
+// pre-arranged, one row a lane (docs/01-architecture/memory-hierarchy-roles.md), so the
+// BlockMover transforms the tile as it writes L2, never the Streamer as it reads it:
+//   DenseRows     lane m is the tile's row m: `rows` = tile_rows, each lane tile_cols elements
+//   DenseColumns  lane j is the tile's column j (the transpose, for B): `rows` = tile_cols, each
+//                 lane tile_rows elements
+// A Writeback is DenseRows: L2 row i's first tile_cols elements are the tile's row i in L3.
 //   Feed       L2 -> L1: one Streamer command's reads of `rows` of the slot's rows, as one operand
 //              (streamer.hpp); a command reads each of its two operands as a Feed of its own
 //   Result     the result path's rows into the slot (#545, step 2d): `rows` rows of a Streamer
@@ -45,32 +54,80 @@ using TileID = sw::kpu::timing::TileID;
 
 struct L2Action {
     enum class Kind : std::uint8_t { Move, Writeback, Feed, Result, Release };
+    enum class Layout : std::uint8_t { Strided, DenseRows, DenseColumns };
     Kind kind = Kind::Move;
     std::uint32_t slot = 0;
     TileID tile{};
     std::uint64_t l3_address = 0;   // Move: the source's first row; Writeback: the destination's
     std::uint32_t l3_pitch = 0;     // bytes from one row to the next in L3 (at least the row size)
     std::uint32_t rows = 0;         // Move, Writeback, Feed and Result
+    // A Move's or Writeback's layout in L3 (Strided: `l3_pitch` apart; dense: the tile's shape).
+    Layout layout = Layout::Strided;
+    std::uint32_t tile_rows = 0, tile_cols = 0, element_bytes = 0;
+
+    // A dense tile's bytes in L3: its elements, then zeros to whole 64-byte beats.
+    [[nodiscard]] std::uint32_t dense_bytes() const { return (tile_rows * tile_cols * element_bytes + 63) / 64 * 64; }
+    // A dense lane's bytes: tile_cols elements (DenseRows) or tile_rows (DenseColumns).
+    [[nodiscard]] std::uint32_t lane_bytes() const {
+        return (layout == Layout::DenseColumns ? tile_rows : tile_cols) * element_bytes;
+    }
 };
 using L2Program = std::vector<L2Action>;
 
+namespace l2_detail {
+inline L2Action action(L2Action::Kind k, std::uint32_t slot, TileID tile, std::uint64_t l3_address,
+                       std::uint32_t l3_pitch, std::uint32_t rows) {
+    L2Action a;
+    a.kind = k;
+    a.slot = slot;
+    a.tile = tile;
+    a.l3_address = l3_address;
+    a.l3_pitch = l3_pitch;
+    a.rows = rows;
+    return a;
+}
+}  // namespace l2_detail
+
 inline L2Action l2_move(std::uint32_t slot, TileID tile, std::uint64_t l3_address, std::uint32_t l3_pitch,
                         std::uint32_t rows) {
-    return {L2Action::Kind::Move, slot, tile, l3_address, l3_pitch, rows};
+    return l2_detail::action(L2Action::Kind::Move, slot, tile, l3_address, l3_pitch, rows);
 }
 inline L2Action l2_writeback(std::uint32_t slot, TileID tile, std::uint64_t l3_address, std::uint32_t l3_pitch,
                              std::uint32_t rows) {
-    return {L2Action::Kind::Writeback, slot, tile, l3_address, l3_pitch, rows};
+    return l2_detail::action(L2Action::Kind::Writeback, slot, tile, l3_address, l3_pitch, rows);
+}
+// A dense tile of `tile_rows` x `tile_cols` elements in L3, moved into L2 lanes: its rows, or its
+// columns when `transpose` (B's lanes are its columns).
+inline L2Action l2_move_dense(std::uint32_t slot, TileID tile, std::uint64_t l3_address, std::uint32_t tile_rows,
+                              std::uint32_t tile_cols, std::uint32_t element_bytes, bool transpose) {
+    L2Action a = l2_detail::action(L2Action::Kind::Move, slot, tile, l3_address, 0, transpose ? tile_cols : tile_rows);
+    a.layout = transpose ? L2Action::Layout::DenseColumns : L2Action::Layout::DenseRows;
+    a.tile_rows = tile_rows;
+    a.tile_cols = tile_cols;
+    a.element_bytes = element_bytes;
+    return a;
+}
+// The slot's `tile_rows` rows back to L3 as a dense tile, each row's first `tile_cols` elements.
+inline L2Action l2_writeback_dense(std::uint32_t slot, TileID tile, std::uint64_t l3_address, std::uint32_t tile_rows,
+                                   std::uint32_t tile_cols, std::uint32_t element_bytes) {
+    L2Action a = l2_detail::action(L2Action::Kind::Writeback, slot, tile, l3_address, 0, tile_rows);
+    a.layout = L2Action::Layout::DenseRows;
+    a.tile_rows = tile_rows;
+    a.tile_cols = tile_cols;
+    a.element_bytes = element_bytes;
+    return a;
 }
 // `rows`: the command's lanes of this operand (its h A rows or w B rows).
 inline L2Action l2_feed(std::uint32_t slot, TileID tile, std::uint32_t rows) {
-    return {L2Action::Kind::Feed, slot, tile, 0, 0, rows};
+    return l2_detail::action(L2Action::Kind::Feed, slot, tile, 0, 0, rows);
 }
 // `rows`: the result tile's rows (the command's h).
 inline L2Action l2_result(std::uint32_t slot, TileID tile, std::uint32_t rows) {
-    return {L2Action::Kind::Result, slot, tile, 0, 0, rows};
+    return l2_detail::action(L2Action::Kind::Result, slot, tile, 0, 0, rows);
 }
-inline L2Action l2_release(std::uint32_t slot, TileID tile) { return {L2Action::Kind::Release, slot, tile, 0, 0, 0}; }
+inline L2Action l2_release(std::uint32_t slot, TileID tile) {
+    return l2_detail::action(L2Action::Kind::Release, slot, tile, 0, 0, 0);
+}
 
 inline const char* to_string(L2Action::Kind k) {
     switch (k) {
@@ -101,7 +158,23 @@ inline void validate_l2_program(const L2Program& p, std::uint32_t slots, std::ui
             if (a.rows == 0 || a.rows > rows_per_slot)
                 throw std::invalid_argument(at + ": " + std::to_string(a.rows) + " rows, a slot holds 1 to " +
                                             std::to_string(rows_per_slot));
-            if (a.rows > 1 && a.l3_pitch < row_bytes)
+            if (a.layout != L2Action::Layout::Strided) {
+                const bool cols = a.layout == L2Action::Layout::DenseColumns;
+                if (a.tile_rows == 0 || a.tile_cols == 0 ||
+                    (a.element_bytes != 1 && a.element_bytes != 2 && a.element_bytes != 4))
+                    throw std::invalid_argument(at + ": a dense tile of " + std::to_string(a.tile_rows) + " x " +
+                                                std::to_string(a.tile_cols) + " elements of " +
+                                                std::to_string(a.element_bytes) + " bytes");
+                if (cols && a.kind == L2Action::Kind::Writeback)
+                    throw std::invalid_argument(at + ": a Writeback writes its rows back as the tile's rows");
+                if (a.rows != (cols ? a.tile_cols : a.tile_rows))
+                    throw std::invalid_argument(at + ": " + std::to_string(a.rows) + " L2 rows for a tile of " +
+                                                std::to_string(a.tile_rows) + " x " + std::to_string(a.tile_cols) +
+                                                (cols ? ", a lane a column" : ", a lane a row"));
+                if (a.lane_bytes() > row_bytes)
+                    throw std::invalid_argument(at + ": a lane of " + std::to_string(a.lane_bytes()) +
+                                                " bytes, past the L2's " + std::to_string(row_bytes) + "-byte row");
+            } else if (a.rows > 1 && a.l3_pitch < row_bytes)
                 throw std::invalid_argument(at + ": pitch " + std::to_string(a.l3_pitch) + " is under the row's " +
                                             std::to_string(row_bytes) + " bytes, so its rows overlap in L3");
         } else if ((a.kind == L2Action::Kind::Feed || a.kind == L2Action::Kind::Result) &&

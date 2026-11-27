@@ -228,23 +228,32 @@ TEST_CASE("The plan maps the walker's actions onto the BlockMover's, the L2's an
         CHECK(cmd.result.has_value() == cmd.last);
         CHECK(cmd.a.slot != cmd.b.slot);
     }
-    // The L3 image: an A tile's lane m is its row m, a B tile's lane j its column j, a byte an
-    // element, each lane padded to the L2's row.
+    // The L3 image is Phase 1's (csp_l3_program.hpp): each tile densely, row-major, a byte an int8
+    // element, then zeros to the 64-byte beat. The BlockMover makes the lanes (#548).
+    CHECK(plan.slot_bytes == 64);   // a 4x4 int32 C tile; an int8 one is 16 bytes, padded
     std::size_t a = 0, b = 0;
     for (const auto& t : plan.inputs) {
         CAPTURE(t.tile.to_string());
-        REQUIRE(t.bytes.size() == 4 * 16);
+        REQUIRE(t.bytes.size() == 64);
+        CHECK(t.address == std::uint64_t(t.l3_slot) * 64);
         const auto& op = c.in.operand(t.tile.operand);
-        for (std::uint32_t m = 0; m < 4; ++m)
-            for (std::uint32_t e = 0; e < 16; ++e) {
-                const std::uint8_t want =
-                    e >= 4 ? 0
-                    : t.tile.operand == "A"
-                        ? static_cast<std::uint8_t>(op.word(t.tile.ti * 4 + m, t.tile.tj * 4 + e))
-                        : static_cast<std::uint8_t>(op.word(t.tile.ti * 4 + e, t.tile.tj * 4 + m));
-                CHECK(t.bytes[m * 16 + e] == want);
-            }
+        for (std::uint32_t r = 0; r < 4; ++r)
+            for (std::uint32_t k = 0; k < 4; ++k)
+                CHECK(t.bytes[r * 4 + k] == static_cast<std::uint8_t>(op.word(t.tile.ti * 4 + r, t.tile.tj * 4 + k)));
+        for (std::size_t e = 16; e < 64; ++e) CHECK(t.bytes[e] == 0);
         (t.tile.operand == "A" ? a : b)++;
+    }
+    // A's Moves are its rows, B's its columns (the transpose); C's Writebacks its rows, int32.
+    for (const L2Action& x : plan.l2) {
+        if (x.kind == L2Action::Kind::Move) {
+            CHECK(x.layout == (x.tile.matrix == sw::kpu::isa::MatrixID::B ? L2Action::Layout::DenseColumns
+                                                                          : L2Action::Layout::DenseRows));
+            CHECK(x.element_bytes == 1);
+        } else if (x.kind == L2Action::Kind::Writeback) {
+            CHECK(x.layout == L2Action::Layout::DenseRows);
+            CHECK(x.element_bytes == 4);
+            CHECK(x.dense_bytes() == 64);
+        }
     }
     CHECK(a == 16);   // A[i, :] is resident again for each j
     CHECK(b == 8);

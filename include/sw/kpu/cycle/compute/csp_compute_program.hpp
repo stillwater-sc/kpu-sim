@@ -24,16 +24,16 @@
 // L3 slot holds two residencies over the run is refused: that needs the Loads run in time, which
 // the join does (step 3).
 //
-// THE LAYOUT. L2's data is pre-arranged (docs/01-architecture/memory-hierarchy-roles.md): one L2 row
-// a lane. An A tile (h x K) is h rows, row m its row m; a B tile (K x w) is w rows, row j its column
-// j; a C tile (h x w int32) is h rows of w int32, little-endian. Each row is padded to the L2's row.
-// The L3 image of a slot is the same rows, `row_bytes` apart, from the slot's address
-// (slot * slot_bytes). (Phase 1 packs a tile densely, row-major. The transform between the two, B's
-// transpose among it, belongs on the BlockMover's write into L2; it is not built here: the L3 image
-// is loaded in the L2's layout.)
+// THE LAYOUT. L3 holds each tile as the memory subsystem places it (csp_l3_program.hpp, Phase 1):
+// densely, row-major at its element's width, little-endian, padded to whole 64-byte beats, from
+// its slot's address (slot * slot_bytes, the largest padded tile). L2's data is pre-arranged, one
+// row a lane (docs/01-architecture/memory-hierarchy-roles.md), so the BlockMover transforms each
+// tile on its way into L2 (#548; block_mover.hpp's dense layouts): an A tile (h x K) into h lanes,
+// its rows; a B tile (K x w) into w lanes, its columns (the transpose); and on the way back a C
+// tile's h rows of w int32 into its dense tile in L3.
 //
 // THE ORACLE: L-B's result. `outputs` holds, for every Writeback, the bytes its L3 slot must hold
-// after the run: L-B's C tile in the layout above, int32 exact.
+// after the run: L-B's C tile, densely packed, int32 exact -- the bytes Phase 1's plan fills it with.
 //
 // WHAT IS REFUSED, before any cycle is run (std::invalid_argument, naming the action): a Call other
 // than an int8 x int8 -> int32 OS gemm (alpha 1), an L2 accumulator's merge, an accumulator's init
@@ -47,6 +47,7 @@
 
 #include <sw/kpu/cycle/compute/l2_program.hpp>
 #include <sw/kpu/cycle/compute/streamer.hpp>
+#include <sw/kpu/cycle/memory/csp_l3_program.hpp>
 #include <sw/kpu/program/csp/csp_program.hpp>
 #include <sw/kpu/program/numeric.hpp>
 #include <sw/kpu/program/tile_program.hpp>
@@ -69,7 +70,7 @@ struct CspComputePlan {
         sw::kpu::program::TileCoord tile;
         std::uint32_t l3_slot = 0;
         std::uint64_t address = 0;
-        std::vector<std::uint8_t> bytes;   // the tile's rows, `row_bytes` each
+        std::vector<std::uint8_t> bytes;   // the tile, densely packed and padded to 64-byte beats
     };
     L2Program l2;
     StreamerProgram commands;
@@ -77,7 +78,7 @@ struct CspComputePlan {
     // most lanes of a tile) and its row (the most bytes of a lane, a multiple of `row_align`).
     std::uint32_t l2_slots = 0, rows_per_slot = 0, row_bytes = 0;
     std::uint32_t l3_slots = 0;
-    std::uint64_t slot_bytes = 0;          // an L3 slot: rows_per_slot rows
+    std::uint64_t slot_bytes = 0;          // an L3 slot: the largest tile, densely packed and padded to beats
     std::uint32_t max_h = 0, max_w = 0;    // the most lanes a command uses: A's, B's
     std::vector<Image> inputs;             // L3 before the run
     std::vector<Image> outputs;            // L3 after it: each written-back tile, L-B's
@@ -110,23 +111,6 @@ struct Shape {
 inline Shape shape(const TensorOperand& op, Dim ti, Dim tj) {
     return {static_cast<std::uint32_t>(op.row_end(ti) - op.row_begin(ti)),
             static_cast<std::uint32_t>(op.col_end(tj) - op.col_begin(tj))};
-}
-
-// A tile's lanes in the L2's layout: `role` 'A' (a lane a row), 'B' (a lane a column) or 'C' (a row of
-// int32), each lane `row_bytes`, little-endian at the element's width.
-inline std::vector<std::uint8_t> lanes(const TensorOperand& op, Dim ti, Dim tj, char role, std::uint32_t row_bytes) {
-    const unsigned w = element_bytes(op);
-    const Dim r0 = op.row_begin(ti), c0 = op.col_begin(tj);
-    const Shape s = shape(op, ti, tj);
-    const std::uint32_t n = role == 'B' ? s.cols : s.rows, len = role == 'B' ? s.rows : s.cols;
-    std::vector<std::uint8_t> v(std::size_t(n) * row_bytes, 0);
-    for (std::uint32_t m = 0; m < n; ++m)
-        for (std::uint32_t e = 0; e < len; ++e) {
-            const auto word = role == 'B' ? op.word(r0 + e, c0 + m) : op.word(r0 + m, c0 + e);
-            for (unsigned b = 0; b < w; ++b)
-                v[std::size_t(m) * row_bytes + std::size_t(e) * w + b] = static_cast<std::uint8_t>(word >> (8 * b));
-        }
-    return v;
 }
 
 inline sw::kpu::timing::TileID tile_id(char role, const TileCoord& t) {
@@ -189,6 +173,9 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
                     sc = shape(C, op.outputs[0].ti, op.outputs[0].tj);
         if (sa.cols != sb.rows || sc.rows != sa.rows || sc.cols != sb.cols)
             throw at(i, ": its tiles' shapes do not compose");
+        const auto dense = [](std::uint64_t n) { return (n + kL3BeatBytes - 1) / kL3BeatBytes * kL3BeatBytes; };
+        plan.slot_bytes = std::max({plan.slot_bytes, dense(std::uint64_t(sa.rows) * sa.cols),
+                                    dense(std::uint64_t(sb.rows) * sb.cols), dense(std::uint64_t(sc.rows) * sc.cols * 4)});
         plan.max_h = std::max(plan.max_h, sa.rows);
         plan.max_w = std::max(plan.max_w, sb.cols);
         plan.rows_per_slot = std::max({plan.rows_per_slot, sa.rows, sb.cols});
@@ -196,7 +183,6 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
     }
     if (plan.rows_per_slot == 0) throw std::invalid_argument("plan_compute: the program has no Call");
     plan.row_bytes = (lane_bytes + row_align - 1) / row_align * row_align;
-    plan.slot_bytes = std::uint64_t(plan.rows_per_slot) * plan.row_bytes;
     plan.l3_slots = static_cast<std::uint32_t>(p.channel(sw::kpu::program::csp::Chan::L3).capacity);
 
     auto role_of = [&](std::size_t i, const TileCoord& t) {
@@ -264,15 +250,15 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
                 if (a.kind == Kind::Writeback) {
                     if (r != 'C') throw at(i, "writes back an operand the gemm reads");
                     const std::uint32_t slot = l2_slot(i);
-                    const std::uint32_t rows = rows_of('C', a.tile);
-                    plan.l2.push_back(l2_writeback(slot, tile_id('C', a.tile), address, plan.row_bytes, rows));
+                    const Shape sc = shape(result.operand(a.tile.operand), a.tile.ti, a.tile.tj);
+                    plan.l2.push_back(l2_writeback_dense(slot, tile_id('C', a.tile), address, sc.rows, sc.cols, 4));
                     ++plan.writebacks;
-                    plan.outputs.push_back({a.tile, s, address,
-                                            lanes(result.operand(a.tile.operand), a.tile.ti, a.tile.tj, 'C', plan.row_bytes)});
+                    plan.outputs.push_back(
+                        {a.tile, s, address, csp_l3_detail::pack(result.operand(a.tile.operand), a.tile.ti, a.tile.tj)});
                 } else {
                     if (r == 'C') throw at(i, "loads the gemm's result: an accumulate is not built in step 2e");
-                    plan.inputs.push_back({a.tile, s, address,
-                                           lanes(inputs.operand(a.tile.operand), a.tile.ti, a.tile.tj, r, plan.row_bytes)});
+                    plan.inputs.push_back(
+                        {a.tile, s, address, csp_l3_detail::pack(inputs.operand(a.tile.operand), a.tile.ti, a.tile.tj)});
                 }
                 break;
             }
@@ -287,8 +273,9 @@ inline CspComputePlan plan_compute(const sw::kpu::program::csp::CspProgram& p,
                 const auto it = owner.find(s);
                 if (it == owner.end() || p.actions[it->second].tile.to_string() != a.tile.to_string())
                     throw at(i, "reads L3 slot " + std::to_string(s) + ", which does not hold its tile");
-                plan.l2.push_back(l2_move(l2_slot(i), tile_id(r, a.tile), std::uint64_t(s) * plan.slot_bytes,
-                                          plan.row_bytes, rows_of(r, a.tile)));
+                const Shape st = shape(inputs.operand(a.tile.operand), a.tile.ti, a.tile.tj);
+                plan.l2.push_back(l2_move_dense(l2_slot(i), tile_id(r, a.tile), std::uint64_t(s) * plan.slot_bytes,
+                                                st.rows, st.cols, 1, r == 'B'));
                 ++plan.moves;
                 break;
             }

@@ -24,6 +24,8 @@
 #include <sw/kpu/cycle/simulator.hpp>
 
 #include <algorithm>
+#include <map>
+#include <optional>
 #include <cstdint>
 #include <numeric>
 #include <stdexcept>
@@ -303,4 +305,139 @@ TEST_CASE("The program and the configurations are checked before anything runs",
                       ContainsSubstring("8 rows, but its Move wrote 4"));
     CHECK_NOTHROW(L2("l2", d, c, {l2_move(0, tile(0), 0, 256, 4), l2_writeback(0, tile(0), 0, 256, 4),
                                   l2_writeback(0, tile(0), 0, 256, 2), l2_release(0, tile(0))}));
+}
+
+// --- the dense layouts (#548, the join): L3 holds a tile densely, L2 one row a lane ---------------
+
+namespace {
+
+// A dense R x C tile of `e`-byte elements, row-major, padded to 64-byte beats; element (r, c)'s
+// bytes are distinct.
+std::vector<std::uint8_t> dense_tile(std::uint32_t R, std::uint32_t C, std::uint32_t e) {
+    std::vector<std::uint8_t> v((R * C * e + 63) / 64 * 64, 0);
+    for (std::uint32_t r = 0; r < R; ++r)
+        for (std::uint32_t c = 0; c < C; ++c)
+            for (std::uint32_t b = 0; b < e; ++b) v[(std::size_t(r) * C + c) * e + b] = static_cast<std::uint8_t>(r * 29 + c * 7 + b * 101 + 1);
+    return v;
+}
+// Its transpose, C x R, packed the same way.
+std::vector<std::uint8_t> transposed(const std::vector<std::uint8_t>& t, std::uint32_t R, std::uint32_t C, std::uint32_t e) {
+    std::vector<std::uint8_t> v(t.size(), 0);
+    for (std::uint32_t r = 0; r < R; ++r)
+        for (std::uint32_t c = 0; c < C; ++c)
+            for (std::uint32_t b = 0; b < e; ++b) v[(std::size_t(c) * R + r) * e + b] = t[(std::size_t(r) * C + c) * e + b];
+    return v;
+}
+
+}  // namespace
+
+TEST_CASE("A dense tile into L2 lanes: its rows, or its columns (the transpose), and back to L3 dense",
+          "[cycle][l2][blockmover][dense]") {
+    // 16 x 16 int8, 256 bytes in L3: 16 lanes of 16 bytes in a slot of 16 rows of 256.
+    const std::vector<std::uint8_t> t = dense_tile(16, 16, 1);
+    for (const bool transpose : {false, true}) {
+        CAPTURE(transpose);
+        const L2Program p{l2_move_dense(0, tile(0), kIn, 16, 16, 1, transpose),
+                          l2_writeback_dense(0, tile(0), kOut, 16, 16, 1), l2_release(0, tile(0))};
+        L2BmRig::Options o;
+        L2BmRig r(p, o);
+        r.l3.load(kIn, t);
+        bool seen = false;
+        r.sim.add_invariant("lanes", [&] {
+            if (seen || (r.l2.state(0) != L2::State::Ready && r.l2.state(0) != L2::State::Reading)) return;
+            seen = true;
+            // Lane m in L2 row m: the tile's row m, or its column m, then zeros to the row.
+            for (std::uint32_t m = 0; m < 16; ++m) {
+                CAPTURE(m);
+                const auto row = r.l2.bank_row(r.l2.bank(0, m), r.l2.index(0, m));
+                for (std::uint32_t k = 0; k < 16; ++k) CHECK(row[k] == t[transpose ? k * 16 + m : m * 16 + k]);
+                for (std::uint32_t k = 16; k < 256; ++k) CHECK(row[k] == 0);
+            }
+        });
+        REQUIRE(r.sim.run_until_idle(kLimit));
+        CHECK(seen);
+        // The Writeback packs each row's lane back densely: the tile, or its transpose.
+        CHECK(r.l3.peek(kOut, t.size()) == (transpose ? transposed(t, 16, 16, 1) : t));
+        CHECK(r.l3.beats_written() == t.size() / 64);
+    }
+}
+
+TEST_CASE("A dense Writeback of int32 rows: each row's first w elements, the last beat padded", "[cycle][l2][blockmover][dense]") {
+    // A 4 x 4 int32 result: 4 L2 rows whose first 16 bytes are the row, 64 bytes dense in L3.
+    const std::vector<std::uint8_t> t = dense_tile(4, 4, 4);
+    REQUIRE(t.size() == 64);
+    L2BmRig::Options o;
+    o.l2.row_bytes = 64;
+    o.bus_bytes = 16;
+    const L2Program p{l2_move(0, tile(0), kIn, 64, 4), l2_writeback_dense(0, tile(0), kOut, 4, 4, 4), l2_release(0, tile(0))};
+    L2BmRig r(p, o);
+    for (std::uint32_t i = 0; i < 4; ++i) {
+        std::vector<std::uint8_t> row(64, 0xEE);   // past the lane: never written back
+        std::copy(t.begin() + i * 16, t.begin() + (i + 1) * 16, row.begin());
+        r.l3.load(kIn + i * 64, row);
+    }
+    REQUIRE(r.sim.run_until_idle(kLimit));
+    CHECK(r.l3.peek(kOut, 64) == t);
+    CHECK(r.l3.beats_written() == 4);   // 64 bytes in 16-byte beats
+}
+
+TEST_CASE("The transpose waits for the whole tile; a row lane goes as soon as its bytes are in",
+          "[cycle][l2][blockmover][dense]") {
+    // 16 x 16 int8 in 16-byte beats: 16 beats. Lane 0 of the rows is in after one beat; any
+    // column needs all 16. The slot is OWNED from its first row's write: measured, never coded.
+    const std::vector<std::uint8_t> t = dense_tile(16, 16, 1);
+    std::map<bool, Cycle> owned;
+    for (const bool transpose : {false, true}) {
+        L2BmRig::Options o;
+        o.bus_bytes = 16;
+        o.l2.row_bytes = 16;
+        const L2Program p{l2_move_dense(0, tile(0), kIn, 16, 16, 1, transpose), l2_release(0, tile(0))};
+        L2BmRig r(p, o);
+        r.l3.load(kIn, t);
+        std::optional<Cycle> at;
+        r.sim.add_invariant("owned", [&] {
+            if (!at && r.l2.state(0) != L2::State::Free) at = r.kpu.cycle();
+        });
+        REQUIRE(r.sim.run_until_idle(kLimit));
+        REQUIRE(at);
+        owned[transpose] = *at;
+    }
+    // Fifteen more beats, a clock each, before a column is whole.
+    CHECK(owned[true] >= owned[false] + 15);
+}
+
+TEST_CASE("Dense layouts are checked before anything runs", "[cycle][l2][blockmover][dense]") {
+    L2BmRig::Options o;
+    SECTION("a lane past the L2's row") {
+        o.l2.row_bytes = 64;
+        const L2Program p{l2_move_dense(0, tile(0), kIn, 4, 128, 1, false)};
+        CHECK_THROWS_WITH(L2BmRig(p, o), ContainsSubstring("past the L2's 64-byte row"));
+    }
+    SECTION("L2 rows that are not the tile's lanes") {
+        L2Action a = l2_move_dense(0, tile(0), kIn, 4, 8, 1, true);
+        a.rows = 4;   // a transpose's lanes are its 8 columns
+        CHECK_THROWS_WITH(L2BmRig(L2Program{a}, o), ContainsSubstring("a lane a column"));
+    }
+    SECTION("a Writeback by columns") {
+        L2Action w = l2_writeback_dense(0, tile(0), kOut, 4, 4, 4);
+        w.layout = L2Action::Layout::DenseColumns;
+        w.rows = 4;
+        const L2Program p{l2_move(0, tile(0), kIn, 256, 4), w};
+        CHECK_THROWS_WITH(L2BmRig(p, o), ContainsSubstring("writes its rows back as the tile's rows"));
+    }
+    SECTION("a tile past the mover's tile buffer") {
+        // The buffer is one L2 slot. Lanes that fit their rows always fit it, but the dense tile is
+        // padded to 64-byte beats: a slot of one 16-byte row holds a 1 x 16 tile's lane, not its beat.
+        o.l2.rows_per_slot = 1;
+        o.l2.row_bytes = 16;
+        o.bus_bytes = 16;
+        CHECK_THROWS_WITH(L2BmRig(L2Program{l2_move_dense(0, tile(0), kIn, 1, 16, 1, false)}, o),
+                          ContainsSubstring("for a tile buffer of one slot (16)"));
+        o.l2.rows_per_slot = 4;   // 64 bytes: the beat fits
+        CHECK_NOTHROW(L2BmRig(L2Program{l2_move_dense(0, tile(0), kIn, 1, 16, 1, false)}, o));
+    }
+    SECTION("an element that is not 1, 2 or 4 bytes") {
+        CHECK_THROWS_WITH(L2BmRig(L2Program{l2_move_dense(0, tile(0), kIn, 4, 4, 3, false)}, o),
+                          ContainsSubstring("a dense tile of 4 x 4 elements of 3 bytes"));
+    }
 }
