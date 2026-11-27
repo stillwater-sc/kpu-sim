@@ -256,10 +256,14 @@ if(KPU_BUILD_TESTS)
         set_tests_properties(kpu_run_mflow_check_run_selftest PROPERTIES LABELS "program;driver;cycle;memory;mflow"
                              FIXTURES_REQUIRED memory_s1_run_dir)
         add_test(NAME kpu_run_run_dir_check_selftest
-            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir})
+            COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_CURRENT_SOURCE_DIR}/test_check_run_dir.py ${_run_dir}
+                    ${CMAKE_CURRENT_BINARY_DIR}/runs/compute_s1)
         set_tests_properties(kpu_run_run_dir_check kpu_run_run_dir_mflow_check kpu_run_run_dir_trace_check
                              kpu_run_run_dir_check_selftest
                              PROPERTIES LABELS "program;driver;cycle;memory;mflow" FIXTURES_REQUIRED memory_s1_run_dir)
+        # The self-test checks a compute run's directory too (#547).
+        set_tests_properties(kpu_run_run_dir_check_selftest PROPERTIES
+                             FIXTURES_REQUIRED "memory_s1_run_dir;compute_s1_run_dir")
         add_test(NAME kpu_run_memory_mflow_check_t4
             COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tools/trace/mflow_check.py
                     ${CMAKE_CURRENT_BINARY_DIR}/memory_t4.mflow)
@@ -316,8 +320,17 @@ if(KPU_BUILD_TESTS)
             -DEXPECT_CODE=2
             -DMUST_MATCH=separate.runs.until.the.join
             -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
+    # #547's review: the trace and the heatmap's .svg naming one file would leave only the last written.
+    add_test(NAME kpu_run_compute_artifacts_are_distinct
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:run>
+            -DARGS=--program$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/corpus/matmul_32x32x32_t16.csp$<SEMICOLON>--deploy$<SEMICOLON>${CMAKE_SOURCE_DIR}/tests/program/deploy/kpu_s1.json$<SEMICOLON>--compute-subsystem$<SEMICOLON>--compute-trace$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/clash/../clash.svg$<SEMICOLON>--compute-heatmap$<SEMICOLON>${CMAKE_CURRENT_BINARY_DIR}/clash.json
+            -DEXPECT_CODE=2
+            -DMUST_MATCH=--compute-trace.and.--compute-heatmap.s..svg.name.the.same.file
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/expect_exit.cmake)
     set_tests_properties(kpu_run_compute_subsystem_needs_a_deployment kpu_run_compute_trace_needs_the_run
-                         kpu_run_compute_and_memory_are_separate PROPERTIES LABELS "program;driver;cycle;compute")
+                         kpu_run_compute_and_memory_are_separate kpu_run_compute_artifacts_are_distinct
+                         PROPERTIES LABELS "program;driver;cycle;compute")
     if(KPU_RUN_PYTHON3)
         add_test(NAME kpu_run_compute_trace_check
             COMMAND ${KPU_RUN_PYTHON3} ${CMAKE_SOURCE_DIR}/tests/cycle/check_trace.py

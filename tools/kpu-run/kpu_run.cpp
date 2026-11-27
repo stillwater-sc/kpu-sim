@@ -776,6 +776,26 @@ int run_compute(const std::vector<std::string>& a, const csp::lang::Program& ast
         std::cerr << "kpu-run: --compute-heatmap names the .json; its .svg is written beside it\n";
         return 2;
     }
+    {
+        // Every artifact its own file: two paths naming one file would leave only the last written.
+        std::vector<std::pair<std::string, std::string>> outs;
+        for (const auto& [what, path] : {std::pair<const char*, const std::string*>{"--compute-trace", &trace_path},
+                                         {"--compute-counters", &counters_path},
+                                         {"--compute-heatmap", &heatmap_path},
+                                         {"--compute-heatmap's .svg", &heatmap_svg}})
+            if (!path->empty()) {
+                std::error_code ec;
+                const std::filesystem::path abs = std::filesystem::absolute(*path, ec);
+                outs.push_back({what, (ec ? std::filesystem::path(*path) : abs).lexically_normal().string()});
+            }
+        for (std::size_t i = 0; i < outs.size(); ++i)
+            for (std::size_t k = i + 1; k < outs.size(); ++k)
+                if (outs[i].second == outs[k].second) {
+                    std::cerr << "kpu-run: " << outs[i].first << " and " << outs[k].first << " name the same file, "
+                              << outs[i].second << "\n";
+                    return 2;
+                }
+    }
     try {
         const auto target = csp::lang::target_from(*device);
         const csp::CspProgram p = csp::lang::compile(ast, &target);

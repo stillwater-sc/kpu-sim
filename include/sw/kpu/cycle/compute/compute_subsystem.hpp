@@ -226,6 +226,7 @@ inline ComputeRun run_compute_subsystem(const CspComputePlan& plan, const progra
         throw std::invalid_argument("run_compute_subsystem: the program's tiles are " + std::to_string(plan.max_h) + " x " +
                                     std::to_string(plan.max_w) + ", past " + device.name + "'s " +
                                     std::to_string(shape.rows) + " x " + std::to_string(shape.cols) + " array");
+    if (o.bus_bytes == 0) throw std::invalid_argument("run_compute_subsystem: the BlockMover's beat must be positive");
     if (plan.row_bytes % o.bus_bytes != 0)
         throw std::invalid_argument("run_compute_subsystem: the L2's " + std::to_string(plan.row_bytes) +
                                     "-byte row is not whole " + std::to_string(o.bus_bytes) + "-byte beats");
@@ -424,6 +425,7 @@ inline void write_heatmap_json(const ComputeRun& r, const std::string& path) {
         out << "]";
     }
     out << "}\n";
+    out.close();   // a failure flushing the last bytes is the write's failure too
     if (!out) throw std::runtime_error("write_heatmap_json: writing " + path + " failed");
 }
 
@@ -453,6 +455,7 @@ inline void write_heatmap_svg(const ComputeRun& r, const std::string& path) {
             out << line;
         }
     out << "</svg>\n";
+    out.close();
     if (!out) throw std::runtime_error("write_heatmap_svg: writing " + path + " failed");
 }
 

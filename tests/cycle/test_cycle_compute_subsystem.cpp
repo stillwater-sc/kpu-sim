@@ -26,6 +26,7 @@
 #include <nlohmann/json.hpp>
 
 #include <cmath>
+#include <filesystem>
 #include <cstdint>
 #include <fstream>
 #include <map>
@@ -246,4 +247,28 @@ TEST_CASE("The run refuses a program whose tiles do not fit the deployment's arr
     const CspComputePlan plan = plan_of(int8_64cubed(), s1, 64);
     CHECK_THROWS_WITH(run_compute_subsystem(plan, device("kpu_soc_2x2.json"), ComputeRunOptions{}),
                       ContainsSubstring("past kpu_2x2_systolic.tile0's 4 x 4 array"));
+}
+
+TEST_CASE("The run refuses a zero-byte BlockMover beat before dividing by it", "[cycle][compute]") {
+    // #547's review: row_bytes % bus_bytes with a zero beat is undefined behaviour.
+    const auto dev = device("kpu_soc_2x2.json");
+    const CspComputePlan plan = plan_of(rtl_8x8x16(), dev, 64);
+    ComputeRunOptions o;
+    o.bus_bytes = 0;
+    CHECK_THROWS_WITH(run_compute_subsystem(plan, dev, o), ContainsSubstring("beat must be positive"));
+}
+
+TEST_CASE("A trace or heatmap whose last bytes cannot be flushed is a failed write", "[cycle][compute]") {
+    // #547's review: the stream was checked before it was closed, so a failure flushing its buffer
+    // passed unseen and a truncated file was published as written. /dev/full takes the open and
+    // refuses every write: the small files below stay in the buffer until the close.
+    if (!std::filesystem::exists("/dev/full")) SKIP("no /dev/full on this platform");
+    const auto dev = device("kpu_soc_2x2.json");
+    ComputeRunOptions o;
+    const CspComputePlan plan = plan_of(rtl_8x8x16(), dev, o.bus_bytes);
+    const ComputeRun r = run_compute_subsystem(plan, dev, o);
+    CHECK_THROWS_WITH(write_heatmap_json(r, "/dev/full"), ContainsSubstring("failed"));
+    CHECK_THROWS_WITH(write_heatmap_svg(r, "/dev/full"), ContainsSubstring("failed"));
+    Tracer t;
+    CHECK_THROWS_WITH(t.write("/dev/full"), ContainsSubstring("failed"));
 }

@@ -63,10 +63,12 @@ def check(d, want_status):
         expect = {"ok": (0,), "failed": (1,), "error": (1, 2)}.get(m.get("status"))
         if expect is not None and m.get("exit_code") not in expect:
             bad.append(f"status {m.get('status')} with exit_code {m.get('exit_code')}")
-    if m.get("kind") not in ARTIFACTS:
-        bad.append(f"kind {m.get('kind')!r} is not one of {', '.join(ARTIFACTS)}")
-    if m.get("status") in ("ok", "failed") and m.get("kind") in ARTIFACTS:
-        want = ARTIFACTS[m["kind"]]
+    # A kind of another type ([] or {}) is a diagnostic above, and has no artifacts to look up.
+    kind = m.get("kind") if isinstance(m.get("kind"), str) else None
+    if isinstance(m.get("kind"), str) and kind not in ARTIFACTS:
+        bad.append(f"kind {kind!r} is not one of {', '.join(ARTIFACTS)}")
+    if m.get("status") in ("ok", "failed") and kind in ARTIFACTS:
+        want = ARTIFACTS[kind]
         arts = m.get("artifacts", {})
         if arts != want:
             bad.append(f"artifacts are {arts}, expected {want}")
@@ -79,10 +81,12 @@ def check(d, want_status):
         if "heatmap" in want and (d / "heatmap.json").is_file():
             try:
                 h = json.loads((d / "heatmap.json").read_text())
-                if h.get("format") != "kpu-array-heatmap" or len(h.get("useful", [])) != h.get("rows"):
-                    bad.append("heatmap.json is not a kpu-array-heatmap with a row per PE row")
-            except ValueError as e:
+            except (OSError, ValueError) as e:
                 bad.append(f"heatmap.json: {e}")
+            else:
+                if (not isinstance(h, dict) or h.get("format") != "kpu-array-heatmap"
+                        or not isinstance(h.get("useful"), list) or len(h["useful"]) != h.get("rows")):
+                    bad.append("heatmap.json is not a kpu-array-heatmap with a row per PE row")
         res = m.get("result")
         if not isinstance(res, dict) or not isinstance(res.get("finished"), bool):
             bad.append("a run that ran states its result")

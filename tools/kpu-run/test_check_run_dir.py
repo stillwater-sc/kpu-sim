@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Self-test for check_run_dir.py (docs/plans/cycle-mflow-and-debug-server.md step 3): the clean run
-directory passes, and each way a directory can disagree with its run.json fails.
+directory passes, and each way a directory can disagree with its run.json fails; a malformed
+run.json or heatmap.json is reported, never a traceback (#547's review).
 
-Usage: python3 test_check_run_dir.py <clean-run-dir>
+Usage: python3 test_check_run_dir.py <clean-memory-run-dir> [<clean-compute-run-dir>]
 
 SPDX-License-Identifier: MIT
 Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -20,6 +21,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CHECK = HERE / "check_run_dir.py"
 RUN_DIR = None
+COMPUTE_DIR = None
 
 
 def run(d, *extra):
@@ -117,6 +119,17 @@ class CheckRunDirSelfTest(unittest.TestCase):
         code, out = run(self.d, "--status", "running")
         self.assertEqual(code, 0, out)
 
+    def test_a_kind_of_the_wrong_type_is_reported(self):
+        # An unhashable kind ([] or {}) is a diagnostic, not a TypeError from the artifact lookup.
+        for bad in ([], {}, None, "cache-subsystem"):
+            with self.subTest(kind=bad):
+                self.m["kind"] = bad
+                self.save()
+                code, out = run(self.d)
+                self.assertEqual(code, 1, out)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("kind", out)
+
     def test_no_manifest_is_unreadable(self):
         (self.d / "run.json").unlink()
         code, _ = run(self.d)
@@ -129,9 +142,42 @@ class CheckRunDirSelfTest(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+@unittest.skipUnless(len(sys.argv) > 2 or COMPUTE_DIR, "no compute run directory given")
+class CheckComputeRunDirSelfTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="compute-run-dir-selftest-"))
+        self.d = self.tmp / "run"
+        shutil.copytree(COMPUTE_DIR, self.d)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_the_clean_directory_passes(self):
+        code, out = run(self.d, "--status", "ok")
+        self.assertEqual(code, 0, out)
+
+    def test_a_missing_heatmap_fails(self):
+        (self.d / "heatmap.svg").unlink()
+        code, out = run(self.d)
+        self.assertEqual(code, 1, out)
+        self.assertIn("heatmap.svg is named but is not there", out)
+
+    def test_a_malformed_heatmap_is_reported(self):
+        # Valid JSON of the wrong shape: reported through the checker, never a traceback.
+        for bad in ("[]", '{"format": "kpu-array-heatmap", "useful": null, "rows": 4}', "3", "not json"):
+            with self.subTest(heatmap=bad):
+                (self.d / "heatmap.json").write_text(bad)
+                code, out = run(self.d)
+                self.assertEqual(code, 1, out)
+                self.assertNotIn("Traceback", out)
+                self.assertIn("heatmap.json", out)
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(2)
     RUN_DIR = Path(sys.argv.pop(1))
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        COMPUTE_DIR = Path(sys.argv.pop(1))
     unittest.main()

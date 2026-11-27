@@ -191,6 +191,7 @@ public:
             }
         }
         out << "\n]}\n";
+        out.close();   // a failure flushing the last bytes is the write's failure too
         if (!out) throw std::runtime_error("cycle::Tracer: writing " + path + " failed");
     }
 
