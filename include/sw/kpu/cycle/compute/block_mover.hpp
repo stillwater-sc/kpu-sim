@@ -82,6 +82,14 @@ public:
         validate_l2_program(program, cfg.slots, cfg.rows_per_slot, cfg.row_bytes, "cycle::BlockMover " + this->name());
         for (std::size_t i = 0; i < program.size(); ++i) {
             const L2Action& a = program[i];
+            // A Writeback into an L3 tile's slot is a Write of a whole tile, its beats contiguous
+            // (l3_tile.hpp): strided rows must be packed, a row apart.
+            if (a.kind == L2Action::Kind::Writeback && a.l3_slot && a.layout == L2Action::Layout::Strided && a.rows > 1 &&
+                a.l3_pitch != cfg.row_bytes)
+                throw std::invalid_argument("cycle::BlockMover " + this->name() + ": action " + std::to_string(i) +
+                                            " writes back into L3 slot " + std::to_string(*a.l3_slot) + " rows " +
+                                            std::to_string(a.l3_pitch) + " bytes apart; an L3 Write is a whole tile, "
+                                            "its rows " + std::to_string(cfg.row_bytes) + " bytes apart");
             if ((a.kind != L2Action::Kind::Move && a.kind != L2Action::Kind::Writeback) ||
                 a.layout == L2Action::Layout::Strided)
                 continue;

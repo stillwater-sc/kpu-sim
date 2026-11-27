@@ -151,8 +151,10 @@ public:
                                      std::to_string(q.address) + " from the BlockMover, where action " +
                                      std::to_string(r.ticket) + " reads " + std::to_string(r.bytes) + " bytes of slot " +
                                      std::to_string(r.slot) + " (at " + std::to_string(base) + ")";
-            if (q.address < base || q.address - base + q.bytes > config_.slot_bytes || q.bytes == 0 ||
-                q.bytes % kL3BeatBytes || (q.address - base) % kL3BeatBytes)
+            // The offset first, then the length against what is left of the slot: no sum to wrap.
+            if (q.address < base || q.address - base > config_.slot_bytes ||
+                q.bytes > config_.slot_bytes - (q.address - base) || q.bytes == 0 || q.bytes % kL3BeatBytes ||
+                (q.address - base) % kL3BeatBytes)
                 throw std::logic_error(what + ": outside its slot, or not whole beats");
             if (bm_read_served_ + q.bytes > r.bytes)
                 throw std::logic_error(what + ": " + std::to_string(bm_read_served_) + " served already, past the " +

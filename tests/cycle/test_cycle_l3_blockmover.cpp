@@ -212,3 +212,23 @@ TEST_CASE("A read past its Read's bytes, or past the program's Reads, is a fault
         CHECK_THROWS_WITH(r.sim.run_until_idle(kLimit), ContainsSubstring("past the program's Reads"));
     }
 }
+
+TEST_CASE("A read whose address wraps the address space is outside its slot", "[cycle][l3][blockmover][join]") {
+    // #600's review: address - base + bytes wrapped below the slot's size near 2^64.
+    const L3Program l3p{l3_load(0, kDram, 64), l3_read(0, 64), l3_release(0)};
+    const L2Program l2p{l2_move_dense(0, tile(MatrixID::A, 0), ~std::uint64_t{0} - 63, 1, 16, 1, false),
+                        l2_release(0, tile(MatrixID::A, 0))};
+    L3BmRig r(l3p, l2p, L3BmRig::Options{});
+    r.channel.preload(kDram, std::vector<std::uint8_t>(64, 1));
+    CHECK_THROWS_WITH(r.sim.run_until_idle(kLimit), ContainsSubstring("outside its slot"));
+}
+
+TEST_CASE("A strided Writeback into an L3 slot is contiguous rows, or refused", "[cycle][l3][blockmover][join]") {
+    // #600's review: an L3 Write is a whole tile, its beats in order, so rows `l3_pitch` apart with a
+    // pitch past the row would leave gaps the Write never fills. Refused before anything runs.
+    L2Action wb = l2_writeback(0, tile(MatrixID::A, 0), at(1), 128, 2);
+    wb.l3_slot = 1;
+    const L2Program l2p{l2_move(0, tile(MatrixID::A, 0), at(0), 64, 2), wb, l2_release(0, tile(MatrixID::A, 0))};
+    const L3Program l3p{l3_load(0, kDram, 128), l3_read(0, 128), l3_write(1, 128), l3_release(0), l3_release(1)};
+    CHECK_THROWS_WITH(L3BmRig(l3p, l2p, L3BmRig::Options{}), ContainsSubstring("rows 128 bytes apart"));
+}
