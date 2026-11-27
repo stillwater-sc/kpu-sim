@@ -17,8 +17,15 @@
 //            start (an Inherit). The DMA engine executes it as it does a Load -- under the slot's
 //            credit, one beat at a time over the L3 link -- so it is timed as a Load without its
 //            DRAM reads.
+//   Read     the BlockMover's Move of the slot's tile into L2 (#548, the join): a CONSUMER of the
+//            tile, as a Store is. The BlockMover asks for the tile's `bytes`; the L3 tile serves it
+//            once the slot holds the tile, and the slot's Release waits until it is served.
+//   Write    the BlockMover's Writeback of a result tile into the slot: a PRODUCER, as a Load is.
+//            Its credit is the BlockMover's: a Release returns a slot's credit to its next
+//            producer, the DMA engine for a Load or Fill, the BlockMover for a Write; at the start
+//            each slot's credit is its first producer's.
 // Both components execute the same list, each its own part (the engine: Loads, Fills and
-// Stores; the tile: Stores and Releases), in the list's order. An action's index is its ticket: a Store's
+// Stores; the tile: Stores and Releases, and the BlockMover's Reads and Writes), in the list's order. An action's index is its ticket: a Store's
 // beats carry it from the tile to the engine, which matches them to its own Store.
 //
 // THE LINKS (the engine and the tile in one domain, over a direct link: no NoC yet):
@@ -42,7 +49,7 @@ namespace sw::kpu::cycle {
 inline constexpr std::uint32_t kL3BeatBytes = 64;
 
 struct L3Action {
-    enum class Kind : std::uint8_t { Load, Store, Release, Fill };
+    enum class Kind : std::uint8_t { Load, Store, Release, Fill, Read, Write };
     Kind kind = Kind::Load;
     std::uint32_t slot = 0;
     std::uint64_t dram_address = 0;   // Load and Store
@@ -59,6 +66,9 @@ inline L3Action l3_store(std::uint32_t slot, std::uint64_t dram_address, std::ui
     return {L3Action::Kind::Store, slot, dram_address, bytes, {}};
 }
 inline L3Action l3_release(std::uint32_t slot) { return {L3Action::Kind::Release, slot, 0, 0, {}}; }
+// The BlockMover's read of the slot's tile (`bytes` of it), and its write of a tile into the slot.
+inline L3Action l3_read(std::uint32_t slot, std::uint32_t bytes) { return {L3Action::Kind::Read, slot, 0, bytes, {}}; }
+inline L3Action l3_write(std::uint32_t slot, std::uint32_t bytes) { return {L3Action::Kind::Write, slot, 0, bytes, {}}; }
 inline L3Action l3_fill(std::uint32_t slot, std::vector<std::uint8_t> data) {
     const auto n = static_cast<std::uint32_t>(data.size());
     return {L3Action::Kind::Fill, slot, 0, n, std::move(data)};
@@ -70,6 +80,8 @@ inline const char* to_string(L3Action::Kind k) {
         case L3Action::Kind::Store: return "Store";
         case L3Action::Kind::Release: return "Release";
         case L3Action::Kind::Fill: return "Fill";
+        case L3Action::Kind::Read: return "Read";
+        case L3Action::Kind::Write: return "Write";
     }
     return "?";
 }
@@ -91,6 +103,7 @@ inline void validate_l3_program(const L3Program& p, std::uint32_t slots, std::ui
         if (a.bytes > slot_bytes)
             throw std::invalid_argument(at + ": " + std::to_string(a.bytes) + " bytes, past the slot's " +
                                         std::to_string(slot_bytes));
+        if (a.kind == L3Action::Kind::Read || a.kind == L3Action::Kind::Write) continue;   // no DRAM
         if (a.kind == L3Action::Kind::Fill) {
             if (a.data.size() != a.bytes)
                 throw std::invalid_argument(at + ": " + std::to_string(a.data.size()) + " bytes of data for a tile of " +
@@ -104,6 +117,17 @@ inline void validate_l3_program(const L3Program& p, std::uint32_t slots, std::ui
             throw std::invalid_argument(at + ": DRAM [" + std::to_string(a.dram_address) + ", +" +
                                         std::to_string(a.bytes) + ") runs past the end of the address space");
     }
+}
+
+// A producer: it fills a slot (a Load, a Fill, or the BlockMover's Write).
+inline bool is_l3_producer(L3Action::Kind k) {
+    return k == L3Action::Kind::Load || k == L3Action::Kind::Fill || k == L3Action::Kind::Write;
+}
+// Whether slot `slot`'s credit is the BlockMover's at the start: its first producer is a Write.
+inline bool blockmover_holds_at_start(const L3Program& p, std::uint32_t slot) {
+    for (const L3Action& a : p)
+        if (a.slot == slot && is_l3_producer(a.kind)) return a.kind == L3Action::Kind::Write;
+    return false;
 }
 
 struct L3Beat {

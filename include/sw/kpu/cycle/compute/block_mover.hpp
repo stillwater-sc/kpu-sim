@@ -32,6 +32,10 @@
 //     tile_cols elements into the tile buffer, and writes the buffer to L3 one beat a clock, each
 //     beat as soon as its bytes are in, the last padded with zeros to the 64-byte beat.
 //
+// THE L3 SLOT'S CREDIT (#548, the join; connect_l3_credits): a Writeback into an L3 tile's slot is
+// that slot's producer, so it waits for the slot's credit, from the L3 tile, before it starts, and
+// spends it. The L3 tile returns it when its next producer is a Writeback (l3_tile.hpp).
+//
 // COUNTERS. A Move or Writeback is an item: it arrives when it starts and completes when its last
 // row (or beat) is sent. The mover is busy in a clock it moves anything; otherwise stalled for a
 // credit (the slot's, or a link's) or for data (L3's beats, L2's rows).
@@ -78,6 +82,14 @@ public:
         validate_l2_program(program, cfg.slots, cfg.rows_per_slot, cfg.row_bytes, "cycle::BlockMover " + this->name());
         for (std::size_t i = 0; i < program.size(); ++i) {
             const L2Action& a = program[i];
+            // A Writeback into an L3 tile's slot is a Write of a whole tile, its beats contiguous
+            // (l3_tile.hpp): strided rows must be packed, a row apart.
+            if (a.kind == L2Action::Kind::Writeback && a.l3_slot && a.layout == L2Action::Layout::Strided && a.rows > 1 &&
+                a.l3_pitch != cfg.row_bytes)
+                throw std::invalid_argument("cycle::BlockMover " + this->name() + ": action " + std::to_string(i) +
+                                            " writes back into L3 slot " + std::to_string(*a.l3_slot) + " rows " +
+                                            std::to_string(a.l3_pitch) + " bytes apart; an L3 Write is a whole tile, "
+                                            "its rows " + std::to_string(cfg.row_bytes) + " bytes apart");
             if ((a.kind != L2Action::Kind::Move && a.kind != L2Action::Kind::Writeback) ||
                 a.layout == L2Action::Layout::Strided)
                 continue;
@@ -105,6 +117,13 @@ public:
         l2_data_ = &l2_data;
         credits_ = &credits;
     }
+    // The L3 tile's credits for the slots the Writebacks produce into; `held`: the slots whose credit
+    // the mover holds at the start (their first producer is a Writeback).
+    void connect_l3_credits(Link<SlotCredit>& credits, std::vector<bool> held) {
+        l3_credits_ = &credits;
+        l3_initial_ = std::move(held);
+        l3_held_ = l3_initial_;
+    }
 
     void evaluate(Cycle now) override {
         if (!l3_reads_ || !l3_data_ || !l3_writes_ || !l2_writes_ || !l2_reads_ || !l2_data_ || !credits_)
@@ -115,6 +134,13 @@ public:
                 throw std::logic_error(where(now) + ": a credit for slot " + std::to_string(c.slot) + ", which " +
                                        (c.slot >= config_.slots ? "does not exist" : "it already holds"));
             held_[c.slot] = true;
+        }
+        while (l3_credits_ && l3_credits_->can_pop(now)) {
+            const SlotCredit c = l3_credits_->pop(now);
+            if (c.slot >= l3_held_.size() || l3_held_[c.slot])
+                throw std::logic_error(where(now) + ": an L3 credit for slot " + std::to_string(c.slot) + ", which " +
+                                       (c.slot >= l3_held_.size() ? "does not exist" : "it already holds"));
+            l3_held_[c.slot] = true;
         }
         if (head_ == actions_.size()) return;
         const Action& a = actions_[head_];
@@ -129,6 +155,17 @@ public:
                     return;
                 }
                 held_[a.action.slot] = false;
+            }
+            if (a.action.kind == L2Action::Kind::Writeback && l3_credits_ && a.action.l3_slot) {
+                const std::uint32_t s3 = *a.action.l3_slot;
+                if (s3 >= l3_held_.size())
+                    throw std::logic_error(where(now) + ": a Writeback into L3 slot " + std::to_string(s3) + " of " +
+                                           std::to_string(l3_held_.size()));
+                if (!l3_held_[s3]) {
+                    counters().stall(Stall::NoCredit);   // the L3 slot's credit: its last tile not yet released
+                    return;
+                }
+                l3_held_[s3] = false;
             }
             started_ = true;
             counters().accept();
@@ -192,6 +229,8 @@ public:
     [[nodiscard]] const Config& config() const { return config_; }
     // Holds slot `slot`'s credit: the slot is free for its next Move.
     [[nodiscard]] bool holds(std::uint32_t slot) const { return held_.at(slot); }
+    // Holds L3 slot `slot`'s credit: the slot is free for its next Writeback.
+    [[nodiscard]] bool holds_l3(std::uint32_t slot) const { return slot < l3_held_.size() && l3_held_[slot]; }
 
 private:
     struct Action {
@@ -437,6 +476,7 @@ private:
         rows_.clear();
         tile_.clear();
         id_ = 0;
+        l3_held_ = l3_initial_;
     }
 
     Config config_;
@@ -457,6 +497,8 @@ private:
     Link<L2RowRead>* l2_reads_ = nullptr;
     Link<L2RowData>* l2_data_ = nullptr;
     Link<SlotCredit>* credits_ = nullptr;
+    Link<SlotCredit>* l3_credits_ = nullptr;
+    std::vector<bool> l3_initial_, l3_held_;   // the L3 slots whose credit the mover holds
 };
 
 // The BlockMover and its L2 together, every cycle: the mover never holds a slot's credit while

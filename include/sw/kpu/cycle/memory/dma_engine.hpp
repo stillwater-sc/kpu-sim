@@ -15,7 +15,8 @@
 //          the engine's STORE BUFFER (`store_buffer_beats` of them, popped only with room); each
 //          staged beat becomes a DRAM write, which leaves the buffer as it is sent. It completes
 //          when its last write is acknowledged.
-// The engine holds every slot's credit at the start. A Load waiting for a credit holds the
+// The engine holds every slot's credit at the start but those whose first producer is the
+// BlockMover's Write (#548, the join: the BlockMover's Reads and Writes are not the engine's). A Load waiting for a credit holds the
 // commands after it (they start in order); commands already started keep going.
 //
 // THE BURST WINDOWS. At most `window` reads and `write_window` writes are in flight. A read is in
@@ -115,8 +116,11 @@ public:
             throw std::invalid_argument("cycle::DmaEngine " + this->name() +
                                         ": slots, the window and the store buffer must be positive");
         validate_l3_program(program, cfg.slots, cfg.slot_bytes, "cycle::DmaEngine " + this->name());
+        initial_.assign(cfg.slots, true);
+        for (std::uint32_t s = 0; s < cfg.slots; ++s) initial_[s] = !blockmover_holds_at_start(program, s);
         for (std::size_t i = 0; i < program.size(); ++i)
-            if (program[i].kind != L3Action::Kind::Release) {
+            if (program[i].kind == L3Action::Kind::Load || program[i].kind == L3Action::Kind::Fill ||
+                program[i].kind == L3Action::Kind::Store) {   // Releases are the tile's, Reads and Writes the BlockMover's
                 by_ticket_[i] = commands_.size();
                 Command c;
                 c.ticket = i;
@@ -431,7 +435,7 @@ private:
             c.sent_beats.assign(c.action.kind == L3Action::Kind::Store ? c.bursts() : 0, false);
             c.span = 0;
         }
-        held_.assign(config_.slots, true);
+        held_ = initial_;
         next_ = 0;
         active_.clear();
         staged_.clear();
@@ -444,6 +448,7 @@ private:
     }
 
     Config config_;
+    std::vector<bool> initial_;   // the slots whose credit the engine holds at the start
     std::vector<Command> commands_;
     std::unordered_map<std::size_t, std::size_t> by_ticket_;   // a Load's or Store's action -> its command
     std::vector<bool> held_;                                   // the slot credits it holds
@@ -480,6 +485,21 @@ inline void check_slot_credits(const DmaEngine& dma, const L3Tile& l3) {
         if (dma.holds(s) && l3.live(s))
             throw std::logic_error("check_slot_credits: " + dma.name() + " holds slot " + std::to_string(s) +
                                    "'s credit while " + l3.name() + "'s slot is " + L3Tile::to_string(l3.state(s)));
+}
+
+// The same with the BlockMover on the tile's other side (#548, the join): each slot's credit is the
+// engine's or the mover's (`Mover::holds_l3`), never both, and neither's while the slot is live.
+template <class Mover>
+inline void check_slot_credits(const DmaEngine& dma, const Mover& bm, const L3Tile& l3) {
+    check_slot_credits(dma, l3);
+    for (std::uint32_t s = 0; s < l3.config().slots; ++s) {
+        if (!bm.holds_l3(s)) continue;
+        if (dma.holds(s) || l3.live(s))
+            throw std::logic_error("check_slot_credits: " + bm.name() + " holds L3 slot " + std::to_string(s) +
+                                   "'s credit while " +
+                                   (dma.holds(s) ? dma.name() + " holds it too"
+                                                 : l3.name() + "'s slot is " + L3Tile::to_string(l3.state(s))));
+    }
 }
 
 }  // namespace sw::kpu::cycle
