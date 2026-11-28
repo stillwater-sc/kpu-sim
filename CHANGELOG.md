@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The distributed CSP coverage report** (#617; distributed CSP programs, step 6).
+  `docs/analysis/distributed-csp-coverage.md` answers the plan's first requirement: does a one-hop mesh
+  with eight movers per node and a DMA-only periphery cover pattern classes P1–P9? **Every class fits.**
+  - **P5 and P8 fit outright.**
+  - **The other seven fit at a cost.** The cost is store-and-forward through nodes that only pass a tile
+    on. P2 also takes all 8 movers and 14 of 16 L3 slots on an interior node.
+  - **P7's L3 cost grows with the mesh's side.**
+
+  The numbers are measured from the programs themselves:
+  - **`csp/distributed_coverage.hpp`** reads them off a program: movers and sends per node, slots,
+    credits per flow, hops, forwarding pushes, D0-D5, DMA bytes per edge port, and the busiest periphery
+    ring segment for 4/8/16/32 PHYs, under a stated interleaving model.
+  - **`kpu-csp-coverage`** writes the report's measured block, and the CTest
+    `csp_coverage_report_current` fails when the block is stale.
+
 - **P4, gather and scatter with the indices at the DMA** (#616; distributed CSP programs, step 5).
   Two new forms in the level-2 language:
   - `load G[i,j] gather E by idx` fills a tile row by row from the rows of E that an int32 index

@@ -248,6 +248,15 @@ set_tests_properties(test_csp_gen_distributed_window PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+kpu_add_component_test(test_csp_distributed_coverage "program"
+    test_csp_distributed_coverage.cpp
+)
+
+set_tests_properties(test_csp_distributed_coverage PROPERTIES
+    LABELS "program;csp;distributed"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 kpu_add_component_test(test_csp_gen_distributed_gather "program"
     test_csp_gen_distributed_gather.cpp
 )
