@@ -221,6 +221,15 @@ set_tests_properties(test_csp_gen_distributed_broadcast PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+kpu_add_component_test(test_csp_gen_distributed_elementwise "program"
+    test_csp_gen_distributed_elementwise.cpp
+)
+
+set_tests_properties(test_csp_gen_distributed_elementwise PROPERTIES
+    LABELS "program;csp;distributed;gen"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 kpu_add_component_test(test_csp_l2_staging "program"
     test_csp_l2_staging.cpp
 )
