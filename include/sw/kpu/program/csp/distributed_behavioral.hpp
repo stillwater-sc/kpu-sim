@@ -265,6 +265,17 @@ private:
         switch (a.kind) {
             case Action2::Kind::Load: {
                 const TensorOperand& op = dram_.operand(a.tile.operand);
+                if (!a.rows.empty()) {                              // a gather: the index chooses the rows
+                    const TensorOperand& src = dram_.operand(a.rows);
+                    const Dim r0 = op.row_begin(a.tile.ti), c0 = op.col_begin(a.tile.tj), c1 = op.col_end(a.tile.tj);
+                    std::vector<float> v;
+                    for (Dim r = r0; r < op.row_end(a.tile.ti); ++r) {
+                        const Dim at = indexed_row(a, r, src, w);
+                        for (Dim c = c0; c < c1; ++c) v.push_back(src.values[static_cast<std::size_t>(at) * src.cols + c]);
+                    }
+                    fill(*a.to, a.tile, std::move(v), a.reads);
+                    return;
+                }
                 fill(*a.to, a.tile, BehavioralInterpreter::extract_tile(op, a.tile.ti, a.tile.tj), a.reads);
                 return;
             }
@@ -280,6 +291,17 @@ private:
             case Action2::Kind::Store: {
                 Packet pk = std::move(buffers_.at(a.channel).front());
                 buffers_.at(a.channel).pop_front();                 // its credit returns
+                if (!a.rows.empty()) {                              // a scatter: the index chooses the rows
+                    const TensorOperand& op = dram_.operand(pk.coord.operand);
+                    TensorOperand& dst = dram_.operand(a.rows);
+                    const Dim r0 = op.row_begin(pk.coord.ti), c0 = op.col_begin(pk.coord.tj), c1 = op.col_end(pk.coord.tj);
+                    std::size_t k = 0;
+                    for (Dim r = r0; r < op.row_end(pk.coord.ti); ++r) {
+                        const Dim at = indexed_row(a, r, dst, w);
+                        for (Dim c = c0; c < c1; ++c) dst.values[static_cast<std::size_t>(at) * dst.cols + c] = pk.value[k++];
+                    }
+                    return;
+                }
                 BehavioralInterpreter::insert_tile(dram_.operand(pk.coord.operand), pk.coord.ti, pk.coord.tj, pk.value);
                 return;
             }
@@ -287,6 +309,16 @@ private:
                 call(a, w);
                 return;
         }
+    }
+
+    // The row of `rows` that row r of a gathered or scattered tile's operand maps to: index[r], which
+    // DRAM holds; one outside the operand is refused, naming it.
+    Dim indexed_row(const Action2& a, Dim r, const TensorOperand& rows, const std::string& w) const {
+        const double v = dram_.operand(a.index).value(r, 0);
+        if (!(v >= 0) || v >= static_cast<double>(rows.rows) || v != static_cast<double>(static_cast<Dim>(v)))
+            throw BehavioralError(w + ": " + a.index + "[" + std::to_string(r) + "] is " + std::to_string(static_cast<long long>(v)) +
+                                  ", not a row of " + rows.name + " (it has " + std::to_string(rows.rows) + ")");
+        return static_cast<Dim>(v);
     }
 
     // A tile as its own one-tile operand, so a call's inputs and result never share storage: an

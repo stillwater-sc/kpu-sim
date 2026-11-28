@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P4, gather and scatter with the indices at the DMA** (#616; distributed CSP programs, step 5).
+  Two new forms in the level-2 language:
+  - `load G[i,j] gather E by idx` fills a tile row by row from the rows of E that an int32 index
+    vector names, read at run time.
+  - `store Z[i,j] scatter W by jdx` writes a tile's rows to the rows of W that its index names.
+
+  The structure check refuses an index that is not an int32 vector, and rows that do not share their
+  columns. L-B refuses an index outside its operand, naming it.
+
+  `csp/gen/distributed_gather.hpp` writes an embedding-style gather on a DMM mesh. Each mesh row's west
+  edge engine gathers the row's tiles, and they move east to their owner, which computes Z = G + G. Z
+  moves back west, and the engine scatters it. The mesh carries only the `temp` tiles G and Z, in a
+  static pattern, and never names E or W.
+
+  `kpu-csp-gen --algo gather --distributed` writes it. On the 1x1, 2x2 and 4x4 meshes every program
+  passes D0-D4, runs on L-B (D5), and gives W[jdx[r]] = 2 E[idx[r]] (D6).
+
 - **P9, append to a growing extent** (#615; distributed CSP programs, step 5).
   `csp/gen/distributed_append.hpp` writes a KV-cache decode as a level-2 program on a DMM mesh, with
   one head per node. Each step:

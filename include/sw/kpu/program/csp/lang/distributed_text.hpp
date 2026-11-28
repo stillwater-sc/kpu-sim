@@ -259,6 +259,15 @@ private:
         p.processes.push_back(pr);
     }
 
+    // `gather E by idx` after a load's tile, `scatter W by jdx` after a store's (#616).
+    void rows(Action2& a, const char* how) {
+        if (!word(how)) return;
+        take();
+        a.rows = ident("the operand its rows come from or go to");
+        expect_word("by");
+        a.index = ident("its index vector");
+    }
+
     Action2 action(const DistributedProgram& p) {
         Action2 a;
         a.line = line();
@@ -266,6 +275,7 @@ private:
         if (k == "load") {
             a.kind = Action2::Kind::Load;
             a.tile = tile(p);
+            rows(a, "gather");
             expect_word("to");
             a.to = slot();
             a.reads = reads();
@@ -299,6 +309,7 @@ private:
         } else if (k == "store") {
             a.kind = Action2::Kind::Store;
             a.tile = tile(p);
+            rows(a, "scatter");
             a.channel = via(p);
         } else if (k == "call") {
             a.kind = Action2::Kind::Call;
@@ -373,7 +384,8 @@ inline std::string print_distributed(const DistributedProgram& p) {
             o << "    ";
             switch (a.kind) {
                 case Action2::Kind::Load:
-                    o << "load " << tile(a.tile) << " to " << a.to->to_string() << " reads " << a.reads << via(a.channel);
+                    o << "load " << tile(a.tile) << (a.rows.empty() ? "" : " gather " + a.rows + " by " + a.index) << " to "
+                      << a.to->to_string() << " reads " << a.reads << via(a.channel);
                     break;
                 case Action2::Kind::Push:
                 case Action2::Kind::Feed:
@@ -385,7 +397,7 @@ inline std::string print_distributed(const DistributedProgram& p) {
                     o << via(a.channel);
                     break;
                 case Action2::Kind::Store:
-                    o << "store " << tile(a.tile) << via(a.channel);
+                    o << "store " << tile(a.tile) << (a.rows.empty() ? "" : " scatter " + a.rows + " by " + a.index) << via(a.channel);
                     break;
                 case Action2::Kind::Call:
                     o << "call " << a.op << "(";
