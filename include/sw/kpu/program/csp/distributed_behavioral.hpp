@@ -33,8 +33,12 @@
 // merge, merge_tile; #610), and `acc` is Z := Z + X + Y. For P3's reductions (#611): `call rowsum(x)
 // to s[i]` is s := the sums of X's rows (a vector tile as long as X's tile is tall), `acc` adds them
 // in; `call sum(x) to Z` copies X, `acc` adds it in (a partial merged from a neighbour). Element by
-// element in the result's number system, as add. Other tile functions arrive with the generators
-// that need them (#612-#616); an unknown one is refused.
+// element in the result's number system, as add. For P2's sliding window (#612), a 3-wide box filter
+// in two separable passes: `box3h[_w][_e](...)` sums each element with its left and right neighbours,
+// `box3v[_n][_s](...)` with those above and below. The suffix names the halo tiles given, in order
+// (w, c, e) or (n, c, s): a neighbour past the edge of the halo, or with no halo given, is zero. Each
+// sum is (before + centre) + after, every addition rounded in the result's number system. Other tile
+// functions arrive with the generators that need them (#613-#616); an unknown one is refused.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -299,10 +303,14 @@ private:
     }
 
     void call(const Action2& a, const std::string& w) {
-        static const std::map<std::string, std::size_t> kArity = {{"gemm", 2}, {"add", 2}, {"rowsum", 1}, {"sum", 1}};
+        static const std::map<std::string, std::size_t> kArity = {
+            {"gemm", 2}, {"add", 2}, {"rowsum", 1}, {"sum", 1},
+            {"box3h", 1}, {"box3h_w", 2}, {"box3h_e", 2}, {"box3h_we", 3},
+            {"box3v", 1}, {"box3v_n", 2}, {"box3v_s", 2}, {"box3v_ns", 3}};
         const auto ar = kArity.find(a.op);
         if (ar == kArity.end())
-            throw BehavioralError(w + ": tile function '" + a.op + "' is not one L-B runs at level 2 yet (gemm, add, rowsum, sum)");
+            throw BehavioralError(w + ": tile function '" + a.op +
+                                  "' is not one L-B runs at level 2 yet (gemm, add, rowsum, sum, box3h[_w][_e], box3v[_n][_s])");
         if (a.args.size() != ar->second)
             throw BehavioralError(w + ": " + a.op + " takes " + std::to_string(ar->second) + " operand(s)");
         // A call reads each operand slot once per mention: the residency must have the reads.
@@ -315,6 +323,59 @@ private:
                                       l.tile + ") has " + std::to_string(l.reads_left) + " read(s) left");
         }
         const TileCoord out = a.accumulate ? slots_.at(*a.to).coord : a.tile;
+        if (a.op.rfind("box3", 0) == 0) {
+            if (a.accumulate) throw BehavioralError(w + ": " + a.op + " writes a fresh result; it does not accumulate");
+            const bool horizontal = a.op[4] == 'h';
+            const std::string flags = a.op.size() > 6 ? a.op.substr(6) : "";
+            const bool before = flags.find(horizontal ? 'w' : 'n') != std::string::npos;
+            const bool after = flags.find(horizontal ? 'e' : 's') != std::string::npos;
+            const TensorOperand& zo = dram_.operand(out.operand);
+            const Dim zr = zo.row_end(out.ti) - zo.row_begin(out.ti), zc = zo.col_end(out.tj) - zo.col_begin(out.tj);
+            std::vector<const Live*> in;
+            for (const SlotRef& sr : a.args) in.push_back(&slots_.at(sr));
+            for (const Live* l : in) {
+                const TensorOperand& o = dram_.operand(l->coord.operand);
+                const Dim r = o.row_end(l->coord.ti) - o.row_begin(l->coord.ti), c = o.col_end(l->coord.tj) - o.col_begin(l->coord.tj);
+                if (o.type != zo.type) throw BehavioralError(w + ": " + a.op + "'s operands and result share one number system");
+                if (r != zr || c != zc)
+                    throw BehavioralError(w + ": " + a.op + "'s tiles are its result's shape: " + l->coord.to_string() + " is " +
+                                          std::to_string(r) + "x" + std::to_string(c) + ", " + out.to_string() + " is " +
+                                          std::to_string(zr) + "x" + std::to_string(zc));
+            }
+            const Live* B = before ? in[0] : nullptr;
+            const Live* Cn = in[before ? 1 : 0];
+            const Live* A = after ? in.back() : nullptr;
+            // An element's word, decoded in the result's number system.
+            TensorOperand one("e", 1, 1, 1, 1);
+            one.type = zo.type;
+            const auto val = [&](const Live* l, Dim r, Dim c) {
+                one.values[0] = l->value[static_cast<std::size_t>(r) * zc + c];
+                return one.value(0, 0);
+            };
+            std::vector<float> v(static_cast<std::size_t>(zr) * zc);
+            TensorOperand acc("a", 1, 1, 1, 1);
+            acc.type = zo.type;
+            for (Dim r = 0; r < zr; ++r)
+                for (Dim c = 0; c < zc; ++c) {
+                    double lo = 0, hi = 0;
+                    if (horizontal) {
+                        lo = c > 0 ? val(Cn, r, c - 1) : B ? val(B, r, zc - 1) : 0.0;
+                        hi = c + 1 < zc ? val(Cn, r, c + 1) : A ? val(A, r, 0) : 0.0;
+                    } else {
+                        lo = r > 0 ? val(Cn, r - 1, c) : B ? val(B, zr - 1, c) : 0.0;
+                        hi = r + 1 < zr ? val(Cn, r + 1, c) : A ? val(A, 0, c) : 0.0;
+                    }
+                    acc.set_value(0, 0, lo);
+                    acc.set_value(0, 0, acc.value(0, 0) + val(Cn, r, c));
+                    acc.set_value(0, 0, acc.value(0, 0) + hi);
+                    v[static_cast<std::size_t>(r) * zc + c] = acc.values[0];
+                }
+            for (const SlotRef& sr : a.args) read(sr, w);
+            fill(*a.to, out, std::move(v), a.reads);
+            slots_.at(*a.to).merges_left = a.merges;
+            ++sum_.calls;
+            return;
+        }
         if (a.op == "rowsum" || a.op == "sum") {
             const Live& x = slots_.at(a.args[0]);
             const TensorOperand& xo = dram_.operand(x.coord.operand);
