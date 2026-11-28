@@ -125,6 +125,15 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=program.box3x3.machine.mesh.2x2.*call.box3h_e.*call.box3v_s
             -P ${_expect}
     )
+    # box3x3's tile is the mesh's: another --tile is refused, not ignored (#643's review).
+    add_test(NAME csp_gen_distributed_box3x3_tile
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:csp-gen>
+            -DARGS=--algo$<SEMICOLON>box3x3$<SEMICOLON>--size$<SEMICOLON>16$<SEMICOLON>--tile$<SEMICOLON>4$<SEMICOLON>--target$<SEMICOLON>${_deploy}/kpu_dmm_2x2.json$<SEMICOLON>--distributed
+            -DEXPECT_CODE=1
+            -DMUST_MATCH=one.tile.per.node:.on.this.2x2.mesh.a.16.x.16.X.is.in.8.x.8.tiles,.and.--tile.is.4
+            -P ${_expect}
+    )
     # The help says what --distributed's dtype default is (#638's review).
     add_test(NAME csp_gen_distributed_dtype_documented
         COMMAND ${CMAKE_COMMAND}
@@ -136,5 +145,6 @@ if(KPU_BUILD_TESTS)
     )
     set_tests_properties(csp_gen_distributed_matmul csp_gen_distributed_needs_a_mesh csp_gen_distributed_dtype_documented
         csp_gen_distributed_broadcast csp_gen_distributed_add csp_gen_distributed_rowsum csp_gen_distributed_box3x3
+        csp_gen_distributed_box3x3_tile
         PROPERTIES LABELS "program;csp;distributed;gen")
 endif()

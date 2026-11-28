@@ -98,7 +98,8 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 in int32 with int8, else fp32. --algo rowsum: P3, the sums of X's
                                 rows, chained west along each mesh row and broadcast back east (#611).
                                 --algo box3x3: P2, a 3 x 3 box filter, a row pass and a column pass
-                                with a halo exchange with four neighbours, one tile per node (#612).
+                                with a halo exchange with four neighbours, one tile per node: --tile
+                                must be --size over the mesh's rows and columns (#612).
                                 --algo matmul: the P1
                                 edge-streamed systolic schedule, A east, B south, C north, one hop at
                                 a time (#608); M = N = K = --size, A and B in --dtype (default
@@ -174,7 +175,16 @@ int main(int argc, char** argv) {
         try {
             const platform::DeploymentSpec spec = platform::read_spec_file(a["--target"]);
             if (o.algo == "box3x3") {
-                // P2 (#612): a 3 x 3 box filter of a --size x --size X, one tile per node (--tile unused).
+                // P2 (#612): a 3 x 3 box filter of a --size x --size X, one tile per node: the tile is
+                // the mesh's, so --tile must be it (not silently another).
+                const auto& dv = spec.device(0);
+                const auto rows = dv.array.rows.value_or(1), cols = dv.array.cols.value_or(1);
+                if (size % rows != 0 || size % cols != 0 || tile != size / rows || tile != size / cols) {
+                    std::cerr << "kpu-csp-gen: box3x3 takes one tile per node: on this " << rows << "x" << cols << " mesh a " << size
+                              << " x " << size << " X is in " << size / rows << " x " << size / cols << " tiles, and --tile is "
+                              << tile << "\n";
+                    return 1;
+                }
                 gen::DistributedWindow g;
                 g.m = g.n = static_cast<sw::kpu::program::Dim>(size);
                 g.type = dt == "int8" ? "int32" : "fp32";
