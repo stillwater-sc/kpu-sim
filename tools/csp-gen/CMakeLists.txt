@@ -78,7 +78,7 @@ if(KPU_BUILD_TESTS)
             -DCMD=$<TARGET_FILE:csp-gen>
             -DARGS=--algo$<SEMICOLON>matmul$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--target$<SEMICOLON>${_deploy}/kpu_dmm_2x2.json$<SEMICOLON>--distributed
             -DEXPECT_CODE=0
-            -DMUST_MATCH=program.matmul.machine.mesh.2x2.*channel.a0to1.:.bm.E.0.
+            -DMUST_MATCH=program.matmul.machine.mesh.2x2.*tensor.A.32,32..int8.*tensor.C.32,32..int32.*channel.a0to1.:.bm.E.0.
             -P ${_expect}
     )
     add_test(NAME csp_gen_distributed_needs_a_mesh
@@ -89,5 +89,15 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=not.a.mesh
             -P ${_expect}
     )
-    set_tests_properties(csp_gen_distributed_matmul csp_gen_distributed_needs_a_mesh PROPERTIES LABELS "program;csp;distributed;gen")
+    # The help says what --distributed's dtype default is (#638's review).
+    add_test(NAME csp_gen_distributed_dtype_documented
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:csp-gen>
+            -DARGS=--help
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=default.fp32..with.--distributed,.int8
+            -P ${_expect}
+    )
+    set_tests_properties(csp_gen_distributed_matmul csp_gen_distributed_needs_a_mesh csp_gen_distributed_dtype_documented
+        PROPERTIES LABELS "program;csp;distributed;gen")
 endif()

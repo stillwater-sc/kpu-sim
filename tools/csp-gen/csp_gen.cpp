@@ -55,7 +55,7 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 (default none: from zero)
   --dtype <fp32|int8>           matmul (and a requantized linear): A's and B's number system;
                                 C (and D or b) is in its registered accumulator's: int8 -> int32
-                                (default fp32)
+                                (default fp32; with --distributed, int8)
   --l2-buffers <1|2>            the L2 slots the program declares (l2 = N): enough for this many
                                 rounds of what one call holds at once, its operands' copies and its
                                 result's slot, on top of what its blocks hold. 1 is single
@@ -86,7 +86,8 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 (default none)
   --distributed                 matmul: a level-2 program (dcsp 1) for --target, a dmm_mesh: the P1
                                 edge-streamed systolic schedule, A east, B south, C north, one hop at
-                                a time (#608); M = N = K = --size, A and B in --dtype
+                                a time (#608); M = N = K = --size, A and B in --dtype (default
+                                int8, C int32: the KPU's own case)
   -o <file>                     write here                           (default: stdout)
 
 The program is validated before it is written; a schedule that does not fit the L3, or a
