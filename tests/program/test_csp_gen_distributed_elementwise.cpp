@@ -19,6 +19,7 @@
 #include <sw/kpu/program/csp/lang/distributed_text.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
 
+#include <cstring>
 #include <string>
 
 using namespace sw::kpu::program;
@@ -77,4 +78,30 @@ TEST_CASE("add is element by element in its result's number system, and refuses 
     p.operands[1].type = "fp32";                               // Y in another number system than Z
     DistributedBehavioral lb;
     CHECK_THROWS_WITH(lb.run(p, distributed_inputs(p)), ContainsSubstring("add's operands and result share one number system"));
+}
+
+// ---- regressions from the review of #641
+
+TEST_CASE("add refuses operands whose tiles are not the result's shape", "[program][csp][distributed][behavioral]") {
+    DistributedProgram p = gen::generate_distributed_add({16, 16, 16}, device("kpu_dmm_1x1.json"));
+    // X tiled 8x32: X[0,0] holds 256 elements, as Z[0,0] does at 16x16, but not in its shape.
+    p.operands[0].cols = 32;
+    p.operands[0].tile_rows = 8;
+    p.operands[0].tile_cols = 32;
+    DistributedBehavioral lb;
+    CHECK_THROWS_WITH(lb.run(p, distributed_inputs(p)),
+                      ContainsSubstring("add is element by element, so its operands are its result's shape: X[0,0] is 8x32, Z[0,0] is 16x16"));
+}
+
+TEST_CASE("the inputs differ by operand, so a wrong operand cannot pass for the right one", "[program][csp][distributed][behavioral]") {
+    const DistributedProgram p = gen::generate_distributed_add({32, 32, 16}, device("kpu_dmm_2x2.json"));
+    for (std::uint64_t seed : {1, 3, 7}) {
+        const TileProgram in = distributed_inputs(p, seed);
+        INFO("seed " << seed);
+        // As words: an integer's word may read as a NaN float, which never compares equal to itself.
+        const auto& x = in.operand("X").values;
+        const auto& y = in.operand("Y").values;
+        REQUIRE(x.size() == y.size());
+        CHECK(std::memcmp(x.data(), y.data(), x.size() * sizeof(float)) != 0);
+    }
 }

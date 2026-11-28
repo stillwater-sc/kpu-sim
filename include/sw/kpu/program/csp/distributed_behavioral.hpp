@@ -64,17 +64,20 @@ private:
 };
 
 // Deterministic values for the program's operands: every `in` and `inout` operand's elements are
-// small integers (exact in every number system the kernels take), varied by position and `seed`;
-// `out` operands start at zero.
+// small integers (exact in every number system the kernels take), varied by position, by `seed` and
+// by the operand, so no two inputs hold the same values (an X + X would not pass for X + Y); `out`
+// operands start at zero.
 inline TileProgram distributed_inputs(const DistributedProgram& p, std::uint64_t seed = 1) {
     TileProgram t(p.name);
+    std::uint64_t which = 0;
     for (const Operand2& o : p.operands) {
+        const std::uint64_t salt = 1 + 4 * which++;           // per operand: a different phase of the pattern
         TensorOperand op(o.name, o.rows, o.cols, o.tile_rows, o.tile_cols);
         op.type = o.type;
         if (o.io != "out")
             for (Dim r = 0; r < o.rows; ++r)
                 for (Dim c = 0; c < o.cols; ++c)
-                    op.set_value(r, c, static_cast<double>(static_cast<long long>((r * 7 + c * 3 + seed * 5) % 9) - 4));
+                    op.set_value(r, c, static_cast<double>(static_cast<long long>((r * 7 + c * 3 * salt + seed * 5 + salt) % 9) - 4));
         else if (!op.fp32())
             for (Dim r = 0; r < o.rows; ++r)
                 for (Dim c = 0; c < o.cols; ++c) op.set_value(r, c, 0.0);
@@ -312,6 +315,17 @@ private:
             const std::string& type = dram_.operand(out.operand).type;
             if (dram_.operand(x.coord.operand).type != type || dram_.operand(y.coord.operand).type != type)
                 throw BehavioralError(w + ": add's operands and result share one number system");
+            const auto shape = [&](const TileCoord& t) {
+                const TensorOperand& o = dram_.operand(t.operand);
+                return std::make_pair(o.row_end(t.ti) - o.row_begin(t.ti), o.col_end(t.tj) - o.col_begin(t.tj));
+            };
+            const auto zs = shape(out);
+            for (const TileCoord* t : {&x.coord, &y.coord})
+                if (shape(*t) != zs)
+                    throw BehavioralError(w + ": add is element by element, so its operands are its result's shape: " +
+                                          t->to_string() + " is " + std::to_string(shape(*t).first) + "x" +
+                                          std::to_string(shape(*t).second) + ", " + out.to_string() + " is " +
+                                          std::to_string(zs.first) + "x" + std::to_string(zs.second));
             std::vector<float> v = a.accumulate ? slots_.at(*a.to).value : x.value;
             try {
                 if (a.accumulate) merge_tile(type, v, x.value);
