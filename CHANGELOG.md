@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P2, the sliding window** (#612; distributed CSP programs, step 5).
+  `csp/gen/distributed_window.hpp` writes a 3x3 box filter as a level-2 program on a DMM mesh. It is
+  the plan's tightest case: an interior node uses all 8 of its movers.
+  - **Two passes, so no corners:** a row pass (`box3h`) then a column pass (`box3v`). The halo
+    exchange is with four neighbours only, never with a corner.
+  - **One flow per send mover**, each carrying everything bound for that neighbour:
+    - `bm.E` takes the east halo, then the X tiles forwarded along the row;
+    - `bm.W` takes the west halo;
+    - `bm.S` takes the row-pass halo south;
+    - `bm.N` takes the row-pass halo north, then the output on its way out.
+  - **One tile per node,** using 7 of the compute tile's 8 L2 slots.
+  - **L-B** gains `box3h[_w][_e]` and `box3v[_n][_s]`. The suffix names the halos given; a missing
+    neighbour is zero, and every addition rounds in the result's number system.
+
+  `kpu-csp-gen --algo box3x3 --size 16 --tile 8 --distributed --target <dmm_mesh.json>` writes it. On
+  the 1x1, 2x2 and 4x4 meshes every program passes D0-D4, runs on L-B (D5), and gives each element's
+  3x3 neighbourhood summed, zero past the edges (D6).
+
 - **P3, row reduction** (#611; distributed CSP programs, step 5). `csp/gen/distributed_reduction.hpp`
   writes s = the sums of X's rows, then broadcasts the sums back along each mesh row, as softmax,
   LayerNorm and RMSNorm reduce and then normalize:
