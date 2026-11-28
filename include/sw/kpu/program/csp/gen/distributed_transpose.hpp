@@ -14,11 +14,14 @@
 // (r, r), then along column r to (c, r), where the compute tile transposes it into Y[c, r]. Y then moves
 // north to row 0 and out of its edge port to a DMA engine. Every hop lands in the next node's L3.
 //
-// NO CREDIT WAIT, NO CYCLE. Each sending mover carries every tile bound for its neighbour, in the order
-// a synchronous schedule (one hop per step) would deliver them; the receiver gives each delivered tile
-// a slot of its own. So no move waits for a credit, and a move waits only on an arrival from an earlier
-// step: the program cannot deadlock. The slots this takes is the transform's L3 cost, checked against
-// the tile's capacity.
+// NO CYCLE. Each sending mover carries every tile bound for its neighbour, in the order a synchronous
+// schedule (one hop per step) would deliver them; the receiver gives each tile delivered into its L3 a
+// slot of its own. So no delivery into an L3 slot waits for a credit, and a move waits only on an
+// arrival from an earlier step. The one credit wait left is row 0's pushes out to the DMA engine: its
+// store buffer has 2 credits and a column's channel may carry more Ys (4 on the 4x4), so a push can
+// wait for the engine to store. The engine waits on nothing those pushes hold, so that wait ends: the
+// program cannot deadlock. The slots this takes is the transform's L3 cost, checked against the tile's
+// capacity.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
