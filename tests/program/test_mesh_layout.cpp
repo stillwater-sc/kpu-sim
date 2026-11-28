@@ -439,7 +439,7 @@ TEST_CASE("a dmm_mesh is written as its hierarchy, and its flat fields are deriv
     CHECK(d.macs_per_cycle == 4096.0);                     // 64 x 64 PEs
     CHECK(d.movers.block_movers == 32);                    // 8 per node
     CHECK(d.movers.streamers == 4);
-    CHECK(d.dma.engines == 2);                             // 1 per controller
+    CHECK(d.dma.engines == 4);                             // 2 per controller
     // The writer writes the hierarchy and nothing flat.
     const nlohmann::json j = nlohmann::json::parse(to_json(s));
     const nlohmann::json& dev = j.contains("devices") ? j.at("devices").at(0) : j;
@@ -449,7 +449,7 @@ TEST_CASE("a dmm_mesh is written as its hierarchy, and its flat fields are deriv
     }
     CHECK(dev.at("cluster").at("l3_tile").at("capacity_tiles") == 16);
     CHECK(dev.at("cluster").at("compute_tile").at("streamers").at("count") == 1);
-    CHECK(dev.at("memory").at("dma").at("engines_per_controller") == 1);
+    CHECK(dev.at("memory").at("dma").at("engines_per_controller") == 2);
     CHECK(dev.at("memory").at("periphery").at("topology") == "ring");
 }
 
@@ -505,7 +505,7 @@ TEST_CASE("derived totals that would not fit 32 bits are refused, not wrapped", 
                }),
                ContainsSubstring("is more L3 slots than the spec can count"));
     std::string t = to_json(dmm2x2());
-    const std::string from = "\"engines_per_controller\": 1";
+    const std::string from = "\"engines_per_controller\": 2";
     t.replace(t.find(from), from.size(), "\"engines_per_controller\": 2147483649");   // x2 controllers wraps to 2
     CHECK_THROWS_WITH(from_json(t), ContainsSubstring("is more engines than the spec can count"));
 }

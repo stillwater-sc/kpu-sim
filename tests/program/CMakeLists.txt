@@ -203,6 +203,15 @@ set_tests_properties(test_csp_distributed_check PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+kpu_add_component_test(test_csp_gen_distributed_gemm "program"
+    test_csp_gen_distributed_gemm.cpp
+)
+
+set_tests_properties(test_csp_gen_distributed_gemm PROPERTIES
+    LABELS "program;csp;distributed;gen"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 kpu_add_component_test(test_csp_l2_staging "program"
     test_csp_l2_staging.cpp
 )

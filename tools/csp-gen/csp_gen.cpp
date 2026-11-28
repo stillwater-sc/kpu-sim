@@ -15,7 +15,9 @@
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 
+#include <sw/kpu/program/csp/gen/distributed_gemm.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
+#include <sw/kpu/program/csp/lang/distributed_text.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
 
 #include <cctype>
@@ -53,7 +55,7 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 (default none: from zero)
   --dtype <fp32|int8>           matmul (and a requantized linear): A's and B's number system;
                                 C (and D or b) is in its registered accumulator's: int8 -> int32
-                                (default fp32)
+                                (default fp32; with --distributed, int8)
   --l2-buffers <1|2>            the L2 slots the program declares (l2 = N): enough for this many
                                 rounds of what one call holds at once, its operands' copies and its
                                 result's slot, on top of what its blocks hold. 1 is single
@@ -82,6 +84,10 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
   --format <none|mxint8|mxfp8>  linear: convert the result into an OCP Microscaling block format,
                                 after the activation, at --place (combiner | bm.egress)
                                 (default none)
+  --distributed                 matmul: a level-2 program (dcsp 1) for --target, a dmm_mesh: the P1
+                                edge-streamed systolic schedule, A east, B south, C north, one hop at
+                                a time (#608); M = N = K = --size, A and B in --dtype (default
+                                int8, C int32: the KPU's own case)
   -o <file>                     write here                           (default: stdout)
 
 The program is validated before it is written; a schedule that does not fit the L3, or a
@@ -104,7 +110,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (k.rfind("-", 0) != 0) return usage("unexpected argument '" + k + "'");
-        if (k == "--stage-a" || k == "--requant-channels") {   // the options without a value
+        if (k == "--stage-a" || k == "--requant-channels" || k == "--distributed") {   // the options without a value
             if (a.count(k)) return usage(k + " given twice");
             a[k] = "";
             continue;
@@ -121,7 +127,7 @@ int main(int argc, char** argv) {
     for (const auto& [k, v] : a)
         if (k != "--algo" && k != "--size" && k != "--tile" && k != "--l3" && k != "--target" && k != "--orient" &&
             k != "--act" && k != "--place" && k != "--stage-a" && k != "--init" && k != "--dtype" &&
-            k != "--dataflow" && k != "--format" && k != "--requant" && k != "--requant-channels" && k != "--l2-buffers" && k != "-o")
+            k != "--dataflow" && k != "--format" && k != "--requant" && k != "--requant-channels" && k != "--l2-buffers" && k != "--distributed" && k != "-o")
             return usage("unknown option '" + k + "'");
     for (const char* k : {"--algo", "--size", "--tile"})
         if (!a.count(k)) return usage(std::string(k) + " is required");
@@ -138,6 +144,41 @@ int main(int argc, char** argv) {
     std::uint64_t size = 0, tile = 0, l3 = 0;
     if (!number("--size", size)) return usage("--size: a positive integer");
     if (!number("--tile", tile)) return usage("--tile: a positive integer");
+    // A level-2 program for a mesh (#608): its own generator and its own text form.
+    if (a.count("--distributed")) {
+        if (o.algo != "matmul") return usage("--distributed writes matmul (P1); --algo is '" + o.algo + "'");
+        if (!a.count("--target")) return usage("--distributed needs --target, a dmm_mesh deployment");
+        for (const auto& [k, v] : a)
+            if (k != "--algo" && k != "--size" && k != "--tile" && k != "--target" && k != "--dtype" && k != "--distributed" && k != "-o")
+                return usage(k + " does not apply to --distributed");
+        gen::DistributedGemm g;
+        g.m = g.n = g.k = static_cast<sw::kpu::program::Dim>(size);
+        g.tile = static_cast<sw::kpu::program::Dim>(tile);
+        const std::string dt = a.count("--dtype") ? a["--dtype"] : "int8";
+        if (dt == "int8") { g.ab_type = "int8"; g.c_type = "int32"; }
+        else if (dt == "fp32") { g.ab_type = g.c_type = "fp32"; }
+        else return usage("--dtype: fp32 or int8");
+        g.name = "matmul";
+        std::string text;
+        try {
+            const platform::DeploymentSpec spec = platform::read_spec_file(a["--target"]);
+            text = lang::print_distributed(gen::generate_distributed_gemm(g, spec.device(0)));
+        } catch (const std::exception& e) {
+            std::cerr << "kpu-csp-gen: " << e.what() << "\n";
+            return 1;
+        }
+        if (!a.count("-o")) {
+            std::cout << text;
+            return 0;
+        }
+        std::ofstream f(a["-o"]);
+        if (!(f << text)) {
+            std::cerr << "kpu-csp-gen: cannot write '" << a["-o"] << "'\n";
+            return 2;
+        }
+        std::cerr << "kpu-csp-gen: wrote " << a["-o"] << "\n";
+        return 0;
+    }
     o.size = static_cast<sw::kpu::program::Dim>(size);
     o.tile = static_cast<sw::kpu::program::Dim>(tile);
     if (a.count("--orient")) o.orient = a["--orient"];
