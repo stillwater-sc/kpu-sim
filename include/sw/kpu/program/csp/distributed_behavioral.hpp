@@ -341,9 +341,10 @@ private:
                 for (Dim r = 0; r < xr; ++r) {
                     std::copy(x.value.begin() + static_cast<std::ptrdiff_t>(r * xc), x.value.begin() + static_cast<std::ptrdiff_t>((r + 1) * xc),
                               row.values.begin());
-                    double total = 0;
-                    for (Dim c = 0; c < xc; ++c) total += row.value(0, c);
-                    acc.set_value(0, 0, total);
+                    // Each addition rounded in the result's number system, left to right: a wider
+                    // accumulator would not be that system's arithmetic (fp32's [2^24, 1, -2^24] is 0).
+                    acc.set_value(0, 0, 0.0);
+                    for (Dim c = 0; c < xc; ++c) acc.set_value(0, 0, acc.value(0, 0) + row.value(0, c));
                     v[r] = acc.values[0];
                 }
             }

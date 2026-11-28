@@ -100,3 +100,19 @@ TEST_CASE("rowsum and sum check their shapes and number systems", "[program][csp
     tall.operands[1].rows = 16;
     CHECK_THROWS_WITH(lb.run(tall, distributed_inputs(tall)), ContainsSubstring("rowsum's result is a column as tall as its operand"));
 }
+
+// ---- regression from the review of #642
+
+TEST_CASE("rowsum adds in its result's number system, one addition at a time", "[program][csp][distributed][behavioral]") {
+    gen::DistributedRowReduction g{16, 16, 16, "fp32"};
+    const DistributedProgram p = gen::generate_distributed_rowsum(g, device("kpu_dmm_1x1.json"));
+    TileProgram in = distributed_inputs(p, 1);
+    TensorOperand& x = in.operand("X");
+    for (Dim c = 0; c < x.cols; ++c) x.set_value(0, c, 0.0);
+    x.set_value(0, 0, 16777216.0);                             // 2^24
+    x.set_value(0, 1, 1.0);                                    // lost when added to 2^24 in fp32
+    x.set_value(0, 2, -16777216.0);
+    DistributedBehavioral lb;
+    lb.run(p, in);
+    CHECK(lb.result().operand("s").value(0, 0) == 0.0);         // fp32, left to right; a double gives 1
+}
