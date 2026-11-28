@@ -248,6 +248,15 @@ set_tests_properties(test_csp_gen_distributed_window PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+kpu_add_component_test(test_csp_gen_distributed_append "program"
+    test_csp_gen_distributed_append.cpp
+)
+
+set_tests_properties(test_csp_gen_distributed_append PROPERTIES
+    LABELS "program;csp;distributed;gen"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 kpu_add_component_test(test_csp_gen_distributed_chained_gemm "program"
     test_csp_gen_distributed_chained_gemm.cpp
 )

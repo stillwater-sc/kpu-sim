@@ -152,6 +152,15 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=program.chained_gemm.machine.mesh.2x2.*tensor.T.16,16..fp32.tile.8x8.temp
             -P ${_expect}
     )
+    # P9 (#615): a KV-cache decode, append and windowed re-read.
+    add_test(NAME csp_gen_distributed_append
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:csp-gen>
+            -DARGS=--algo$<SEMICOLON>append$<SEMICOLON>--size$<SEMICOLON>16$<SEMICOLON>--tile$<SEMICOLON>8$<SEMICOLON>--target$<SEMICOLON>${_deploy}/kpu_dmm_2x2.json$<SEMICOLON>--distributed
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=program.append.machine.mesh.2x2.*tensor.K.32,32..fp32.tile.8x8.inout
+            -P ${_expect}
+    )
     # The help says what --distributed's dtype default is (#638's review).
     add_test(NAME csp_gen_distributed_dtype_documented
         COMMAND ${CMAKE_COMMAND}
@@ -164,6 +173,6 @@ if(KPU_BUILD_TESTS)
     set_tests_properties(csp_gen_distributed_matmul csp_gen_distributed_needs_a_mesh csp_gen_distributed_dtype_documented
         csp_gen_distributed_broadcast csp_gen_distributed_add csp_gen_distributed_rowsum csp_gen_distributed_box3x3
         csp_gen_distributed_box3x3_tile csp_gen_distributed_transpose
-        csp_gen_distributed_chained
+        csp_gen_distributed_chained csp_gen_distributed_append
         PROPERTIES LABELS "program;csp;distributed;gen")
 endif()

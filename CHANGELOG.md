@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P9, append to a growing extent** (#615; distributed CSP programs, step 5).
+  `csp/gen/distributed_append.hpp` writes a KV-cache decode as a level-2 program on a DMM mesh, with
+  one head per node. Each step:
+  - **Brings in the new token** from its column's DMA engine at row 0, down the column.
+  - **Makes and appends the new position:** a stand-in for the projection makes it, and it goes back
+    north and out to the engine, which stores it.
+  - **Re-reads the window,** the cache's previous W - 1 positions, and sums it with the new position
+    into O.
+
+  The engine runs a step's loads, then its stores, then the next step's loads. So from step 1 on, the
+  window re-reads positions the program itself appended.
+
+  `kpu-csp-gen --algo append --distributed` writes it. On the 1x1, 2x2 and 4x4 meshes every program
+  passes D0-D4, runs on L-B (D5), and gives the appended cache and every window's sum (D6), checked
+  against an independent reference.
+
 - **P8, chained-GEMM fusion** (#614; distributed CSP programs, step 5).
   `csp/gen/distributed_chained_gemm.hpp` writes E = (A·B)·D as a level-2 program on a DMM mesh, with
   T = A·B fused:
