@@ -21,6 +21,7 @@
 #include <sw/kpu/program/csp/gen/distributed_reduction.hpp>
 #include <sw/kpu/program/csp/gen/distributed_append.hpp>
 #include <sw/kpu/program/csp/gen/distributed_chained_gemm.hpp>
+#include <sw/kpu/program/csp/gen/distributed_gather.hpp>
 #include <sw/kpu/program/csp/gen/distributed_transpose.hpp>
 #include <sw/kpu/program/csp/gen/distributed_window.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
@@ -45,9 +46,9 @@ namespace platform = sw::kpu::program::platform;
 const char* kUsage =
 R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp text.
 
-  --algo <matmul|linear|lu|broadcast|add|rowsum|box3x3|transpose|chained|append>
+  --algo <matmul|linear|lu|broadcast|add|rowsum|box3x3|transpose|chained|append|gather>
                                 the operator (broadcast, add, rowsum, box3x3, transpose,
-                                chained, append: --distributed only)
+                                chained, append, gather: --distributed only)
                                                                      (required)
   --size <N>                    square: M = N = K = N (N for LU)     (required)
   --tile <T>                    T x T tiles                          (required)
@@ -113,6 +114,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 --algo append: P9, a KV-cache decode, a head per node: --size /
                                 --tile steps, each appending a position after 2 and re-reading a
                                 window of 3, in fp32 (#615).
+                                --algo gather: P4, --size rows, --tile wide, gathered from a
+                                --size-row table by idx and scattered by jdx at the DMA, the
+                                mesh moving only the tiles, in fp32 (#616).
                                 --algo matmul: the P1
                                 edge-streamed systolic schedule, A east, B south, C north, one hop at
                                 a time (#608); M = N = K = --size, A and B in --dtype (default
@@ -176,9 +180,9 @@ int main(int argc, char** argv) {
     // A level-2 program for a mesh (#608): its own generator and its own text form.
     if (a.count("--distributed")) {
         if (o.algo != "matmul" && o.algo != "broadcast" && o.algo != "add" && o.algo != "rowsum" && o.algo != "box3x3" &&
-            o.algo != "transpose" && o.algo != "chained" && o.algo != "append")
+            o.algo != "transpose" && o.algo != "chained" && o.algo != "append" && o.algo != "gather")
             return usage("--distributed writes matmul (P1), broadcast (P5), add (P6), rowsum (P3), box3x3 (P2), transpose (P7), "
-                         "chained (P8) or append (P9); --algo is '" + o.algo + "'");
+                         "chained (P8), append (P9) or gather (P4); --algo is '" + o.algo + "'");
         if (!a.count("--target")) return usage("--distributed needs --target, a dmm_mesh deployment");
         for (const auto& [k, v] : a)
             if (k != "--algo" && k != "--size" && k != "--tile" && k != "--target" && k != "--dtype" && k != "--distributed" && k != "-o")
@@ -188,7 +192,13 @@ int main(int argc, char** argv) {
         std::string text;
         try {
             const platform::DeploymentSpec spec = platform::read_spec_file(a["--target"]);
-            if (o.algo == "append") {
+            if (o.algo == "gather") {
+                // P4 (#616): --size rows of a --size-row table, --tile wide, gathered and scattered by index.
+                gen::DistributedGather g;
+                g.m = g.table_rows = g.out_rows = static_cast<sw::kpu::program::Dim>(size);
+                g.cols = g.tile = static_cast<sw::kpu::program::Dim>(tile);
+                text = lang::print_distributed(gen::generate_distributed_gather(g, spec.device(0)));
+            } else if (o.algo == "append") {
                 // P9 (#615): --size / --tile positions decoded, each appended and its window of 3 re-read.
                 if (size % tile != 0 || size / tile < 1) {
                     std::cerr << "kpu-csp-gen: append decodes --size / --tile positions, so --size is a multiple of --tile\n";

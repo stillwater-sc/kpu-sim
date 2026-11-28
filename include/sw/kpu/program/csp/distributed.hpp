@@ -164,6 +164,11 @@ struct Action2 {
     std::vector<SlotRef> args;          // a Call: its operand slots
     bool accumulate = false;            // a Call: merge into the live result at `to`
     std::uint32_t merges = 0;           // a Call that opens a result: the accumulating calls it waits for
+    // P4's run-time indices (#616), which stay at the DMA: a Load that gathers fills its tile's row k
+    // from row index[r + k] of operand `rows`, where r is the tile's first row; a Store that scatters
+    // writes its tile's row k to that row of `rows`. The mesh sees only the tile, a static pattern.
+    std::string rows;                   // the operand gathered from or scattered to; empty: neither
+    std::string index;                  // the index vector, one int32 per row of the tile's operand
     int line = 0;                       // where it was written, for messages; 0 when generated
 
     // Does it open a residency (wait for a credit and spend it)?
@@ -287,8 +292,25 @@ inline std::string validate_structure(const DistributedProgram& p) {
                 if (!o) return w + "tile " + a.tile.to_string() + " is not a declared operand's";
                 if (a.tile.ti >= o->tile_grid_rows() || a.tile.tj >= o->tile_grid_cols())
                     return w + "tile " + a.tile.to_string() + " is outside " + o->name + "'s tiles";
-                if (o->io == "temp" && (a.kind == Action2::Kind::Load || a.kind == Action2::Kind::Store))
+                if (!a.rows.empty()) {
+                    const char* how = a.kind == Action2::Kind::Load ? "gather" : "scatter";
+                    if (a.kind != Action2::Kind::Load && a.kind != Action2::Kind::Store)
+                        return w + "only a load gathers and only a store scatters";
+                    const Operand2* src = p.operand(a.rows);
+                    const Operand2* ix = p.operand(a.index);
+                    if (!src) return w + "a " + how + " of " + a.rows + ", which is not a declared operand";
+                    if (!ix) return w + "a " + how + " by " + a.index + ", which is not a declared operand";
+                    if (!ix->is_vector || ix->type != "int32" || ix->io != "in")
+                        return w + "a " + how + "'s index " + ix->name + " is an int32 vector, in";
+                    if (ix->rows != o->rows)
+                        return w + "a " + how + "'s index has a row of " + a.rows + " for each of " + o->name + "'s " + std::to_string(o->rows) +
+                               " rows, and " + ix->name + " has " + std::to_string(ix->rows);
+                    if (src->is_vector || o->is_vector || src->cols != o->cols || src->tile_cols != o->tile_cols || src->type != o->type)
+                        return w + "a " + how + " moves whole rows: " + src->name + " and " + o->name + " share their columns, column tiling and number system";
+                    if (src->io == "temp") return w + "a " + how + " of " + src->name + ": it is temp, so it never leaves the nodes";
+                } else if (o->io == "temp" && (a.kind == Action2::Kind::Load || a.kind == Action2::Kind::Store)) {
                     return w + "a " + k + " of " + a.tile.to_string() + ": " + o->name + " is temp, so it never leaves the nodes";
+                }
             }
             // Sources and operands are on the process's own node, in the pool its role reads.
             const auto own = [&](const SlotRef& s, SlotRef::Pool pool) {
