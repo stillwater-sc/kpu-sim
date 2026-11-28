@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P3, row reduction** (#611; distributed CSP programs, step 5). `csp/gen/distributed_reduction.hpp`
+  writes s = the sums of X's rows, then broadcasts the sums back along each mesh row, as softmax,
+  LayerNorm and RMSNorm reduce and then normalize:
+  - **In:** X streams down each column from the north edge, which leaves the row's links to the
+    reduction.
+  - **Reduce:** each node sums its own tiles row by row (`rowsum`), merges the partial from the east
+    (`sum ... acc`), and passes its partial west.
+  - **Back:** the west end stores the total out of its edge port and broadcasts it back east. Every
+    node holds it in L2 (`bm.x`) for the normalize that follows.
+  - **One flow per mover:** S for X, W for the partials, E for the broadcast.
+  - **L-B** gains `rowsum` and `sum`, element by element in the result's number system, with their
+    shapes checked.
+
+  `kpu-csp-gen --algo rowsum --size 32 --tile 16 --distributed --target <dmm_mesh.json>` writes it. On
+  the 1x1, 2x2 and 4x4 meshes every program passes D0-D4 and runs on L-B (D5). The stored s is the
+  row sums (D6), and every node holds its row's sums.
+
 - **P6, two operands streamed aligned** (#610; distributed CSP programs, step 5).
   `csp/gen/distributed_elementwise.hpp` writes Z = X + Y (a residual add) as a level-2 program on a
   DMM mesh:

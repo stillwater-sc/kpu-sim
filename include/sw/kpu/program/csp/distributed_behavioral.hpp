@@ -30,8 +30,11 @@
 // run the shared L0 kernels (tile_kernels.hpp) in the operands' number systems, as level 1's L-B
 // does: `call gemm(a, b) to C[i,j]` is C := A.B (a fresh accumulator), `acc` is C := C + A.B.
 // `call add(x, y) to Z[i,j]` is Z := X + Y, element by element in Z's number system (the Combiner's
-// merge, merge_tile; #610), and `acc` is Z := Z + X + Y. Other tile functions arrive with the
-// generators that need them (#611-#616); an unknown one is refused.
+// merge, merge_tile; #610), and `acc` is Z := Z + X + Y. For P3's reductions (#611): `call rowsum(x)
+// to s[i]` is s := the sums of X's rows (a vector tile as long as X's tile is tall), `acc` adds them
+// in; `call sum(x) to Z` copies X, `acc` adds it in (a partial merged from a neighbour). Element by
+// element in the result's number system, as add. Other tile functions arrive with the generators
+// that need them (#612-#616); an unknown one is refused.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -43,6 +46,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -295,9 +299,12 @@ private:
     }
 
     void call(const Action2& a, const std::string& w) {
-        if (a.op != "gemm" && a.op != "add")
-            throw BehavioralError(w + ": tile function '" + a.op + "' is not one L-B runs at level 2 yet (gemm, add)");
-        if (a.args.size() != 2) throw BehavioralError(w + ": " + a.op + " takes two operands");
+        static const std::map<std::string, std::size_t> kArity = {{"gemm", 2}, {"add", 2}, {"rowsum", 1}, {"sum", 1}};
+        const auto ar = kArity.find(a.op);
+        if (ar == kArity.end())
+            throw BehavioralError(w + ": tile function '" + a.op + "' is not one L-B runs at level 2 yet (gemm, add, rowsum, sum)");
+        if (a.args.size() != ar->second)
+            throw BehavioralError(w + ": " + a.op + " takes " + std::to_string(ar->second) + " operand(s)");
         // A call reads each operand slot once per mention: the residency must have the reads.
         std::map<SlotRef, std::uint32_t> demand;
         for (const SlotRef& s : a.args) ++demand[s];
@@ -307,9 +314,63 @@ private:
                 throw BehavioralError(w + ": the call reads " + s.to_string() + " " + std::to_string(n) + " times, but its residency (" +
                                       l.tile + ") has " + std::to_string(l.reads_left) + " read(s) left");
         }
+        const TileCoord out = a.accumulate ? slots_.at(*a.to).coord : a.tile;
+        if (a.op == "rowsum" || a.op == "sum") {
+            const Live& x = slots_.at(a.args[0]);
+            const TensorOperand& xo = dram_.operand(x.coord.operand);
+            const TensorOperand& zo = dram_.operand(out.operand);
+            if (xo.type != zo.type) throw BehavioralError(w + ": " + a.op + "'s operand and result share one number system");
+            const Dim xr = xo.row_end(x.coord.ti) - xo.row_begin(x.coord.ti), xc = xo.col_end(x.coord.tj) - xo.col_begin(x.coord.tj);
+            const Dim zr = zo.row_end(out.ti) - zo.row_begin(out.ti), zc = zo.col_end(out.tj) - zo.col_begin(out.tj);
+            std::vector<float> v;
+            if (a.op == "sum") {
+                if (xr != zr || xc != zc)
+                    throw BehavioralError(w + ": sum is element by element, so its operand is its result's shape: " + x.coord.to_string() +
+                                          " is " + std::to_string(xr) + "x" + std::to_string(xc) + ", " + out.to_string() + " is " +
+                                          std::to_string(zr) + "x" + std::to_string(zc));
+                v = x.value;
+            } else {
+                if (zr != xr || zc != 1)
+                    throw BehavioralError(w + ": rowsum's result is a column as tall as its operand: " + x.coord.to_string() + " is " +
+                                          std::to_string(xr) + "x" + std::to_string(xc) + ", " + out.to_string() + " is " +
+                                          std::to_string(zr) + "x" + std::to_string(zc));
+                // Each row summed left to right, in the result's number system.
+                v.assign(xr, 0.0f);
+                TensorOperand row("r", 1, xc, 1, xc), acc("a", 1, 1, 1, 1);
+                row.type = acc.type = zo.type;
+                for (Dim r = 0; r < xr; ++r) {
+                    std::copy(x.value.begin() + static_cast<std::ptrdiff_t>(r * xc), x.value.begin() + static_cast<std::ptrdiff_t>((r + 1) * xc),
+                              row.values.begin());
+                    // Each addition rounded in the result's number system, left to right: a wider
+                    // accumulator would not be that system's arithmetic (fp32's [2^24, 1, -2^24] is 0).
+                    acc.set_value(0, 0, 0.0);
+                    for (Dim c = 0; c < xc; ++c) acc.set_value(0, 0, acc.value(0, 0) + row.value(0, c));
+                    v[r] = acc.values[0];
+                }
+            }
+            std::vector<float> result = v;
+            if (a.accumulate) {
+                result = slots_.at(*a.to).value;
+                try {
+                    merge_tile(zo.type, result, v);
+                } catch (const std::exception& e) {
+                    throw BehavioralError(w + ": " + e.what());
+                }
+            }
+            for (const SlotRef& s : a.args) read(s, w);
+            if (a.accumulate) {
+                Live& r = slots_.at(*a.to);
+                r.value = std::move(result);
+                --r.merges_left;
+            } else {
+                fill(*a.to, out, std::move(result), a.reads);
+                slots_.at(*a.to).merges_left = a.merges;
+            }
+            ++sum_.calls;
+            return;
+        }
         const Live& x = slots_.at(a.args[0]);
         const Live& y = slots_.at(a.args[1]);
-        const TileCoord out = a.accumulate ? slots_.at(*a.to).coord : a.tile;
         if (a.op == "add") {
             // Element by element, in the result's number system: the operands are its tiles' shape.
             const std::string& type = dram_.operand(out.operand).type;

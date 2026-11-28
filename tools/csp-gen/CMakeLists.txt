@@ -107,6 +107,15 @@ if(KPU_BUILD_TESTS)
             -DMUST_MATCH=program.add.machine.mesh.2x2.*call.add.l2.0.:0,.l2.0.:2..to.Z.0,0.
             -P ${_expect}
     )
+    # P3 (#611): the row sums, chained west and broadcast back.
+    add_test(NAME csp_gen_distributed_rowsum
+        COMMAND ${CMAKE_COMMAND}
+            -DCMD=$<TARGET_FILE:csp-gen>
+            -DARGS=--algo$<SEMICOLON>rowsum$<SEMICOLON>--size$<SEMICOLON>32$<SEMICOLON>--tile$<SEMICOLON>16$<SEMICOLON>--target$<SEMICOLON>${_deploy}/kpu_dmm_2x2.json$<SEMICOLON>--distributed
+            -DEXPECT_CODE=0
+            -DMUST_MATCH=program.rowsum.machine.mesh.2x2.*vector.s.32..int32.*channel.p1to0.:.bm.W.1.
+            -P ${_expect}
+    )
     # The help says what --distributed's dtype default is (#638's review).
     add_test(NAME csp_gen_distributed_dtype_documented
         COMMAND ${CMAKE_COMMAND}
@@ -117,6 +126,6 @@ if(KPU_BUILD_TESTS)
             -P ${_expect}
     )
     set_tests_properties(csp_gen_distributed_matmul csp_gen_distributed_needs_a_mesh csp_gen_distributed_dtype_documented
-        csp_gen_distributed_broadcast csp_gen_distributed_add
+        csp_gen_distributed_broadcast csp_gen_distributed_add csp_gen_distributed_rowsum
         PROPERTIES LABELS "program;csp;distributed;gen")
 endif()
