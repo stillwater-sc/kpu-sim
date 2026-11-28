@@ -16,6 +16,16 @@ if(KPU_BUILD_TESTS)
     set(_deploy ${CMAKE_SOURCE_DIR}/tests/program/deploy)
     set(_dcsp ${CMAKE_SOURCE_DIR}/tests/program/csp/distributed)
 
+    # A generated P4 program runs as generated: its index vectors' default values are rows of what
+    # they index (#647's review).
+    add_test(NAME csp_check_generated_gather
+        COMMAND ${CMAKE_COMMAND}
+            -DGEN=$<TARGET_FILE:csp-gen>
+            -DCHECK=$<TARGET_FILE:csp-check>
+            -DDEPLOY=${_deploy}/kpu_dmm_2x2.json
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/generated_gather.dcsp
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/gen_then_check.cmake
+    )
     # Each sample passes D0-D4 on its mesh, and runs (D5).
     foreach(_case "vector_to_node3;kpu_dmm_2x2" "gemm_one_tile_node1;kpu_dmm_2x2" "gemm_ksplit_node0;kpu_dmm_1x1")
         list(GET _case 0 _prog)

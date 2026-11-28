@@ -76,15 +76,25 @@ private:
 // Deterministic values for the program's operands: every `in` and `inout` operand's elements are
 // small integers (exact in every number system the kernels take), varied by position, by `seed` and
 // by the operand, so no two inputs hold the same values (an X + X would not pass for X + Y); `out`
-// operands start at zero.
+// operands start at zero. An index vector a gather or scatter reads (#616) holds rows of every
+// operand it indexes, in the same varied pattern, so the program runs as generated.
 inline TileProgram distributed_inputs(const DistributedProgram& p, std::uint64_t seed = 1) {
     TileProgram t(p.name);
+    std::map<std::string, Dim> bound;                          // index vector -> the fewest rows it indexes
+    for (const Action2& a : p.actions)
+        if (!a.rows.empty())
+            if (const Operand2* r = p.operand(a.rows)) {
+                const auto [it, fresh] = bound.emplace(a.index, r->rows);
+                if (!fresh) it->second = std::min(it->second, r->rows);
+            }
     std::uint64_t which = 0;
     for (const Operand2& o : p.operands) {
         const std::uint64_t salt = 1 + 4 * which++;           // per operand: a different phase of the pattern
         TensorOperand op(o.name, o.rows, o.cols, o.tile_rows, o.tile_cols);
         op.type = o.type;
-        if (o.io != "out" && o.io != "temp")
+        if (const auto b = bound.find(o.name); b != bound.end() && o.io != "out" && o.io != "temp" && b->second > 0)
+            for (Dim r = 0; r < o.rows; ++r) op.set_value(r, 0, static_cast<double>((r * 7 + seed * 5 + salt) % b->second));
+        else if (o.io != "out" && o.io != "temp")
             for (Dim r = 0; r < o.rows; ++r)
                 for (Dim c = 0; c < o.cols; ++c)
                     op.set_value(r, c, static_cast<double>(static_cast<long long>((r * 7 + c * 3 * salt + seed * 5 + salt) % 9) - 4));
