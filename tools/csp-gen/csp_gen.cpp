@@ -18,6 +18,7 @@
 #include <sw/kpu/program/csp/gen/distributed_broadcast.hpp>
 #include <sw/kpu/program/csp/gen/distributed_elementwise.hpp>
 #include <sw/kpu/program/csp/gen/distributed_gemm.hpp>
+#include <sw/kpu/program/csp/gen/distributed_reduction.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/csp/lang/distributed_text.hpp>
 #include <sw/kpu/program/platform/deployment_json.hpp>
@@ -40,8 +41,8 @@ namespace platform = sw::kpu::program::platform;
 const char* kUsage =
 R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp text.
 
-  --algo <matmul|linear|lu|broadcast|add>
-                                the operator (broadcast, add: --distributed only)   (required)
+  --algo <matmul|linear|lu|broadcast|add|rowsum>
+                                the operator (broadcast, add, rowsum: --distributed only) (required)
   --size <N>                    square: M = N = K = N (N for LU)     (required)
   --tile <T>                    T x T tiles                          (required)
   --l3 <tiles>                  the machine's L3 capacity, in tiles
@@ -92,7 +93,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 along row 0 and south down each column, held in every L3 and compute
                                 tile (#609); int32 with int8, else fp32. --algo add: P6, Z = X + Y,
                                 --size x --size, both operands streamed aligned into every node (#610),
-                                in int32 with int8, else fp32. --algo matmul: the P1
+                                in int32 with int8, else fp32. --algo rowsum: P3, the sums of X's
+                                rows, chained west along each mesh row and broadcast back east (#611).
+                                --algo matmul: the P1
                                 edge-streamed systolic schedule, A east, B south, C north, one hop at
                                 a time (#608); M = N = K = --size, A and B in --dtype (default
                                 int8, C int32: the KPU's own case)
@@ -154,8 +157,8 @@ int main(int argc, char** argv) {
     if (!number("--tile", tile)) return usage("--tile: a positive integer");
     // A level-2 program for a mesh (#608): its own generator and its own text form.
     if (a.count("--distributed")) {
-        if (o.algo != "matmul" && o.algo != "broadcast" && o.algo != "add")
-            return usage("--distributed writes matmul (P1), broadcast (P5) or add (P6); --algo is '" + o.algo + "'");
+        if (o.algo != "matmul" && o.algo != "broadcast" && o.algo != "add" && o.algo != "rowsum")
+            return usage("--distributed writes matmul (P1), broadcast (P5), add (P6) or rowsum (P3); --algo is '" + o.algo + "'");
         if (!a.count("--target")) return usage("--distributed needs --target, a dmm_mesh deployment");
         for (const auto& [k, v] : a)
             if (k != "--algo" && k != "--size" && k != "--tile" && k != "--target" && k != "--dtype" && k != "--distributed" && k != "-o")
@@ -165,7 +168,14 @@ int main(int argc, char** argv) {
         std::string text;
         try {
             const platform::DeploymentSpec spec = platform::read_spec_file(a["--target"]);
-            if (o.algo == "add") {
+            if (o.algo == "rowsum") {
+                // P3 (#611): s = the sums of X's rows, --size x --size, chained west and broadcast back.
+                gen::DistributedRowReduction g;
+                g.m = g.n = static_cast<sw::kpu::program::Dim>(size);
+                g.tile = static_cast<sw::kpu::program::Dim>(tile);
+                g.type = dt == "int8" ? "int32" : "fp32";
+                text = lang::print_distributed(gen::generate_distributed_rowsum(g, spec.device(0)));
+            } else if (o.algo == "add") {
                 // P6 (#610): Z = X + Y, --size x --size, both operands streamed aligned into every node.
                 gen::DistributedElementwise g;
                 g.m = g.n = static_cast<sw::kpu::program::Dim>(size);
