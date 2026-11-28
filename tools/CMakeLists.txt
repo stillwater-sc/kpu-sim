@@ -106,6 +106,9 @@ add_subdirectory(csp-gen)
 # CSP program checker -- a level-2 program against its deployment (#607)
 add_subdirectory(csp-check)
 
+# CSP coverage report -- every pattern class's level-2 program, measured (#617)
+add_subdirectory(csp-coverage)
+
 # ============================================================================
 # Floorplan — the physical shape of a deployment (#286 step 1)
 # ============================================================================

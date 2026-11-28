@@ -2,7 +2,8 @@
 
 **Date:** 2026-11-27
 **Tracking:** epic #603 (steps #604–#617); the NoC rework is #618
-**Status:** Design
+**Status:** Implemented: every class built (#608–#616), and the coverage report measured (#617,
+`docs/analysis/distributed-csp-coverage.md`): no class needs the allocation changed
 **Precedes:** the NoC rework, and `docs/plans/retire-concurrent-timing-executor.md` (re-sequenced behind this
 plan; see §7)
 **Related:** `csp_program.hpp` (level 1, "the plan's MPI hypothesis"; level 2 is "a later step"),
@@ -190,7 +191,8 @@ interleaving, and computes the values.
 
 ### 3.4 Each pattern class as a DMM algorithm
 
-**These rows are hypotheses until step 5 produces each program and the checker passes it.** "Sends" counts
+**Every row is now built and checked** (#608–#616); `docs/analysis/distributed-csp-coverage.md` gives
+each its measured numbers and verdict. "Sends" counts
 the send movers a node uses at once.
 
 | Class | DMM algorithm, nearest neighbour only | Sends | Feeds + drain | Risk |
@@ -216,8 +218,15 @@ from its DMA engine to its edge port. That load is how ring and Clos get compare
 
 ### 3.5 The coverage report
 
+**Built (#617):** `docs/analysis/distributed-csp-coverage.md`. Its numbers come from
+`csp/distributed_coverage.hpp`, which reads them off the programs the generators write; `kpu-csp-coverage`
+writes the report's measured block, and CI fails when the block is stale. The answer: every class fits.
+P5 and P8 fit outright; the other seven fit at a cost: store-and-forward through nodes that only forward,
+and, for P2, all 8 movers and 14 of 16 L3 slots. The periphery is modelled as a ring of 4–32 PHYs with
+every tensor interleaved over them.
+
 The rows are measured, not written by hand: #617 builds the report from the programs the
-generators write, every built class at once (P1 #608 and P5 #609 are built; their rows come with it).
+generators write, every built class at once.
 Each pattern's generator writes a row: nodes, movers used per node (the maximum), hops per tile (the
 maximum), transit slots per node, credits per flow, and whether D1–D6 pass. It also gives the periphery
 load: bytes per edge port, and the busiest periphery segment for a ring of the deployment's channel count
