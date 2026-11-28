@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     into the compute tile's L2, also held, for P6's calls.
   - **Refusals:** a vector the L3 or L2 slots cannot hold.
 
-  `kpu-csp-gen --algo broadcast --distributed --target <dmm_mesh.json>` writes it as `dcsp 1`. On the
+  `kpu-csp-gen --algo broadcast --size 32 --tile 16 --distributed --target <dmm_mesh.json>` writes it as
+  `dcsp 1`. On the
   1x1, 2x2 and 4x4 meshes every program passes D0-D4, runs on L-B (D5), and leaves every node's L2
   holding DRAM's tiles bit for bit (D6).
 
@@ -34,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Refusals:** a C that does not divide over the mesh, slots the cluster does not have, too few
     engines.
 
-  `kpu-csp-gen --algo matmul --distributed --target <dmm_mesh.json>` writes it as `dcsp 1`. On the
+  `kpu-csp-gen --algo matmul --size 32 --tile 16 --distributed --target <dmm_mesh.json>` writes it as
+  `dcsp 1`. On the
   1x1, 2x2 and 4x4 meshes every generated program passes D0-D4, runs on L-B (D5), and gives the L0
   kernels' C bit for bit (D6). `kpu_dmm_2x2.json` now has 2 engines per controller.
 

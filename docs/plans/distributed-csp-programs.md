@@ -211,6 +211,8 @@ from its DMA engine to its edge port. That load is how ring and Clos get compare
 
 ### 3.5 The coverage report
 
+The rows are measured, not written by hand: #617 builds the report from the programs the
+generators write, every built class at once (P1 #608 and P5 #609 are built; their rows come with it).
 Each pattern's generator writes a row: nodes, movers used per node (the maximum), hops per tile (the
 maximum), transit slots per node, credits per flow, and whether D1–D6 pass. It also gives the periphery
 load: bytes per edge port, and the busiest periphery segment for a ring of the deployment's channel count
