@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P5, distributed broadcast** (#609; distributed CSP programs, step 5).
+  `csp/gen/distributed_broadcast.hpp` sends a vector operand (a bias row, scale and shift, RoPE
+  tables) to every node of a DMM mesh as a level-2 program, every hop one hop:
+  - **The path:** the corner's DMA engine loads each tile. Row 0 passes it east, and every node
+    passes it south down its column, so node (r, c) is reached in r + c hops.
+  - **Holding:** each node holds its L3 copy (`reads 0`), and the third-input mover `bm.x` feeds it
+    into the compute tile's L2, also held, for P6's calls.
+  - **Refusals:** a vector the L3 or L2 slots cannot hold.
+
+  `kpu-csp-gen --algo broadcast --size 32 --tile 16 --distributed --target <dmm_mesh.json>` writes it as
+  `dcsp 1`. On the
+  1x1, 2x2 and 4x4 meshes every program passes D0-D4, runs on L-B (D5), and leaves every node's L2
+  holding DRAM's tiles bit for bit (D6).
+
 - **P1, distributed GEMM** (#608; distributed CSP programs, step 5).
   `csp/gen/distributed_gemm.hpp` writes C = A · B as a level-2 program on a DMM mesh. It is
   edge-streamed and systolic, and every hop is one hop:
@@ -21,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Refusals:** a C that does not divide over the mesh, slots the cluster does not have, too few
     engines.
 
-  `kpu-csp-gen --algo matmul --distributed --target <dmm_mesh.json>` writes it as `dcsp 1`. On the
+  `kpu-csp-gen --algo matmul --size 32 --tile 16 --distributed --target <dmm_mesh.json>` writes it as
+  `dcsp 1`. On the
   1x1, 2x2 and 4x4 meshes every generated program passes D0-D4, runs on L-B (D5), and gives the L0
   kernels' C bit for bit (D6). `kpu_dmm_2x2.json` now has 2 engines per controller.
 

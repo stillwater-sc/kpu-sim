@@ -194,7 +194,7 @@ the send movers a node uses at once.
 | P2 sliding window | halo exchange with 4 neighbours (corners in two steps); weights broadcast by a pipeline | N, E, S, W | a, b, c | the tightest: 4 + 3 = 7 movers |
 | P3 row reduction | a chain reduce along the row, then a pipelined broadcast back | E, W | a, c | the row's length is the latency |
 | P4 gather/scatter | index-driven DMA into an edge node, then forwarded; or a permutation across the mesh | ≤ 2 | a, c | **the indices are run-time data**, and a static program has to state every move. See §7, decision 2 |
-| P5 broadcast | pipelined: along row 0 to the E, then down each column to the S | E, S | x | none |
+| P5 broadcast | **built (#609):** pipelined: along row 0 to the E, then down each column to the S; every node holds its L3 copy and feeds it to its compute tile's L2 through `bm.x`, both held; node (r, c) is reached in r + c hops | E, S | x | none |
 | P6 two-operand aligned | local when both operands share the distribution; one realigning shift when they don't | 0–2 | a, b, c | none |
 | P7 layout transform | transpose of a block-distributed matrix: block (i,j) to (j,i), by XY store-and-forward | 2 | — | costs O(√P) hops, plus transit slots in every node it crosses: the one-hop design's test case |
 | P8 chained-GEMM fusion | the intermediate stays in the node; K and V move as a pipeline, not a ring (a ring cannot be embedded with dilation 1 in a line) | E, S | a, b, c, x | the online softmax's state per node |
@@ -211,6 +211,8 @@ from its DMA engine to its edge port. That load is how ring and Clos get compare
 
 ### 3.5 The coverage report
 
+The rows are measured, not written by hand: #617 builds the report from the programs the
+generators write, every built class at once (P1 #608 and P5 #609 are built; their rows come with it).
 Each pattern's generator writes a row: nodes, movers used per node (the maximum), hops per tile (the
 maximum), transit slots per node, credits per flow, and whether D1–D6 pass. It also gives the periphery
 load: bytes per edge port, and the busiest periphery segment for a ring of the deployment's channel count

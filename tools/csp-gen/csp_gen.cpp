@@ -15,6 +15,7 @@
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
 // ============================================================================
 
+#include <sw/kpu/program/csp/gen/distributed_broadcast.hpp>
 #include <sw/kpu/program/csp/gen/distributed_gemm.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/csp/lang/distributed_text.hpp>
@@ -38,7 +39,8 @@ namespace platform = sw::kpu::program::platform;
 const char* kUsage =
 R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp text.
 
-  --algo <matmul|linear|lu>     the operator                         (required)
+  --algo <matmul|linear|lu|broadcast>
+                                the operator (broadcast: --distributed only)        (required)
   --size <N>                    square: M = N = K = N (N for LU)     (required)
   --tile <T>                    T x T tiles                          (required)
   --l3 <tiles>                  the machine's L3 capacity, in tiles
@@ -84,7 +86,10 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
   --format <none|mxint8|mxfp8>  linear: convert the result into an OCP Microscaling block format,
                                 after the activation, at --place (combiner | bm.egress)
                                 (default none)
-  --distributed                 matmul: a level-2 program (dcsp 1) for --target, a dmm_mesh: the P1
+  --distributed                 a level-2 program (dcsp 1) for --target, a dmm_mesh. --algo broadcast:
+                                P5, a vector of --size elements (tiles of --tile) to every node, east
+                                along row 0 and south down each column, held in every L3 and compute
+                                tile (#609); int32 with int8, else fp32. --algo matmul: the P1
                                 edge-streamed systolic schedule, A east, B south, C north, one hop at
                                 a time (#608); M = N = K = --size, A and B in --dtype (default
                                 int8, C int32: the KPU's own case)
@@ -146,23 +151,34 @@ int main(int argc, char** argv) {
     if (!number("--tile", tile)) return usage("--tile: a positive integer");
     // A level-2 program for a mesh (#608): its own generator and its own text form.
     if (a.count("--distributed")) {
-        if (o.algo != "matmul") return usage("--distributed writes matmul (P1); --algo is '" + o.algo + "'");
+        if (o.algo != "matmul" && o.algo != "broadcast")
+            return usage("--distributed writes matmul (P1) or broadcast (P5); --algo is '" + o.algo + "'");
         if (!a.count("--target")) return usage("--distributed needs --target, a dmm_mesh deployment");
         for (const auto& [k, v] : a)
             if (k != "--algo" && k != "--size" && k != "--tile" && k != "--target" && k != "--dtype" && k != "--distributed" && k != "-o")
                 return usage(k + " does not apply to --distributed");
-        gen::DistributedGemm g;
-        g.m = g.n = g.k = static_cast<sw::kpu::program::Dim>(size);
-        g.tile = static_cast<sw::kpu::program::Dim>(tile);
         const std::string dt = a.count("--dtype") ? a["--dtype"] : "int8";
-        if (dt == "int8") { g.ab_type = "int8"; g.c_type = "int32"; }
-        else if (dt == "fp32") { g.ab_type = g.c_type = "fp32"; }
-        else return usage("--dtype: fp32 or int8");
-        g.name = "matmul";
+        if (dt != "int8" && dt != "fp32") return usage("--dtype: fp32 or int8");
         std::string text;
         try {
             const platform::DeploymentSpec spec = platform::read_spec_file(a["--target"]);
-            text = lang::print_distributed(gen::generate_distributed_gemm(g, spec.device(0)));
+            if (o.algo == "broadcast") {
+                // P5 (#609): a vector of --size elements in tiles of --tile, to every node. An int8
+                // program's vector is int32, as a bias or a scale in its accumulator's system.
+                gen::DistributedBroadcast g;
+                g.length = static_cast<sw::kpu::program::Dim>(size);
+                g.tile = static_cast<sw::kpu::program::Dim>(tile);
+                g.type = dt == "int8" ? "int32" : "fp32";
+                text = lang::print_distributed(gen::generate_distributed_broadcast(g, spec.device(0)));
+            } else {
+                gen::DistributedGemm g;
+                g.m = g.n = g.k = static_cast<sw::kpu::program::Dim>(size);
+                g.tile = static_cast<sw::kpu::program::Dim>(tile);
+                if (dt == "int8") { g.ab_type = "int8"; g.c_type = "int32"; }
+                else { g.ab_type = g.c_type = "fp32"; }
+                g.name = "matmul";
+                text = lang::print_distributed(gen::generate_distributed_gemm(g, spec.device(0)));
+            }
         } catch (const std::exception& e) {
             std::cerr << "kpu-csp-gen: " << e.what() << "\n";
             return 1;
