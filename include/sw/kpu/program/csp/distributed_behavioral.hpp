@@ -28,8 +28,10 @@
 // VALUES. DRAM starts with the operands' values (distributed_inputs() makes deterministic ones). A
 // load copies a tile out of DRAM, a store writes it back, and result() is DRAM at the end. Calls
 // run the shared L0 kernels (tile_kernels.hpp) in the operands' number systems, as level 1's L-B
-// does: `call gemm(a, b) to C[i,j]` is C := A.B (a fresh accumulator), `acc` is C := C + A.B. Other
-// tile functions arrive with the generators that need them (#608-#616); an unknown one is refused.
+// does: `call gemm(a, b) to C[i,j]` is C := A.B (a fresh accumulator), `acc` is C := C + A.B.
+// `call add(x, y) to Z[i,j]` is Z := X + Y, element by element in Z's number system (the Combiner's
+// merge, merge_tile; #610), and `acc` is Z := Z + X + Y. Other tile functions arrive with the
+// generators that need them (#611-#616); an unknown one is refused.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -62,17 +64,20 @@ private:
 };
 
 // Deterministic values for the program's operands: every `in` and `inout` operand's elements are
-// small integers (exact in every number system the kernels take), varied by position and `seed`;
-// `out` operands start at zero.
+// small integers (exact in every number system the kernels take), varied by position, by `seed` and
+// by the operand, so no two inputs hold the same values (an X + X would not pass for X + Y); `out`
+// operands start at zero.
 inline TileProgram distributed_inputs(const DistributedProgram& p, std::uint64_t seed = 1) {
     TileProgram t(p.name);
+    std::uint64_t which = 0;
     for (const Operand2& o : p.operands) {
+        const std::uint64_t salt = 1 + 4 * which++;           // per operand: a different phase of the pattern
         TensorOperand op(o.name, o.rows, o.cols, o.tile_rows, o.tile_cols);
         op.type = o.type;
         if (o.io != "out")
             for (Dim r = 0; r < o.rows; ++r)
                 for (Dim c = 0; c < o.cols; ++c)
-                    op.set_value(r, c, static_cast<double>(static_cast<long long>((r * 7 + c * 3 + seed * 5) % 9) - 4));
+                    op.set_value(r, c, static_cast<double>(static_cast<long long>((r * 7 + c * 3 * salt + seed * 5 + salt) % 9) - 4));
         else if (!op.fp32())
             for (Dim r = 0; r < o.rows; ++r)
                 for (Dim c = 0; c < o.cols; ++c) op.set_value(r, c, 0.0);
@@ -290,8 +295,9 @@ private:
     }
 
     void call(const Action2& a, const std::string& w) {
-        if (a.op != "gemm") throw BehavioralError(w + ": tile function '" + a.op + "' is not one L-B runs at level 2 yet (gemm)");
-        if (a.args.size() != 2) throw BehavioralError(w + ": gemm takes two operands");
+        if (a.op != "gemm" && a.op != "add")
+            throw BehavioralError(w + ": tile function '" + a.op + "' is not one L-B runs at level 2 yet (gemm, add)");
+        if (a.args.size() != 2) throw BehavioralError(w + ": " + a.op + " takes two operands");
         // A call reads each operand slot once per mention: the residency must have the reads.
         std::map<SlotRef, std::uint32_t> demand;
         for (const SlotRef& s : a.args) ++demand[s];
@@ -304,6 +310,41 @@ private:
         const Live& x = slots_.at(a.args[0]);
         const Live& y = slots_.at(a.args[1]);
         const TileCoord out = a.accumulate ? slots_.at(*a.to).coord : a.tile;
+        if (a.op == "add") {
+            // Element by element, in the result's number system: the operands are its tiles' shape.
+            const std::string& type = dram_.operand(out.operand).type;
+            if (dram_.operand(x.coord.operand).type != type || dram_.operand(y.coord.operand).type != type)
+                throw BehavioralError(w + ": add's operands and result share one number system");
+            const auto shape = [&](const TileCoord& t) {
+                const TensorOperand& o = dram_.operand(t.operand);
+                return std::make_pair(o.row_end(t.ti) - o.row_begin(t.ti), o.col_end(t.tj) - o.col_begin(t.tj));
+            };
+            const auto zs = shape(out);
+            for (const TileCoord* t : {&x.coord, &y.coord})
+                if (shape(*t) != zs)
+                    throw BehavioralError(w + ": add is element by element, so its operands are its result's shape: " +
+                                          t->to_string() + " is " + std::to_string(shape(*t).first) + "x" +
+                                          std::to_string(shape(*t).second) + ", " + out.to_string() + " is " +
+                                          std::to_string(zs.first) + "x" + std::to_string(zs.second));
+            std::vector<float> v = a.accumulate ? slots_.at(*a.to).value : x.value;
+            try {
+                if (a.accumulate) merge_tile(type, v, x.value);
+                merge_tile(type, v, y.value);
+            } catch (const std::exception& e) {
+                throw BehavioralError(w + ": " + e.what());
+            }
+            for (const SlotRef& s : a.args) read(s, w);
+            if (a.accumulate) {
+                Live& r = slots_.at(*a.to);
+                r.value = std::move(v);
+                --r.merges_left;
+            } else {
+                fill(*a.to, out, std::move(v), a.reads);
+                slots_.at(*a.to).merges_left = a.merges;
+            }
+            ++sum_.calls;
+            return;
+        }
         TileProgram k("call");
         k.add_operand(scratch("x", x.coord, &x.value));
         k.add_operand(scratch("y", y.coord, &y.value));

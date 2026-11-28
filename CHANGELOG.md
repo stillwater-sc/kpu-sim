@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P6, two operands streamed aligned** (#610; distributed CSP programs, step 5).
+  `csp/gen/distributed_elementwise.hpp` writes Z = X + Y (a residual add) as a level-2 program on a
+  DMM mesh:
+  - **Alignment:** X, Y and Z share one block distribution, so the operands are aligned by
+    construction.
+  - **In:** each mesh row's west edge node loads the row's X and Y pairs, interleaved, and passes them
+    east. A node keeps its own and feeds X through `bm.a` and Y through `bm.b`.
+  - **Compute and out:** `call add` writes Z, which drains north as P1's C.
+  - **L-B** gains the `add` tile function, element by element in the result's number system through
+    the Combiner's merge (`merge_tile`).
+
+  `kpu-csp-gen --algo add --size 32 --tile 16 --distributed --target <dmm_mesh.json>` writes it. On the
+  1x1, 2x2 and 4x4 meshes every program passes D0-D4, runs on L-B (D5), and gives Z = X + Y element
+  by element (D6).
+
 - **P5, distributed broadcast** (#609; distributed CSP programs, step 5).
   `csp/gen/distributed_broadcast.hpp` sends a vector operand (a bias row, scale and shift, RoPE
   tables) to every node of a DMM mesh as a level-2 program, every hop one hop:
