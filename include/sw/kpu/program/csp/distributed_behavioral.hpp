@@ -37,8 +37,10 @@
 // in two separable passes: `box3h[_w][_e](...)` sums each element with its left and right neighbours,
 // `box3v[_n][_s](...)` with those above and below. The suffix names the halo tiles given, in order
 // (w, c, e) or (n, c, s): a neighbour past the edge of the halo, or with no halo given, is zero. Each
-// sum is (before + centre) + after, every addition rounded in the result's number system. Other tile
-// functions arrive with the generators that need them (#613-#616); an unknown one is refused.
+// sum is (before + centre) + after, every addition rounded in the result's number system. For P7's
+// layout transform (#613): `call transpose(x) to Y[j,i]` is Y := X's tile with its rows and columns
+// exchanged (the words moved, nothing computed). Other tile functions arrive with the generators that
+// need them (#614-#616); an unknown one is refused.
 //
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2024-2025 Stillwater Supercomputing, Inc.
@@ -306,11 +308,11 @@ private:
         static const std::map<std::string, std::size_t> kArity = {
             {"gemm", 2}, {"add", 2}, {"rowsum", 1}, {"sum", 1},
             {"box3h", 1}, {"box3h_w", 2}, {"box3h_e", 2}, {"box3h_we", 3},
-            {"box3v", 1}, {"box3v_n", 2}, {"box3v_s", 2}, {"box3v_ns", 3}};
+            {"box3v", 1}, {"box3v_n", 2}, {"box3v_s", 2}, {"box3v_ns", 3}, {"transpose", 1}};
         const auto ar = kArity.find(a.op);
         if (ar == kArity.end())
             throw BehavioralError(w + ": tile function '" + a.op +
-                                  "' is not one L-B runs at level 2 yet (gemm, add, rowsum, sum, box3h[_w][_e], box3v[_n][_s])");
+                                  "' is not one L-B runs at level 2 yet (gemm, add, rowsum, sum, box3h[_w][_e], box3v[_n][_s], transpose)");
         if (a.args.size() != ar->second)
             throw BehavioralError(w + ": " + a.op + " takes " + std::to_string(ar->second) + " operand(s)");
         // A call reads each operand slot once per mention: the residency must have the reads.
@@ -323,6 +325,27 @@ private:
                                       l.tile + ") has " + std::to_string(l.reads_left) + " read(s) left");
         }
         const TileCoord out = a.accumulate ? slots_.at(*a.to).coord : a.tile;
+        if (a.op == "transpose") {
+            if (a.accumulate) throw BehavioralError(w + ": transpose writes a fresh result; it does not accumulate");
+            const Live& x = slots_.at(a.args[0]);
+            const TensorOperand& xo = dram_.operand(x.coord.operand);
+            const TensorOperand& zo = dram_.operand(out.operand);
+            if (xo.type != zo.type) throw BehavioralError(w + ": transpose's operand and result share one number system");
+            const Dim xr = xo.row_end(x.coord.ti) - xo.row_begin(x.coord.ti), xc = xo.col_end(x.coord.tj) - xo.col_begin(x.coord.tj);
+            const Dim zr = zo.row_end(out.ti) - zo.row_begin(out.ti), zc = zo.col_end(out.tj) - zo.col_begin(out.tj);
+            if (zr != xc || zc != xr)
+                throw BehavioralError(w + ": transpose's result is its operand's shape exchanged: " + x.coord.to_string() + " is " +
+                                      std::to_string(xr) + "x" + std::to_string(xc) + ", " + out.to_string() + " is " +
+                                      std::to_string(zr) + "x" + std::to_string(zc));
+            std::vector<float> v(static_cast<std::size_t>(zr) * zc);
+            for (Dim i = 0; i < zr; ++i)
+                for (Dim j = 0; j < zc; ++j) v[static_cast<std::size_t>(i) * zc + j] = x.value[static_cast<std::size_t>(j) * xc + i];
+            for (const SlotRef& sr : a.args) read(sr, w);
+            fill(*a.to, out, std::move(v), a.reads);
+            slots_.at(*a.to).merges_left = a.merges;
+            ++sum_.calls;
+            return;
+        }
         if (a.op.rfind("box3", 0) == 0) {
             if (a.accumulate) throw BehavioralError(w + ": " + a.op + " writes a fresh result; it does not accumulate");
             const bool horizontal = a.op[4] == 'h';

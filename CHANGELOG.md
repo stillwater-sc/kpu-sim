@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P7, a layout transform (transpose)** (#613; distributed CSP programs, step 5).
+  `csp/gen/distributed_transpose.hpp` writes Y = X^T as a level-2 program on a square DMM mesh, one tile
+  per node. It is the one-hop design's test case:
+  - **The route:** each tile reaches its home along its row, then goes along that row to the diagonal,
+    then along the diagonal's column to its destination, where the compute tile transposes it. Y then
+    goes north and out.
+  - **Deadlock-free by construction:** every mover sends in a synchronous schedule's order, and every
+    tile delivered into L3 gets a slot of its own, so no L3 delivery waits for a credit. Row 0's pushes
+    out to the DMA engine can wait for its 2-credit store buffer, which the engine frees as it stores,
+    so that wait always ends.
+  - **The measured cost:** the longest route is 6 hops on the 4x4, with 40 hops in all. The busiest
+    node uses 11 of its 16 L3 slots on the 4x4, and 5 on the 2x2. `DistributedTransposeCost` reports
+    these numbers.
+  - **L-B** gains `transpose`.
+
+  `kpu-csp-gen --algo transpose --size 16 --tile 8 --distributed --target <dmm_mesh.json>` writes it. On
+  the 1x1, 2x2 and 4x4 meshes every program passes D0-D4, runs on L-B (D5), and gives Y = X^T element
+  by element (D6).
+
 - **P2, the sliding window** (#612; distributed CSP programs, step 5).
   `csp/gen/distributed_window.hpp` writes a 3x3 box filter as a level-2 program on a DMM mesh. It is
   the plan's tightest case: an interior node uses all 8 of its movers.

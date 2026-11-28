@@ -19,6 +19,7 @@
 #include <sw/kpu/program/csp/gen/distributed_elementwise.hpp>
 #include <sw/kpu/program/csp/gen/distributed_gemm.hpp>
 #include <sw/kpu/program/csp/gen/distributed_reduction.hpp>
+#include <sw/kpu/program/csp/gen/distributed_transpose.hpp>
 #include <sw/kpu/program/csp/gen/distributed_window.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
 #include <sw/kpu/program/csp/lang/distributed_text.hpp>
@@ -42,8 +43,9 @@ namespace platform = sw::kpu::program::platform;
 const char* kUsage =
 R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp text.
 
-  --algo <matmul|linear|lu|broadcast|add|rowsum|box3x3>
-                                the operator (broadcast, add, rowsum, box3x3: --distributed only)
+  --algo <matmul|linear|lu|broadcast|add|rowsum|box3x3|transpose>
+                                the operator (broadcast, add, rowsum, box3x3, transpose:
+                                --distributed only)
                                                                      (required)
   --size <N>                    square: M = N = K = N (N for LU)     (required)
   --tile <T>                    T x T tiles                          (required)
@@ -100,6 +102,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 --algo box3x3: P2, a 3 x 3 box filter, a row pass and a column pass
                                 with a halo exchange with four neighbours, one tile per node: --tile
                                 must be --size over the mesh's rows and columns (#612).
+                                --algo transpose: P7, Y = X^T on a square mesh, one tile per node,
+                                each routed along its row to the diagonal and on along its column;
+                                --tile as box3x3's (#613).
                                 --algo matmul: the P1
                                 edge-streamed systolic schedule, A east, B south, C north, one hop at
                                 a time (#608); M = N = K = --size, A and B in --dtype (default
@@ -162,9 +167,10 @@ int main(int argc, char** argv) {
     if (!number("--tile", tile)) return usage("--tile: a positive integer");
     // A level-2 program for a mesh (#608): its own generator and its own text form.
     if (a.count("--distributed")) {
-        if (o.algo != "matmul" && o.algo != "broadcast" && o.algo != "add" && o.algo != "rowsum" && o.algo != "box3x3")
-            return usage("--distributed writes matmul (P1), broadcast (P5), add (P6), rowsum (P3) or box3x3 (P2); --algo is '" +
-                         o.algo + "'");
+        if (o.algo != "matmul" && o.algo != "broadcast" && o.algo != "add" && o.algo != "rowsum" && o.algo != "box3x3" &&
+            o.algo != "transpose")
+            return usage("--distributed writes matmul (P1), broadcast (P5), add (P6), rowsum (P3), box3x3 (P2) or transpose (P7); "
+                         "--algo is '" + o.algo + "'");
         if (!a.count("--target")) return usage("--distributed needs --target, a dmm_mesh deployment");
         for (const auto& [k, v] : a)
             if (k != "--algo" && k != "--size" && k != "--tile" && k != "--target" && k != "--dtype" && k != "--distributed" && k != "-o")
@@ -174,7 +180,21 @@ int main(int argc, char** argv) {
         std::string text;
         try {
             const platform::DeploymentSpec spec = platform::read_spec_file(a["--target"]);
-            if (o.algo == "box3x3") {
+            if (o.algo == "transpose") {
+                // P7 (#613): Y = X^T, --size x --size, one tile per node of a square mesh.
+                const auto& dv = spec.device(0);
+                const auto rows = dv.array.rows.value_or(1), cols = dv.array.cols.value_or(1);
+                if (size % rows != 0 || size % cols != 0 || tile != size / rows || tile != size / cols) {
+                    std::cerr << "kpu-csp-gen: transpose takes one tile per node: on this " << rows << "x" << cols << " mesh a " << size
+                              << " x " << size << " X is in " << size / rows << " x " << size / cols << " tiles, and --tile is "
+                              << tile << "\n";
+                    return 1;
+                }
+                gen::DistributedTranspose g;
+                g.m = g.n = static_cast<sw::kpu::program::Dim>(size);
+                g.type = dt == "int8" ? "int32" : "fp32";
+                text = lang::print_distributed(gen::generate_distributed_transpose(g, spec.device(0)));
+            } else if (o.algo == "box3x3") {
                 // P2 (#612): a 3 x 3 box filter of a --size x --size X, one tile per node: the tile is
                 // the mesh's, so --tile must be it (not silently another).
                 const auto& dv = spec.device(0);
