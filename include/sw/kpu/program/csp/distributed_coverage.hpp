@@ -70,9 +70,13 @@ inline DistributedCoverage measure_distributed(const DistributedProgram& p, cons
     m.nodes = p.node_count();
     m.l3_capacity = d.cluster ? d.cluster->l3_tile.capacity_tiles : 0;
     m.l2_capacity = d.cluster ? d.cluster->compute_tile.l2.slots : 0;
-    // ---- checks: D0-D4, then D5 on L-B.
-    if (std::string s = validate_structure(p); !s.empty()) m.failure = s;
-    else if (const auto v = check_distributed(p, d); !v.empty()) m.failure = v.front().rule + " " + v.front().message;
+    // ---- checks: D0-D4, then D5 on L-B. A program whose structure is refused is not measured: the
+    // measures below read its actions' slots and channels, which only a valid structure guarantees.
+    if (std::string s = validate_structure(p); !s.empty()) {
+        m.failure = s;
+        return m;
+    }
+    if (const auto v = check_distributed(p, d); !v.empty()) m.failure = v.front().rule + " " + v.front().message;
     else {
         try {
             DistributedBehavioral lb;
@@ -194,12 +198,15 @@ inline DistributedCoverage measure_distributed(const DistributedProgram& p, cons
                 if (cw < 0) cw += perimeter;
                 const bool clockwise = cw <= perimeter - cw;
                 const double len = clockwise ? cw : perimeter - cw;
-                // Every unit segment the route passes over carries the share.
+                // The route is the arc [start, start + len) clockwise; every unit segment it overlaps,
+                // even in part (the port sits mid-segment), carries the share.
+                const double start = clockwise ? from : std::fmod(from - len + perimeter, perimeter);
+                const auto overlaps = [&](double lo, double hi, double s) { return std::min(hi, s + 1) - std::max(lo, s) > 1e-9; };
                 for (std::size_t s = 0; s < segments; ++s) {
-                    const double mid = s + 0.5;
-                    double off = clockwise ? mid - from : from - mid;
-                    off = std::fmod(off + 2 * perimeter, perimeter);
-                    if (off < len) load[s] += share;
+                    const double sd = static_cast<double>(s);
+                    const bool hit = overlaps(start, std::min(start + len, perimeter), sd) ||
+                                     (start + len > perimeter && overlaps(0, start + len - perimeter, sd));
+                    if (hit) load[s] += share;
                 }
             }
         }

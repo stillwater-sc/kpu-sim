@@ -59,3 +59,28 @@ TEST_CASE("the coverage measures read P5's reach and P2's interior node", "[prog
     CHECK(w.sends == 4);
     CHECK(w.dma_bytes == 2u * 32 * 32 * 4);                    // X in and Y out, int32
 }
+
+TEST_CASE("a ring route counts the segment its port sits in (#648's review)", "[program][csp][distributed][coverage]") {
+    // One node, one PHY at the perimeter's origin, the load's port on the west side at 3.5: the shorter
+    // way is half a segment back, which still carries every byte.
+    const platform::DeviceSpecification d = device("kpu_dmm_1x1.json");
+    const DistributedCoverage m = measure_distributed(gen::generate_distributed_broadcast({32, 16}, d), d, {1});
+    REQUIRE(m.port_bytes > 0);
+    CHECK(m.ring.at(1) == m.port_bytes);
+}
+
+TEST_CASE("a program whose structure is refused is not measured (#648's review)", "[program][csp][distributed][coverage]") {
+    const platform::DeviceSpecification d = device("kpu_dmm_2x2.json");
+    DistributedProgram p = gen::generate_distributed_broadcast({16, 16}, d);
+    for (Action2& a : p.actions)
+        if (a.kind == Action2::Kind::Load) {
+            a.to.reset();                                      // a load with nowhere to go
+            break;
+        }
+    const DistributedCoverage m = measure_distributed(p, d);
+    CHECK_FALSE(m.checks);
+    CHECK(m.failure.find("missing its source, its destination or its operands") != std::string::npos);
+    CHECK(m.movers == 0);                                      // nothing read off the refused actions
+    CHECK(m.pushes == 0);
+    CHECK(m.ring.empty());
+}

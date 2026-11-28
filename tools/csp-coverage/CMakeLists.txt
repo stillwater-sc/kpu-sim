@@ -19,4 +19,14 @@ if(KPU_BUILD_TESTS)
             --check ${CMAKE_SOURCE_DIR}/docs/analysis/distributed-csp-coverage.md
     )
     set_tests_properties(csp_coverage_report_current PROPERTIES LABELS "program;csp;distributed")
+    # --write fails, and says so, when it cannot write the report (#648's review).
+    add_test(NAME csp_coverage_write_fails
+        COMMAND ${CMAKE_COMMAND}
+            -DTOOL=$<TARGET_FILE:csp-coverage>
+            -DDEPLOY_DIR=${CMAKE_SOURCE_DIR}/tests/program/deploy
+            -DDOC=${CMAKE_SOURCE_DIR}/docs/analysis/distributed-csp-coverage.md
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/readonly-coverage.md
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/write_fails.cmake
+    )
+    set_tests_properties(csp_coverage_write_fails PROPERTIES LABELS "program;csp;distributed" SKIP_REGULAR_EXPRESSION "SKIP:")
 endif()

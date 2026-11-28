@@ -174,6 +174,11 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::ofstream out(doc, std::ios::binary);
-    out << text.substr(0, b) << block << text.substr(e + std::string(kEnd).size());
+    if (out) out << text.substr(0, b) << block << text.substr(e + std::string(kEnd).size());
+    if (out) out.close();
+    if (!out) {
+        std::cerr << "kpu-csp-coverage: could not write " << doc << "\n";
+        return 2;
+    }
     return 0;
 }
