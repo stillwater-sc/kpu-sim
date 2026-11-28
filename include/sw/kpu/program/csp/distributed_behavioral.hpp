@@ -84,7 +84,7 @@ inline TileProgram distributed_inputs(const DistributedProgram& p, std::uint64_t
         const std::uint64_t salt = 1 + 4 * which++;           // per operand: a different phase of the pattern
         TensorOperand op(o.name, o.rows, o.cols, o.tile_rows, o.tile_cols);
         op.type = o.type;
-        if (o.io != "out")
+        if (o.io != "out" && o.io != "temp")
             for (Dim r = 0; r < o.rows; ++r)
                 for (Dim c = 0; c < o.cols; ++c)
                     op.set_value(r, c, static_cast<double>(static_cast<long long>((r * 7 + c * 3 * salt + seed * 5 + salt) % 9) - 4));

@@ -134,8 +134,9 @@ private:
         } else {
             o.tile_cols = 1;
         }
-        o.io = ident("in, out or inout");
-        if (o.io != "in" && o.io != "out" && o.io != "inout") throw SyntaxError(line(), "'" + o.io + "': in, out or inout");
+        o.io = ident("in, out, inout or temp");
+        if (o.io != "in" && o.io != "out" && o.io != "inout" && o.io != "temp")
+            throw SyntaxError(line(), "'" + o.io + "': in, out, inout or temp");
         expect(";");
         return o;
     }
