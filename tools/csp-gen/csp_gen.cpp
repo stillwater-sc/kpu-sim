@@ -19,6 +19,7 @@
 #include <sw/kpu/program/csp/gen/distributed_elementwise.hpp>
 #include <sw/kpu/program/csp/gen/distributed_gemm.hpp>
 #include <sw/kpu/program/csp/gen/distributed_reduction.hpp>
+#include <sw/kpu/program/csp/gen/distributed_chained_gemm.hpp>
 #include <sw/kpu/program/csp/gen/distributed_transpose.hpp>
 #include <sw/kpu/program/csp/gen/distributed_window.hpp>
 #include <sw/kpu/program/csp/gen/generate.hpp>
@@ -43,9 +44,9 @@ namespace platform = sw::kpu::program::platform;
 const char* kUsage =
 R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp text.
 
-  --algo <matmul|linear|lu|broadcast|add|rowsum|box3x3|transpose>
-                                the operator (broadcast, add, rowsum, box3x3, transpose:
-                                --distributed only)
+  --algo <matmul|linear|lu|broadcast|add|rowsum|box3x3|transpose|chained>
+                                the operator (broadcast, add, rowsum, box3x3, transpose,
+                                chained: --distributed only)
                                                                      (required)
   --size <N>                    square: M = N = K = N (N for LU)     (required)
   --tile <T>                    T x T tiles                          (required)
@@ -105,6 +106,9 @@ R"(kpu-csp-gen -- write a CSP program: an operator's canonical schedule, as .csp
                                 --algo transpose: P7, Y = X^T on a square mesh, one tile per node,
                                 each routed along its row to the diagonal and on along its column;
                                 --tile as box3x3's (#613).
+                                --algo chained: P8, E = (A . B) . D, all --size x --size, T = A . B
+                                fused (resident in L2, never stored), in fp32 whatever
+                                --dtype says (#614).
                                 --algo matmul: the P1
                                 edge-streamed systolic schedule, A east, B south, C north, one hop at
                                 a time (#608); M = N = K = --size, A and B in --dtype (default
@@ -168,9 +172,9 @@ int main(int argc, char** argv) {
     // A level-2 program for a mesh (#608): its own generator and its own text form.
     if (a.count("--distributed")) {
         if (o.algo != "matmul" && o.algo != "broadcast" && o.algo != "add" && o.algo != "rowsum" && o.algo != "box3x3" &&
-            o.algo != "transpose")
-            return usage("--distributed writes matmul (P1), broadcast (P5), add (P6), rowsum (P3), box3x3 (P2) or transpose (P7); "
-                         "--algo is '" + o.algo + "'");
+            o.algo != "transpose" && o.algo != "chained")
+            return usage("--distributed writes matmul (P1), broadcast (P5), add (P6), rowsum (P3), box3x3 (P2), transpose (P7) or "
+                         "chained (P8); --algo is '" + o.algo + "'");
         if (!a.count("--target")) return usage("--distributed needs --target, a dmm_mesh deployment");
         for (const auto& [k, v] : a)
             if (k != "--algo" && k != "--size" && k != "--tile" && k != "--target" && k != "--dtype" && k != "--distributed" && k != "-o")
@@ -180,7 +184,14 @@ int main(int argc, char** argv) {
         std::string text;
         try {
             const platform::DeploymentSpec spec = platform::read_spec_file(a["--target"]);
-            if (o.algo == "transpose") {
+            if (o.algo == "chained") {
+                // P8 (#614): E = (A . B) . D, every operand --size x --size, T = A . B fused in L2.
+                gen::DistributedChainedGemm g;
+                g.m = g.k = g.n = g.p = static_cast<sw::kpu::program::Dim>(size);
+                g.tile = static_cast<sw::kpu::program::Dim>(tile);
+                g.type = "fp32";
+                text = lang::print_distributed(gen::generate_distributed_chained_gemm(g, spec.device(0)));
+            } else if (o.algo == "transpose") {
                 // P7 (#613): Y = X^T, --size x --size, one tile per node of a square mesh.
                 const auto& dv = spec.device(0);
                 const auto rows = dv.array.rows.value_or(1), cols = dv.array.cols.value_or(1);

@@ -210,14 +210,14 @@ TEST_CASE("a program with CRLF line endings reads as the same program", "[progra
 
 // ---- regressions from the review of #631
 
-TEST_CASE("an operand's I/O mode is in, out or inout", "[program][csp][distributed]") {
+TEST_CASE("an operand's I/O mode is in, out, inout or temp", "[program][csp][distributed]") {
     DistributedProgram p = parse_distributed(read_file(std::string(kDir) + "vector_to_node3.dcsp"));
     for (const char* io : {"in", "out", "inout"}) {
         p.operands[0].io = io;
         CHECK(validate_structure(p).empty());
     }
     p.operands[0].io = "";                                 // would print `... tile 16x16 ;`, which no reader reads
-    CHECK_THAT(validate_structure(p), ContainsSubstring("operand A is '', not in, out or inout"));
+    CHECK_THAT(validate_structure(p), ContainsSubstring("operand A is '', not in, out, inout or temp"));
 }
 
 TEST_CASE("each action kind fills its own pool", "[program][csp][distributed]") {

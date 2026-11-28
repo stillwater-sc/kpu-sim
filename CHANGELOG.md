@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **P8, chained-GEMM fusion** (#614; distributed CSP programs, step 5).
+  `csp/gen/distributed_chained_gemm.hpp` writes E = (A·B)·D as a level-2 program on a DMM mesh, with
+  T = A·B fused:
+  - **T stays in L2:** it accumulates in the compute tiles' L2, as P1's C does. The second GEMM reads it
+    there; it is never drained or stored.
+  - **D follows B:** D streams down each column after B, on the same flow, as a pipeline rather than a
+    ring.
+  - **E's partials chain west,** as P3's do, and the row's west end stores the total.
+  - **A new operand kind, `temp`,** marks such an intermediate. The structure check refuses any load or
+    store of a `temp` tile.
+
+  `kpu-csp-gen --algo chained --distributed` writes it. On the 1x1, 2x2 and 4x4 meshes every program
+  passes D0-D4, runs on L-B (D5), and gives E = (A·B)·D (D6), checked against an independent reference.
+
 - **P7, a layout transform (transpose)** (#613; distributed CSP programs, step 5).
   `csp/gen/distributed_transpose.hpp` writes Y = X^T as a level-2 program on a square DMM mesh, one tile
   per node. It is the one-hop design's test case:

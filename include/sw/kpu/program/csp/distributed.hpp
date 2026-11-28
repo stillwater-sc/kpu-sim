@@ -181,7 +181,8 @@ struct Operand2 {
     bool is_vector = false;
     Dim rows = 0, cols = 0, tile_rows = 0, tile_cols = 0;
     std::string type = "fp32";
-    std::string io;                     // in | out | inout
+    std::string io;                     // in | out | inout | temp: an intermediate (#614) that lives only
+                                        // in the nodes, never loaded from DRAM or stored to it
 
     // A ceiling without the addition, which could wrap for a size near the 32-bit maximum.
     static Dim ceil_div(Dim n, Dim d) { return d ? n / d + (n % d != 0) : 0; }
@@ -223,8 +224,8 @@ inline std::string validate_structure(const DistributedProgram& p) {
         if (!names.insert(o.name).second) return "operand " + o.name + " is declared twice";
         if (o.rows == 0 || o.tile_rows == 0 || (!o.is_vector && (o.cols == 0 || o.tile_cols == 0)))
             return "operand " + o.name + " has an empty shape or tile";
-        if (o.io != "in" && o.io != "out" && o.io != "inout")
-            return "operand " + o.name + " is '" + o.io + "', not in, out or inout";
+        if (o.io != "in" && o.io != "out" && o.io != "inout" && o.io != "temp")
+            return "operand " + o.name + " is '" + o.io + "', not in, out, inout or temp";
     }
     std::set<std::string> chans;
     std::map<SlotRef, std::string> owner;
@@ -286,6 +287,8 @@ inline std::string validate_structure(const DistributedProgram& p) {
                 if (!o) return w + "tile " + a.tile.to_string() + " is not a declared operand's";
                 if (a.tile.ti >= o->tile_grid_rows() || a.tile.tj >= o->tile_grid_cols())
                     return w + "tile " + a.tile.to_string() + " is outside " + o->name + "'s tiles";
+                if (o->io == "temp" && (a.kind == Action2::Kind::Load || a.kind == Action2::Kind::Store))
+                    return w + "a " + k + " of " + a.tile.to_string() + ": " + o->name + " is temp, so it never leaves the nodes";
             }
             // Sources and operands are on the process's own node, in the pool its role reads.
             const auto own = [&](const SlotRef& s, SlotRef::Pool pool) {
